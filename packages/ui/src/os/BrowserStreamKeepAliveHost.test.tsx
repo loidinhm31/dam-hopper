@@ -10,6 +10,7 @@ import type { StreamControllerOptions } from "@/browser-host/stream-controller.j
 import { BrowserHostClientError } from "@/api/browser-host-types.js";
 import type { CanvasViewProps } from "@/browser-host/canvas-view.js";
 import type { ConnectionSnapshot } from "@/api/connections.js";
+import { setDocumentVisibilityForTests } from "@/browser-host/visibility-demand.js";
 import { addClosingGate, clearClosingGatesForTesting } from "./browser/browser-closing-gates.js";
 import { clearPopupTabStateForTesting } from "./browser/browser-popup-tabs.js";
 import { createBrowserNativeTargetKey } from "./browser/browser-owner-scope.js";
@@ -203,8 +204,9 @@ vi.mock("../browser-host/canvas-view.js", () => ({
       null,
       createElement("canvas", {
         ref,
-        width: 800,
-        height: 600,
+        width: props.isParked ? 1 : 800,
+        height: props.isParked ? 1 : 600,
+        "data-parked": props.isParked ? "true" : "false",
         onPointerDown: props.onCanvasPointerDown,
         onPointerUp: props.onCanvasPointerUp,
         onPointerMove: props.onCanvasPointerMove,
@@ -1325,5 +1327,36 @@ describe("browser first pointer gesture control handoff & popup tabs", () => {
       { kind: "pointerUp", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
       { kind: "insertText", text: "after-toolbar" },
     ]);
+  });
+
+  it("gates stream demand and flushes audio on document visibilitychange while ignoring window blur as demand loss, and shrinks parking host to 1x1", async () => {
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    const parkingHostEl = document.querySelector<HTMLElement>(
+      '[data-testid="browser-keep-alive-host"]',
+    );
+    expect(parkingHostEl?.style.width).toBe("1px");
+    expect(parkingHostEl?.style.height).toBe("1px");
+
+    // Window blur releases held input / pending gesture but does NOT drop stream visibility
+    expect(controllers[0]?.visible).toBe(true);
+    await act(async () => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    expect(controllers[0]?.visible).toBe(true);
+
+    // Document hidden synchronously drops stream visibility and flushes PCM audio
+    pcmPlayerMocks.flush.mockClear();
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    expect(pcmPlayerMocks.flush).toHaveBeenCalled();
+    expect(controllers[0]?.visible).toBe(false);
+
+    // Document visible again re-enables demand
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    expect(controllers[0]?.visible).toBe(true);
+    setDocumentVisibilityForTests(null);
   });
 });

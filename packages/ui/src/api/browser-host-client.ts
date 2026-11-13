@@ -67,6 +67,18 @@ interface ValidatedConnection {
   authToken: string | null;
 }
 
+function assertSecureOrLoopbackOrigin(url: string): string {
+  const normalized = url.replace(/\/+$/, "");
+  if (!isSecureOrLoopbackOrigin(normalized)) {
+    throw new BrowserHostClientError(
+      "Browser transport requires an HTTPS or loopback origin",
+      "insecureOrigin",
+      0,
+    );
+  }
+  return normalized;
+}
+
 function assertValidConnection(owner: ConnectionRef): ValidatedConnection {
   if (!isCurrentConnection(owner)) {
     throw new ConnectionOwnerError(
@@ -83,6 +95,7 @@ function assertValidConnection(owner: ConnectionRef): ValidatedConnection {
       "unavailable",
     );
   }
+  assertSecureOrLoopbackOrigin(serverUrl);
   const authToken = getAuthToken(owner.profileId);
   return { serverUrl, authToken };
 }
@@ -105,7 +118,7 @@ export async function requestBrowserHostJson<T>(
     "Cache-Control": "no-store",
     ...options.extraHeaders,
   };
-  if (authToken) {
+  if (authToken && isSecureOrLoopbackOrigin(serverUrl)) {
     headers["Authorization"] = `Bearer ${authToken}`;
   }
   if (options.body !== undefined) {
@@ -492,7 +505,7 @@ async function requestOriginJson(
   token: string | null | undefined,
   options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
 ): Promise<unknown> {
-  const normalized = baseUrl.replace(/\/+$/, "");
+  const normalized = assertSecureOrLoopbackOrigin(baseUrl);
   const res = await fetch(`${normalized}${endpoint}`, {
     method: options.method ?? (options.body !== undefined ? "POST" : "GET"),
     headers: buildOriginAuthHeaders(
@@ -529,7 +542,7 @@ export async function preflightBrowserCapabilitiesForOrigin(
   token?: string | null,
   signal?: AbortSignal,
 ): Promise<BrowserResetPreflightResult> {
-  const normalized = baseUrl.replace(/\/+$/, "");
+  const normalized = assertSecureOrLoopbackOrigin(baseUrl);
   let res: Response;
   try {
     res = await fetch(`${normalized}/api/browser/capabilities`, {
@@ -682,6 +695,7 @@ export async function mintViewerAttachmentTickets(
   profileEpoch: number,
   signal?: AbortSignal,
 ): Promise<ViewerAttachmentCredentials> {
+  const { serverUrl } = assertValidConnection(owner);
   const viewerId = generateUUID();
   const subscriptionEpoch = generateUUID();
 
@@ -712,7 +726,7 @@ export async function mintViewerAttachmentTickets(
     ),
   ]);
 
-  const { serverUrl } = assertValidConnection(owner);
+  assertValidConnection(owner);
   const wsBaseUrl = serverUrl.replace(/^http(s?):/, "ws$1:");
   const mediaWsUrl = `${wsBaseUrl}/api/browser/media`;
   const controlWsUrl = `${wsBaseUrl}/api/browser/control`;

@@ -10,6 +10,7 @@ import { getApi, isCurrentConnection, useConnectionSnapshot } from "@/api/connec
 import type { SessionInfo } from "@/api/client.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { collectHostTerminalCandidates, useHostBrowserSelection, type HostTerminalCandidate } from "@/browser-host/selection-controller.js";
+import { isDocumentVisible, subscribeDocumentVisibility } from "@/browser-host/visibility-demand.js";
 import { generateUUID } from "@/lib/utils.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { useLockScreenStore } from "@/stores/lock-screen.js";
@@ -191,13 +192,18 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
     Boolean(sessionId) &&
     !canonicalState.closing &&
     !ownerMismatch;
+  const isDocVisible = useSyncExternalStore(
+    subscribeDocumentVisibility,
+    isDocumentVisible,
+    () => true,
+  );
   const isVisible =
+    isDocVisible &&
     canStreamActiveTab &&
     claimStatus.success &&
     !window.minimized &&
     context.isActiveDesktop &&
     !privacyMasked;
-
   const isVisibleRef = useRef(isVisible);
   isVisibleRef.current = isVisible;
   const audioMutedRef = useRef(audioMuted);
@@ -286,17 +292,18 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
     leaseToken,
     targets: terminalCandidates,
     onNavigationSync: handleNavigationSync,
+    enabled: isVisible,
   });
 
   useEffect(() => {
-    if (selection.selectionActive || selection.preview) void refreshTerminalCandidates();
-  }, [selection.selectionActive, selection.preview, selection.error, context.isFocused, windows, refreshTerminalCandidates]);
+    if (isVisible && (selection.selectionActive || selection.preview)) void refreshTerminalCandidates();
+  }, [isVisible, selection.selectionActive, selection.preview, selection.error, context.isFocused, windows, refreshTerminalCandidates]);
 
   useEffect(() => {
-    if (!selection.preview || selectedTerminal?.ready) return;
+    if (!isVisible || !selection.preview || selectedTerminal?.ready) return;
     const timer = setInterval(() => void refreshTerminalCandidates(), 400);
     return () => clearInterval(timer);
-  }, [selection.preview, selectedTerminal?.ready, refreshTerminalCandidates]);
+  }, [isVisible, selection.preview, selectedTerminal?.ready, refreshTerminalCandidates]);
 
   const getViewport = useCallback(() => {
     const rect = slotRef.current?.getBoundingClientRect();
@@ -598,7 +605,7 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
       String(curTab.snapshot?.profileEpoch ?? "") === String(capturedEpoch ?? ""),
     );
     const interval = setInterval(async () => {
-      if (cancelled || !isCurrentConnection(capturedOwner)) return;
+      if (cancelled || !isDocumentVisible() || !isCurrentConnection(capturedOwner)) return;
       try {
         const resp = await renewBrowserControl(capturedOwner, capturedSessionId, { leaseToken: capturedLease });
         if (cancelled || !isCurrentConnection(capturedOwner)) return;

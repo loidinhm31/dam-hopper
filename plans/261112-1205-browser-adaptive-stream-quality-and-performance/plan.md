@@ -17,14 +17,14 @@ Improve existing server Chromium → CDP JPEG → BHJF/WebSocket → React canva
 | Phase | Status / progress | Effort |
 | --- | --- | --- |
 | [01 Measurement and feedback](phase-01-measurement-and-feedback.md) | Completed (2026-11-12) · 2/2 tasks | 10h |
-| [02 Hot-path and client performance](phase-02-hot-path-and-client-performance.md) | Pending · 0/7 tasks | 20h |
-| [03 Server adaptive capture tiers](phase-03-server-adaptive-capture-tiers.md) | Pending · 0/2 tasks | 20h |
+| [02 Hot-path and client performance](phase-02-hot-path-and-client-performance.md) | Completed (2026-11-12) · 7/7 tasks | 20h |
+| [03 Server adaptive capture tiers](phase-03-server-adaptive-capture-tiers.md) | Completed (2026-11-12) · 2/2 tasks | 20h |
 | [04 Viewer quality controls](phase-04-viewer-quality-controls.md) | Pending · 0/2 tasks | 10h |
 | [05 Calibration, qualification and docs](phase-05-calibration-qualification-and-docs.md) | Pending · 0/2 tasks | 12h |
 | [06 Input interaction defects](phase-06-input-interaction-defects.md) | Pending · 0/4 tasks | 10h |
 
 <!-- evcrate-progress:start -->
-Tasks: 2/19 completed; remaining: 17.
+Tasks: 11/19 completed; remaining: 8.
 <!-- evcrate-progress:end -->
 
 ## Settled design

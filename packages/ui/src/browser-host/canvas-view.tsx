@@ -4,6 +4,7 @@ import type { BrowserStreamController } from "./stream-controller.js";
 
 export interface CanvasViewProps {
   controller: BrowserStreamController | null;
+  isParked?: boolean;
   className?: string;
   children?: React.ReactNode;
   onCanvasPointerDown?: (e: React.PointerEvent<HTMLCanvasElement>) => void;
@@ -18,6 +19,7 @@ export const CanvasView = React.forwardRef<HTMLCanvasElement, CanvasViewProps>(
   function CanvasView(
     {
       controller,
+      isParked = false,
       className,
       children,
       onCanvasPointerDown,
@@ -47,11 +49,32 @@ export const CanvasView = React.forwardRef<HTMLCanvasElement, CanvasViewProps>(
       const canvas = internalCanvasRef.current;
       if (!container || !canvas) return;
 
+      if (isParked) {
+        if (canvas.width > 1 || canvas.height > 1) {
+          canvas.width = 1;
+          canvas.height = 1;
+          canvas.style.width = "1px";
+          canvas.style.height = "1px";
+        }
+        controller?.invalidatePresentation();
+        return;
+      }
+
       const handleResize = () => {
         const rect = container.getBoundingClientRect();
+        if (rect.width <= 1 && rect.height <= 1) {
+          if (canvas.width > 1 || canvas.height > 1) {
+            canvas.width = 1;
+            canvas.height = 1;
+            canvas.style.width = "1px";
+            canvas.style.height = "1px";
+          }
+          controller?.invalidatePresentation();
+          return;
+        }
         const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 3);
-        const physicalWidth = Math.round(rect.width * dpr);
-        const physicalHeight = Math.round(rect.height * dpr);
+        const physicalWidth = Math.max(1, Math.round(rect.width * dpr));
+        const physicalHeight = Math.max(1, Math.round(rect.height * dpr));
 
         if (
           canvas.width !== physicalWidth ||
@@ -81,8 +104,7 @@ export const CanvasView = React.forwardRef<HTMLCanvasElement, CanvasViewProps>(
           observer.disconnect();
         }
       };
-    }, [controller]);
-
+    }, [controller, isParked]);
     return (
       <div
         ref={containerRef}

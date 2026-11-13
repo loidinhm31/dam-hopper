@@ -22,6 +22,10 @@ import type { ConnectionRef } from "@/api/ownership.js";
 import { CanvasView } from "../browser-host/canvas-view.js";
 import { BrowserStreamController } from "../browser-host/stream-controller.js";
 import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "../browser-host/visibility-demand.js";
+import {
   BrowserInputController,
   type CanvasPointerInput,
 } from "../browser-host/input-controller.js";
@@ -494,8 +498,8 @@ function ParkedBrowserStreamItem({
   const [viewerCapacityError, setViewerCapacityError] = useState<string | null>(
     null,
   );
+  const [streamStatus, setStreamStatus] = useState<string>("idle");
   const [retryNonce, setRetryNonce] = useState(0);
-
   const cancelPendingGesture = useCallback(() => {
     pendingPointerRef.current = null;
     inputControllerRef.current?.cancelControlHandoff();
@@ -532,6 +536,11 @@ function ParkedBrowserStreamItem({
     () => isBrowserViewFenced(win.ctx.profileId, currentGen),
     () => false,
   );
+  const isDocVisible = useSyncExternalStore(
+    subscribeDocumentVisibility,
+    isDocumentVisible,
+    () => true,
+  );
   const isSuppressed =
     isCognitoActive || isLockScreenActive || isProfileResetFenced;
   const owner = useMemo<ConnectionRef>(
@@ -547,17 +556,16 @@ function ParkedBrowserStreamItem({
 
   const canConnectTab = useCallback(
     (targetOwner: ConnectionRef = ownerRef.current): boolean => {
+      if (!isDocumentVisible()) {
+        return false;
+      }
       const liveSlot = slotRegistry.get(slotKey);
       if (!liveSlot?.isVisible || !liveSlot.element) {
         return false;
       }
       if (
         useCognitoModeStore.getState().active ||
-        useLockScreenStore.getState().isLocked
-      ) {
-        return false;
-      }
-      if (
+        useLockScreenStore.getState().isLocked ||
         isBrowserViewFenced(targetOwner.profileId, targetOwner.generation) ||
         !isCurrentConnection(targetOwner)
       ) {
@@ -806,9 +814,11 @@ function ParkedBrowserStreamItem({
         subscribe?: (fn: () => void) => () => void;
       }
     ).subscribe?.(syncInvalidate);
+    const docVisSub = subscribeDocumentVisibility(syncInvalidate);
     slotListeners.add(syncInvalidate);
     return () => {
       slotListeners.delete(syncInvalidate);
+      docVisSub();
       unsubFence();
       unsubConn?.();
       cognitoSub?.();
@@ -818,7 +828,6 @@ function ParkedBrowserStreamItem({
   }, [
     win.id,
     tab.tabId,
-    canConnectTab,
     canPlayAudio,
     canStreamTab,
     cancelPendingGesture,
@@ -889,7 +898,8 @@ function ParkedBrowserStreamItem({
 
   // Derived effective visibility for active streaming/bootstrap
   const isEffectiveVisible = Boolean(
-    slot?.isVisible &&
+    isDocVisible &&
+      slot?.isVisible &&
       slot?.element &&
       !isSuppressed &&
       isOwnerScopeValid &&
@@ -1066,6 +1076,7 @@ function ParkedBrowserStreamItem({
     if (!streamControllerRef.current) {
       const streamCtrl = new BrowserStreamController({
         canvas: canvasEl,
+        onStatusChange: (status) => setStreamStatus(status),
         onGeometryChange: () => {},
         onAudioChunk: (chunk: BrowserAudioChunk, credentials) => {
           if (!canPlayAudioRef.current() || !canStreamTabRef.current(credentials)) {
@@ -2057,6 +2068,7 @@ function ParkedBrowserStreamItem({
     <CanvasView
       ref={setCanvasEl}
       controller={streamController}
+      isParked={!isEffectiveVisible}
       onCanvasPointerDown={handlePointerDown}
       onCanvasPointerUp={handlePointerUp}
       onCanvasPointerMove={handlePointerMove}
@@ -2069,6 +2081,15 @@ function ParkedBrowserStreamItem({
         controller={inputController}
         onBlur={cancelPendingGesture}
       />
+      {(streamStatus === "error" || streamStatus === "unsupported") && (
+        <div
+          role="alert"
+          data-testid={`browser-stream-status-error-${win.id}-${tab.tabId}`}
+          className="absolute top-0 inset-x-0 bg-red-900/90 p-2 text-xs text-red-100 flex items-center justify-between gap-2 pointer-events-auto"
+        >
+          <span>{streamStatus === "unsupported" ? "Canvas frame decode unsupported" : "Stream rendering error"}</span>
+        </div>
+      )}
       {viewerCapacityError && (
         <div
           role="alert"
@@ -2142,8 +2163,8 @@ export function BrowserStreamKeepAliveHost() {
         position: "absolute",
         visibility: "hidden",
         pointerEvents: "none",
-        width: 1024,
-        height: 768,
+        width: 1,
+        height: 1,
         overflow: "hidden",
         top: -10000,
         left: -10000,

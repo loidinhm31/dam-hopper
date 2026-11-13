@@ -24,7 +24,7 @@ use dam_hopper_server::browser_host::input::{
     MAX_RELIABLE_RECORDS,
 };
 use dam_hopper_server::browser_host::protocol::TargetGeometry;
-use dam_hopper_server::browser_host::session::{CreateSessionRequest, ViewportRequest};
+use dam_hopper_server::browser_host::session::{CreateSessionRequest, SessionError, ViewportRequest};
 use dam_hopper_server::config::{DamHopperConfig, FeaturesConfig, GlobalConfig, WorkspaceInfo};
 use dam_hopper_server::crypto::DamHopperOpaqueSuite;
 use dam_hopper_server::diagnostics::DiagnosticStore;
@@ -356,6 +356,163 @@ async fn test_viewport_update_and_epochs() {
     assert_eq!(resp_stale.status(), StatusCode::CONFLICT);
 }
 
+#[tokio::test]
+async fn test_viewport_sanitized_noop_and_flood_coalescing() {
+    let _serial = SERIAL_TEST_LOCK.lock().await;
+    global_session_registry().reset_for_test().await;
+    let tmp = tempdir().unwrap();
+    let (auth_service, token) = make_user_token("admin-vp-coalesce", UserRole::Admin, true);
+    let state = create_test_state(tmp.path().to_path_buf(), false)
+        .with_auth_service(Arc::new(auth_service));
+    let app = build_router_with_origins(state, vec![]);
+    let (session_dto, _) = global_session_registry()
+        .insert_running_for_test(
+            "admin-vp-coalesce",
+            false,
+            "inc-1",
+            1,
+            &CreateSessionRequest {
+                creation_key: uuid::Uuid::new_v4().to_string(),
+                url: "about:blank".to_string(),
+                viewport: ViewportRequest {
+                    width: 1280,
+                    height: 900,
+                    dpr: 1.0,
+                },
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let session_id = session_dto.browser_session_id;
+    let input_mgr = get_or_create_input_manager(&session_id).await;
+    let (lease_token, _) = input_mgr.acquire_lease("v1", "human").await.unwrap();
+
+    // 1. Identical sanitized viewport (1280x900@1.0) is a no-op: returns 200 OK with epoch still "1"
+    let req_noop = Request::builder()
+        .method("PUT")
+        .uri(format!("/api/browser/sessions/{session_id}/viewport"))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "leaseToken": lease_token,
+                "viewportEpoch": 1,
+                "width": 1280,
+                "height": 900,
+                "dpr": 1.0
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp_noop = app.clone().oneshot(req_noop).await.unwrap();
+    assert_eq!(resp_noop.status(), StatusCode::OK);
+    let body_noop: Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp_noop.into_body(), 1024 * 1024).await.unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body_noop["viewportEpoch"].as_str().unwrap(), "1");
+
+    // 2. Clamped identical viewport (width 1920, height 1080 -> after applying 1920x1080@3.0, sending 9999x9999@9.0 clamps to 1920x1080@3.0 -> no-op!)
+    let req_max = Request::builder()
+        .method("PUT")
+        .uri(format!("/api/browser/sessions/{session_id}/viewport"))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "leaseToken": lease_token,
+                "viewportEpoch": 1,
+                "width": 1920,
+                "height": 1080,
+                "dpr": 3.0
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp_max = app.clone().oneshot(req_max).await.unwrap();
+    assert_eq!(resp_max.status(), StatusCode::OK);
+    let body_max: Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp_max.into_body(), 1024 * 1024).await.unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body_max["viewportEpoch"].as_str().unwrap(), "2");
+
+    let req_clamped_noop = Request::builder()
+        .method("PUT")
+        .uri(format!("/api/browser/sessions/{session_id}/viewport"))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "leaseToken": lease_token,
+                "viewportEpoch": 2,
+                "width": 4000,
+                "height": 3000,
+                "dpr": 5.0
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp_clamped_noop = app.clone().oneshot(req_clamped_noop).await.unwrap();
+    assert_eq!(resp_clamped_noop.status(), StatusCode::OK);
+    let body_clamped: Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp_clamped_noop.into_body(), 1024 * 1024).await.unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        body_clamped["viewportEpoch"].as_str().unwrap(),
+        "2",
+        "clamped identical viewport must not advance epoch"
+    );
+
+    // 3. Resize flood coalescing: 1 active + 1 latest pending (intermediate superseded, final applied)
+    let reg = global_session_registry();
+    let out1 = reg
+        .begin_viewport_transaction(&session_id, "admin-vp-coalesce", Some(2), 1000, 700, 1.0)
+        .await
+        .unwrap()
+        .err()
+        .expect("leader outcome");
+    assert!(matches!(
+        out1,
+        dam_hopper_server::browser_host::session::ViewportQueueOutcome::Leader { .. }
+    ));
+
+    // Two rapid subsequent updates while leader is active -> both become Followers, coalesced to latest (800x600@1.5)
+    let out2 = reg
+        .begin_viewport_transaction(&session_id, "admin-vp-coalesce", Some(2), 900, 650, 1.0)
+        .await
+        .unwrap()
+        .err()
+        .expect("follower 1");
+    let out3 = reg
+        .begin_viewport_transaction(&session_id, "admin-vp-coalesce", Some(2), 800, 600, 1.5)
+        .await
+        .unwrap()
+        .err()
+        .expect("follower 2");
+    assert!(matches!(
+        out2,
+        dam_hopper_server::browser_host::session::ViewportQueueOutcome::Follower(_)
+    ));
+    assert!(matches!(
+        out3,
+        dam_hopper_server::browser_host::session::ViewportQueueOutcome::Follower(_)
+    ));
+
+    let (coalesced_req, waiters, _wait) = reg
+        .take_next_coalesced_viewport(&session_id)
+        .await
+        .expect("coalesced pending slot");
+    assert_eq!(coalesced_req.width, 800);
+    assert_eq!(coalesced_req.height, 600);
+    assert_eq!(coalesced_req.dpr, 1.5);
+    assert_eq!(waiters.len(), 2, "both followers share the single coalesced pending slot");
+    assert!(reg.take_next_coalesced_viewport(&session_id).await.is_none());
+}
+
 #[test]
 fn test_fraction_to_css_mapping_and_boundaries() {
     let geo = TargetGeometry {
@@ -627,4 +784,150 @@ async fn test_selected_text_and_find_commands() {
 
     let resp_find_long = app.oneshot(req_find_long).await.unwrap();
     assert_eq!(resp_find_long.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_viewport_coalescer_race_and_lease_revoked_exit() {
+    let _serial = SERIAL_TEST_LOCK.lock().await;
+    let reg = global_session_registry();
+    reg.reset_for_test().await;
+
+    let (session_dto, _) = reg
+        .insert_running_for_test(
+            "admin-race-test",
+            false,
+            "inc-1",
+            1,
+            &CreateSessionRequest {
+                creation_key: uuid::Uuid::new_v4().to_string(),
+                url: "about:blank".to_string(),
+                viewport: ViewportRequest {
+                    width: 1280,
+                    height: 900,
+                    dpr: 1.0,
+                },
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let session_id = session_dto.browser_session_id;
+
+    // Part 1: Enqueue follower between take-next and retire cannot strand.
+    // 1. First transaction becomes Leader.
+    let leader_out = reg
+        .begin_viewport_transaction(&session_id, "admin-race-test", Some(1), 1024, 768, 1.0)
+        .await
+        .unwrap()
+        .err()
+        .expect("leader");
+    assert!(matches!(
+        leader_out,
+        dam_hopper_server::browser_host::session::ViewportQueueOutcome::Leader { .. }
+    ));
+
+    // 2. Enqueue follower A while leader is active.
+    let follower_a = reg
+        .begin_viewport_transaction(&session_id, "admin-race-test", Some(1), 800, 600, 1.0)
+        .await
+        .unwrap()
+        .err()
+        .expect("follower a");
+    assert!(matches!(
+        follower_a,
+        dam_hopper_server::browser_host::session::ViewportQueueOutcome::Follower(_)
+    ));
+
+    // 3. Worker takes follower A. Pending is now None, active is still true.
+    let (req_a, waiters_a, _) = reg
+        .take_next_coalesced_viewport(&session_id)
+        .await
+        .expect("follower A extracted");
+    assert_eq!(req_a.width, 800);
+    assert_eq!(waiters_a.len(), 1);
+
+    // 4. Follower B is enqueued while worker executes follower A.
+    let follower_b = reg
+        .begin_viewport_transaction(&session_id, "admin-race-test", Some(1), 640, 480, 1.0)
+        .await
+        .unwrap()
+        .err()
+        .expect("follower b");
+    assert!(matches!(
+        follower_b,
+        dam_hopper_server::browser_host::session::ViewportQueueOutcome::Follower(_)
+    ));
+
+    // 5. Worker takes follower B.
+    let (req_b, waiters_b, _) = reg
+        .take_next_coalesced_viewport(&session_id)
+        .await
+        .expect("follower B extracted");
+    assert_eq!(req_b.width, 640);
+    assert_eq!(waiters_b.len(), 1);
+
+    // 6. Worker calls take_next_coalesced_viewport when pending is None:
+    // It atomically retires active = false under the exact same lock!
+    assert!(reg.take_next_coalesced_viewport(&session_id).await.is_none());
+
+    // 7. A subsequent request arrives immediately: because active was retired atomically,
+    // it MUST become a new Leader, never a stranded follower!
+    let next_leader = reg
+        .begin_viewport_transaction(&session_id, "admin-race-test", Some(1), 1920, 1080, 1.0)
+        .await
+        .unwrap()
+        .err()
+        .expect("new leader");
+    assert!(matches!(
+        next_leader,
+        dam_hopper_server::browser_host::session::ViewportQueueOutcome::Leader { .. }
+    ));
+
+    // Part 2: Lease-revoked exit resolves all waiters and retires coalescer atomically.
+    // Enqueue two followers behind next_leader.
+    let out_f1 = reg
+        .begin_viewport_transaction(&session_id, "admin-race-test", Some(1), 1600, 900, 1.0)
+        .await
+        .unwrap()
+        .err()
+        .unwrap();
+    let out_f2 = reg
+        .begin_viewport_transaction(&session_id, "admin-race-test", Some(1), 1440, 900, 1.0)
+        .await
+        .unwrap()
+        .err()
+        .unwrap();
+
+    let rx_f1 = match out_f1 {
+        dam_hopper_server::browser_host::session::ViewportQueueOutcome::Follower(rx) => rx,
+        _ => panic!("expected follower 1"),
+    };
+    let rx_f2 = match out_f2 {
+        dam_hopper_server::browser_host::session::ViewportQueueOutcome::Follower(rx) => rx,
+        _ => panic!("expected follower 2"),
+    };
+
+    // Simulate lease revocation aborting all pending coalesced waiters atomically.
+    let lease_err = SessionError::Conflict("control lease revoked".to_string());
+    reg.abort_viewport_coalescer(&session_id, lease_err).await;
+
+    // Both queued waiters MUST resolve with explicit conflict error (not dropped or hung).
+    let res1 = rx_f1.await.expect("waiter 1 channel not dropped");
+    let res2 = rx_f2.await.expect("waiter 2 channel not dropped");
+    assert!(matches!(&res1, Err(SessionError::Conflict(msg)) if msg.contains("control lease revoked")));
+    assert!(matches!(&res2, Err(SessionError::Conflict(msg)) if msg.contains("control lease revoked")));
+
+    // Coalescer is retired: take_next is None, next call becomes Leader.
+    assert!(reg.take_next_coalesced_viewport(&session_id).await.is_none());
+    let fresh = reg
+        .begin_viewport_transaction(&session_id, "admin-race-test", Some(1), 1280, 720, 1.0)
+        .await
+        .unwrap()
+        .err()
+        .expect("fresh leader");
+    assert!(matches!(
+        fresh,
+        dam_hopper_server::browser_host::session::ViewportQueueOutcome::Leader { .. }
+    ));
 }

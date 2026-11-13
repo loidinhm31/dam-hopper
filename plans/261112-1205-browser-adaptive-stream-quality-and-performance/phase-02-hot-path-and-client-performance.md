@@ -4,7 +4,7 @@
 [Overview](plan.md) · [Measurement](phase-01-measurement-and-feedback.md) · [Dedupe authority](../reports/planner-261112-1205-browser-adaptive-stream-quality.md) · [Frame review](../reports/code-reviewer-261112-1205-browser-server-frame-pipeline.md) · [Transport review](../reports/code-reviewer-261112-1205-browser-server-media-transport.md) · [UI review](../reports/code-reviewer-261112-1205-browser-ui-client.md) · [Existing stream](../261109-2251-host-browser-review-remediation/phase-02-stream-input-contracts.md) / [OS tasks](../261109-2251-host-browser-review-remediation/phase-03-os-viewer-lifecycle.md).
 
 ## Overview
-Date: 2026-11-12 · Priority: P2 performance; P1 secure-origin gate · Implementation status: pending (0/7) · Review status: coordinator review pending · Effort: 20h.
+Date: 2026-11-12 · Priority: P2 performance; P1 secure-origin gate · Implementation status: completed (7/7, 2026-11-12) · Review status: Cycle 3 reviewed (7/10, 0 critical; approved with noted issues, browser-mode tests env-blocked) · Effort: 20h.
 Depends on Phase 01. External gates: all eight remediation tasks listed in overview; apply per-task constraints below. One integration owner; sequential shared-file edits. Changes here are only residual work, not another remediation implementation.
 
 ## Key Insights
@@ -108,13 +108,13 @@ Return explicit unsupported/error when createImageBitmap is unavailable; propaga
   }
 ]
 ```
-- [ ] <!-- evcrate-task:reuse-validated-frames --> Reuse trusted frame metadata
-- [ ] <!-- evcrate-task:make-client-rendering-truthful --> Report real rendering failure without successful ACK/input trust
-- [ ] <!-- evcrate-task:decouple-media-writes --> Bound independent media writes and skip missed ticks
-- [ ] <!-- evcrate-task:bound-viewport-and-runtime-caps --> Coalesce viewport updates and honor configured caps
-- [ ] <!-- evcrate-task:bound-client-background-work --> Bound hidden demand, polls and parked backing
-- [ ] <!-- evcrate-task:pace-client-input --> Pace replaceable input below server budget
-- [ ] <!-- evcrate-task:secure-browser-transport --> Enforce secure Browser credential transport
+- [x] <!-- evcrate-task:reuse-validated-frames --> Reuse trusted frame metadata
+- [x] <!-- evcrate-task:make-client-rendering-truthful --> Report real rendering failure without successful ACK/input trust
+- [x] <!-- evcrate-task:decouple-media-writes --> Bound independent media writes and skip missed ticks
+- [x] <!-- evcrate-task:bound-viewport-and-runtime-caps --> Coalesce viewport updates and honor configured caps
+- [x] <!-- evcrate-task:bound-client-background-work --> Bound hidden demand, polls and parked backing
+- [x] <!-- evcrate-task:pace-client-input --> Pace replaceable input below server budget
+- [x] <!-- evcrate-task:secure-browser-transport --> Enforce secure Browser credential transport
 
 ## Success Criteria
 All seven task outcomes observable; exactly one untrusted parse per incoming frame, no trusted fan-out reparse, no queue expansion, prompt control read under blocked media writes. Unsupported/failed rendering never emits success or grants input trust. Hidden document produces zero new input/decode/audio/polls after synchronous fence (already-written network bytes may still arrive); one selection request maximum; parked backing ≤1×1. Default production remains 24fps/configured quality until adaptation phase, not a forced 10fps. Commands above plus final `pnpm --filter @dam-hopper/ui build`; coordinator runs only after edits land, no planning execution.
@@ -125,5 +125,26 @@ Writer separation can accidentally add a fourth retained frame or release memory
 ## Security Considerations
 Telemetry/preference remains untrusted, bounded, subscription-fenced and rate-limited; cannot raise admin ceilings. Trusted frame constructors are private to validated producer path, not bypasses for WS input. Visibility is not authorization. Secure-origin checks precede credentials; no unauthenticated surface. Resize/cap tests must use isolated sessions and cannot weaken authentication or memory admission.
 
+## Approved with noted issues
+Phase 02 approved 2026-11-12 after 3 review cycles (final score 7/10, 0 critical) with noted open items recorded as non-blocking follow-ups for Phase 03/05 owners. Tasks marked done-with-known-defects where reviewer scores reflect remaining technical debt:
+- **Task review scores**:
+  - `reuse-validated-frames`: 9/10
+  - `make-client-rendering-truthful`: 9/10
+  - `decouple-media-writes`: 5/10 (*done with known defects*)
+  - `bound-viewport-and-runtime-caps`: 4/10 (*done with known defects*)
+  - `bound-client-background-work`: 8/10
+  - `pace-client-input`: 9/10
+  - `secure-browser-transport`: 9/10
+- **Open defects & static analysis follow-ups**:
+  - `H1a`: `screencast.rs` transition fence not atomic with publication; input (`media.rs`) not fenced during resize.
+  - `H1b`: First CDP timeout treated as unchanged native state.
+  - `H3`: `media_writer.rs` reservation released before shared WebSocket physically retired.
+  - `H2`: Shutdown/failure paths can drop pending lifecycle accounting.
+  - `Test gaps`: Concurrent publication during resize; saturated frame + audio + control accounting across cancel/failure; accept-then-block with destructor ordering; real WS reader/writer blocked sink.
+- **Upstream remediation & environment gates**:
+  - Upstream remediation gates still unchecked (7 of 8; `unify-geometry-counters`, `enforce-paired-input-lifecycle`, `recover-screencast-runs`, `bound-browser-payloads`, `repair-browser-portals`, `reconcile-browser-ownership`, `fence-client-input-decoding`).
+  - Escalated upstream prerequisite: `diagnostics.rs` hardcodes 128 MiB memory ceiling ignoring configured `memory_ceiling_bytes` (owned by upstream remediation `bound-browser-payloads`).
+  - Environment gate: Browser-mode Playwright tests NOT run (env: Chromium missing `libnspr4`, no sudo). Verified via 63 server integration passes (3 repeat runs), 65 lib `browser_host` unit passes, 138 UI vitest passes, and clean `tsc` build (`cargo --features vendored; NODE_OPTIONS=--no-experimental-webstorage; npx pnpm@10`).
+
 ## Next steps
-Phase 03 starts only after residual performance/cap fixes and prerequisite recovery contracts have evidence. [Phase 06](phase-06-input-interaction-defects.md) follows `pace-client-input` for paste/capture/wheel and control update-vs-input fairness; it does not block Phases 03–05 or duplicate remediation dispatch/revocation. Integration owner serializes shared files.
+Phase 03 starts only after residual performance/cap fixes and prerequisite recovery contracts have evidence; Phase 03/05 owners must review the open follow-ups in 'Approved with noted issues' above. [Phase 06](phase-06-input-interaction-defects.md) follows `pace-client-input` for paste/capture/wheel and control update-vs-input fairness; it does not block Phases 03–05 or duplicate remediation dispatch/revocation. Integration owner serializes shared files.

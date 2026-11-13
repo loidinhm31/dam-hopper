@@ -4,7 +4,7 @@
 [Overview](plan.md) · [Measurement](phase-01-measurement-and-feedback.md) · [Performance prerequisites](phase-02-hot-path-and-client-performance.md) · [Initial ladder/hysteresis](../reports/researcher-261112-1205-network-adaptive-screencast-quality.md) · [CDP semantics/version limits](../reports/researcher-261112-1205-cdp-screencast-performance-best-practices.md) · [Existing stream recovery](../261109-2251-host-browser-review-remediation/phase-02-stream-input-contracts.md) · [UI/wire integration](phase-04-viewer-quality-controls.md).
 
 ## Overview
-Date: 2026-11-12 · Priority: P2 · Implementation status: pending (0/2) · Review status: coordinator review pending · Effort: 20h.
+Date: 2026-11-12 · Priority: P2 · Implementation status: completed (2/2, 2026-11-12) · Review status: Cycle 3 reviewed (7/10, 0 critical; approved with noted issues) · Effort: 20h.
 Depends on all Phase 02 tasks. External hard gates: `unify-geometry-counters` (including SI-04 ABBA and applied geometry), `recover-screencast-runs` (native credits/demand/run publication), `bound-browser-payloads`, `enforce-paired-input-lifecycle`; client run/audio cutover also waits for `fence-client-input-decoding`. These fixes remain exclusively upstream.
 
 ## Key Insights
@@ -74,8 +74,8 @@ Exact writable files in tasks below. Create `capture_tier.rs`, `adaptive_stream_
   }
 ]
 ```
-- [ ] <!-- evcrate-task:adapt-viewer-pacing-and-shared-tier --> Adapt pacing and minimum eligible fidelity
-- [ ] <!-- evcrate-task:switch-capture-tier-and-audio --> Switch fresh capture runs without unrelated audio reset
+- [x] <!-- evcrate-task:adapt-viewer-pacing-and-shared-tier --> Adapt pacing and minimum eligible fidelity (done 2026-11-12)
+- [x] <!-- evcrate-task:switch-capture-tier-and-audio --> Switch fresh capture runs without unrelated audio reset (done 2026-11-12)
 
 ## Success Criteria
 Controller trace respects two pressured windows/5s capture dwell/10 healthy-second recovery targets, with no oscillation on threshold jitter. High viewer retains independent FPS while image fidelity follows slow viewer; hidden/stalled removal eventually recovers only through healthy probes. Every snapshot config-valid, all handles see latest version, no native active-start reissue. CSS/DPR/viewportEpoch stable under capture-only changes; input remains untrusted until metadata oracle passes. Audio suppression proof is server-side zero chunks after acknowledged gate, not merely zero player gain. Commands above are planned, never executed by author.
@@ -86,5 +86,25 @@ Slowest-visible is intentionally shared degradation, not isolation of quality; e
 ## Security Considerations
 Telemetry/preference untrusted, bounded/validated, subscription-fenced, rate-limited and capped by admin ceilings; no control-lease requirement means no authorization bypass for navigation/input. Only admitted existing viewer can vote; no new unauthenticated surface. Tier switch never grants trusted input from unqualified metadata; native ACK release remains actor/run-owned. Preserve exact auth/owner/doc/audio source fences while separating video identity, reject old queued audio after gate/version changes.
 
+## Approved with noted issues
+Phase 03 approved 2026-11-12 after 3 review cycles (score progression: Cycle 1: 6/10 -> Cycle 2: 7/10 -> Cycle 3: 7/10, 0 critical across all cycles; user approved with "fix then approve" on cycle 3 warnings) with noted open items recorded as non-blocking follow-ups for Phase 04/05 owners:
+- **Task review scores**:
+  - Review scoring progressed 6/10 -> 7/10 -> 7/10 across 3 review cycles (0 critical every cycle). Per-task scoring was not split across tasks; the 3 cycle-3 warnings (write-time gate generation, decoder attribution for ack starvation, ticker/applied_fps single snapshot) were resolved and verified by test suites prior to final approval.
+  - `adapt-viewer-pacing-and-shared-tier`: 7/10 (*Cycle 3 aggregate score; approved with noted issues*)
+  - `switch-capture-tier-and-audio`: 7/10 (*Cycle 3 aggregate score; approved with noted issues*)
+- **Open follow-ups & known gaps**:
+  1. **Upstream remediation gates unchecked**: `unify-geometry-counters`, `enforce-paired-input-lifecycle`, `recover-screencast-runs`, `bound-browser-payloads`, `repair-browser-portals`, `reconcile-browser-ownership`, and `fence-client-input-decoding` remain unchecked (same prerequisite condition as Phase 02). Note: `update_geometry` still re-issues `Page.startScreencast` while active (remediation-owned).
+  2. **Client audio producerRun mismatch**: Client drops audio whose `producerRun` != current video run, so audio is lost client-side after any capture-only restart until Phase 04 wire/client cutover; **do not deploy Phase 03 alone**.
+  3. **Downscale input-trust oracle deferred**: Scaled (<1.0) frames stay input-untrusted until the live-Chromium downscale oracle (DOM `innerWidth`/`innerHeight`/`devicePixelRatio`, metadata CSS dimensions, JPEG SOF, normalized click marker at 1x/0.75x/0.5x) is executed in Phase 05; Low/Constrained tiers therefore have no trusted input until then.
+  4. **Estimator baseline aging**: Phase 01 estimator min-service baseline never ages; a permanent route-RTT change on a long run could over-degrade until a native restart. Calibrate in Phase 05. All thresholds and ladder values are calibration targets, not measured results.
+  5. **Deferred CDP parameters**: Optional `everyNthFrame` divisor and `maxFramesInFlight`/`sendLastFrame` are not implemented (deferred pending Phase 05 measurement).
+  6. **Phase 02 carryover defects**: Phase 02 open defects (H1a/H1b/H2/H3 etc.) remain; Phase 03 narrowed H1a for tier switches only (publish/retire atomicity under `current_run` read guard).
+  7. **Default behavior change**: Auto stream mode warm-starts at Medium tier (10fps, q65, scale 1.0) bounded by admin ceilings until upward probes succeed.
+  8. **Working tree scope**: Working tree holds uncommitted Phase 02 work in the same files; the eventual commit will cover Phase 02 + Phase 03.
+- **Environment & test verification gates**:
+  - Environment gate: No Chromium binary in this environment (`libnspr4` absent / Chromium unavailable), so live downscale oracle and real-browser screencast tests were skipped or self-skipped.
+  - Automated verification: Author-run tests passed: 95/95 lib `browser_host` unit tests, and 158 server integration tests across 11 suites (admission 24, bounds 6, input 9, media 20, screencast 14, lifecycle 22, gateway 16, auth 10, logout 12, selection 21, shutdown 4). The only failure in `browser_host_security` was an unrelated capabilities test requiring a Chromium binary.
+
 ## Next steps
-Phase 04 exposes exact typed media controls/status and stable audio authority cutover end-to-end. Phase 05 measures ladder, gap and text quality; no production release of downscale before runtime coordinate qualification and matched client completion.
+Proceed to [Phase 04](phase-04-viewer-quality-controls.md) ("Viewer quality controls": typed controls/status + audio wire/client cutover).
+**CRITICAL DEPLOYMENT WARNING:** Phase 03 MUST NOT be deployed to production alone without Phase 04. Because client drops audio whose `producerRun` does not match the active video run, capture-only restarts in Phase 03 break client audio until Phase 04 wire/client audio decoupling lands. Phase 05 follows for ladder calibration, text legibility, and live-Chromium downscale qualification.

@@ -1,7 +1,7 @@
 # Host Browser CDP Streaming Architecture
 
 **Authority:** Backend Subsystem (`server/src/browser_host/`, `server/examples/browser_host_qualification.rs`)  
-**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast & Live Tab Audio Streaming, Bounded Media Fanout, Decoder & WebAudio PCM Pipeline, OS Root Lifecycle Cutover, Secure Selection / Confirmed Logout Reset, Cycle 13 Video/Audio Streaming Remediation, Native Browser Tabs & Session Continuity Phases 01–05 (live visual acceptance receipt pending), and Adaptive Stream Quality Phase 01 — Measurement and Feedback (implemented 2026-11-12; Cycle 3 reviewed 8/10; HTTP diagnostics export & Phase 02 reader separation follow-ups pending).
+**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast & Live Tab Audio Streaming, Bounded Media Fanout, Decoder & WebAudio PCM Pipeline, OS Root Lifecycle Cutover, Secure Selection / Confirmed Logout Reset, Cycle 13 Video/Audio Streaming Remediation, Native Browser Tabs & Session Continuity Phases 01–05 (live visual acceptance receipt pending), Adaptive Stream Quality Phase 01 — Measurement and Feedback, Adaptive Stream Quality Phase 02 — Hot-Path and Client Performance, and Adaptive Stream Quality Phase 03 — Server Adaptive Capture Tiers (implemented 2026-11-12; Cycle 3 reviewed 7/10, 0 critical; approved with noted issues).
 
 This specification defines the architectural contracts, process containment boundaries, bounded CDP actor lifecycle, and binary wire framing for the Host Browser CDP Streaming subsystem.
 
@@ -355,6 +355,7 @@ Every HTTP and WebSocket request to `/api/browser/*` undergoes strict admission 
   - Forwarded headers (`X-Forwarded-For`, `X-Real-IP`, `Forwarded`) are explicitly ignored; only raw socket addresses are evaluated.
   - Any `Origin` header must strictly match approved origins (`server.cors_origins`, trusted `public_server_origin`, or `allowed_dev_origins`, falling back to local Vite ports `http://127.0.0.1:5173`, `http://localhost:5173` only when no dev origins are configured). An empty allowlist approves nothing.
   - Loopback requests without Origin (local native CLI/agents) are permitted. Assigned principal is `"dev-user"` with `is_dev: true`.
+- **Secure-or-Loopback Client Transport Guard:** All client REST requests, attachment ticket minting, WebSocket upgrades, and reset/preflight calls enforce `isSecureOrLoopbackOrigin` (`assertSecureOrLoopbackOrigin`). Remote cleartext HTTP/WS transport fails immediately with `BrowserHostClientError("insecureOrigin")` before minting capability tickets or initiating WebSocket connections.
 ### Periodic Live Verification (`verify_live_admission`)
 
 Long-running streaming connections and active attachments do not rely on static handshake validation alone:
@@ -392,6 +393,7 @@ Target interaction enforces strict single-viewer authority and reliable event de
   - Sequence gap: Returns HTTP 400 `kind: "sequenceViolation"`, flushes queue, clears held keys, and revokes lease.
   - Stale sequence: Dropped with HTTP 400 `kind: "sequenceViolation"`.
 - **Event Coalescing:** Adjacent `PointerMove` and `Wheel` events are coalesced between ordering barriers (`PointerDown`, `PointerUp`, `KeyDown`, `KeyUp`, `InsertText`).
+- **Client Input Pacing Budgets (`input-controller.ts`):** Paces outgoing client input under server limits: minimum replaceable event interval 25 ms (`COALESCABLE_MIN_INTERVAL_MS = 25`, $\le 40$/s ceiling for `pointerMove`/`wheel`), normal combined traffic $\le 80$/s (`MAX_NORMAL_ROLLING_PER_SEC`), and release events $\le 100$/s (`MAX_COMBINED_ROLLING_PER_SEC`). Control lease state is synchronized before admission. Budget exhaustion closes the control socket fail-closed with code 1008 ("input rate budget exhausted") so held keys/buttons release on the server. Monotonic sequence numbers (`inputSeq`) are assigned at send time, and accumulated wheel deltas (`deltaX`, `deltaY`) are retained across coalesced moves.
 
 ### Coordinate Mapping (`map_fraction_to_css_coords`)
 
@@ -410,6 +412,7 @@ $$x = u \times \text{css\_width}, \quad y = v \times \text{css\_height} + \text{
 - **Failed Close Handling:** `DELETE /api/browser/sessions/{id}` returning an unconfirmed native close results in HTTP 502 Bad Gateway (`kind: "nativeCloseUnconfirmed"`), keeping the session in `closing` status with its target capacity held.
 - **Session Listing & TTL Reaping:** `GET /api/browser/sessions` lists all non-closed sessions (including `closing` and `lost`) so operators and UI observe truth. Retired sessions and idempotency records are reaped after `IDEMPOTENCY_TTL = 600s`. Note: UI TypeScript `BrowserSessionStatus` union does NOT yet include `closing` or `lost` (Phase 02/03 owns UI contract alignment).
 - **Independent Epochs:** Tracks `navigationRevision` independently of `viewportEpoch` and `profileEpoch`.
+- **Viewport Transaction Coalescing & No-Op Bypass:** `begin_viewport_transaction` checks `matches_geometry` before mutating native state or incrementing `viewport_epoch`. If requested dimensions and DPR match existing geometry, the request returns immediately without advancing epochs or dispatching CDP commands. Active resize operations queue at most 1 active leader and 1 latest pending follower with 100 ms dispatch spacing (`VIEWPORT_DISPATCH_SPACING`). `take_next_coalesced_viewport` atomically advances to the next pending slot or retires `active = false` under one lock. Aborting on lease revocation or session teardown (`abort_viewport_coalescer`) fails pending waiters cleanly, and upstream CDP failures in `update_geometry` roll back layout geometry and `viewport_epoch` via `rollback_viewport`.
 
 - **Popup Parent-Child Lifecycle (`activePopupSessionId` / `parentSessionId`):** Admitted `window.open` popups record `parentSessionId` on the child session at reservation and publish `activePopupSessionId` on the opener session once `commit_running` succeeds. When the popup session retires (`begin_close`, `finish_close`, `native_destroyed`, `rollback_creation`, incarnation retirement, or principal close), `clear_parent_popup_link` clears the opener's `activePopupSessionId` (if it still matches that child) and publishes `sessionUpdated`, enabling `BrowserStreamKeepAliveHost` and `BrowserApp` to switch into admitted OAuth popups and restore the opener when sign-in completes.
 ## 14. Navigation & HTTP Network Policy (`network_policy.rs`)
@@ -440,8 +443,8 @@ The screencast producer (`server/src/browser_host/screencast.rs`) manages native
 
 - **No Task-per-Event:** Event ingress drains into one replaceable candidate mailbox without spawning background tasks per incoming frame.
 - **Base64 Bounds Enforcement:** Enforces base64 size ceiling (`MAX_BASE64_BYTES = 2_796_204`, corresponding to 2 MiB decoded payload) before admission.
-- **Late Base64 Decoding & Configurable Capture Policy:** Overwritten candidates are dropped and ACKed immediately. Base64 is decoded once when the governor ticks at `self.governor_interval`. Production builds producers via `ScreencastProducer::with_capture_policy(fps, jpeg_quality)` (`1..=30` FPS, `10..=100` quality; defaults `24 FPS` / `JPEG 75` across `Page.startScreencast`, `update_geometry`, governor interval `Duration::from_secs_f64(1.0 / fps)`, and `Page.captureScreenshot` fallback), while `ScreencastProducer::new` preserves legacy `DEFAULT_GOVERNOR_INTERVAL = 100ms` (10 FPS) and `DEFAULT_JPEG_QUALITY_LEGACY = 65`.
-- **SOF Dimension Validation:** Parses JPEG SOF0/SOF2 marker (`parse_jpeg_dimensions`) directly to inspect image dimensions ($\le 1920 \times 1080$, $\le 2,073,600$ pixels). Never decodes uncompressed pixels or re-encodes JPEG images.
+- **Late Base64 Decoding & Configurable Capture Policy:** Overwritten candidates are dropped and ACKed immediately. Base64 is decoded once when the governor ticks at `self.governor_interval` with `MissedTickBehavior::Skip` (`create_governor_interval`), preventing burst cascades after stalls. Capture policy is governed by shared `Arc<CaptureTierState>` with admin `CaptureCeilings` (`budgets.frame_rate_fps`, `budgets.jpeg_quality`, `budgets.max_width`, `budgets.max_height`). Auto mode warm-starts at **Medium** (10 FPS / JPEG quality 65 / scale 1.0) clamped to admin ceilings, replacing the previous static 24 FPS / JPEG 75 startup until upward probes succeed. Legacy constructors (`ScreencastProducer::new`, `ViewerCreditController::new`) retain legacy `100ms` (10 FPS) / JPEG 65 defaults for compatibility.
+- **SOF Dimension Validation & Proof Token Reuse:** Parses JPEG SOF0/SOF2 marker (`validate_jpeg_sof`) directly to inspect image dimensions ($\le 1920 \times 1080$, $\le 2,073,600$ pixels), returning a private `ValidatedJpegDims` proof token. `pack_validated_bhjf_frame` checks header constraints and SOF dimensions once; `TrackedBhjfFrame` carries an immutable `Arc<TargetFrameHeader>` that fanout and credit governors reuse directly without re-parsing. Never decodes uncompressed pixels or re-encodes JPEG images.
 - **Timestamp Separation (`cdp.rs`, `screencast.rs`):** `parse_native_capture_time_unix_ms` validates optional CDP metadata timestamps (`<= 2100-01-01 UTC`); `ScreencastProducer` propagates `Some(ms)` or `0` (including `0` on `Page.captureScreenshot` fallbacks) into `TargetFrameHeader` while recording `server_received_unix_ms` and monotonic `received_at: Instant` separately on `TrackedBhjfFrame` (`with_receipt_time`).
 
 ### Viewport Epoch & Geometry Reconciliation
@@ -454,7 +457,7 @@ The screencast producer (`server/src/browser_host/screencast.rs`) manages native
 
 - **Viewer Demand Tracking:** Screencast runs only when active viewers register visible demand (`ViewerDemand`, `visible: true`).
 - **Heartbeat Cadence:** Viewers send heartbeats every 5 seconds (`HEARTBEAT_INTERVAL`); demand expires after 15 seconds (`VISIBLE_DEMAND_EXPIRY`).
-- **Zero-Demand Teardown:** When visible demand drops to zero (or all viewer heartbeats expire), screencast stops immediately (`zero_demand_stops`).
+- **Zero-Demand Teardown:** When visible demand drops to zero (or all viewer heartbeats expire), screencast stops immediately (`zero_demand_stops`), re-verifying visible demand under the lifecycle write lock before initiating teardown.
 - **Final Frame Retention:** The final published frame is retained in cache without withholding ACKs from Chromium.
 
 ### Audio Capture Drain & `AudioDocAuthority` Navigation Correlation
@@ -473,16 +476,17 @@ The media fanout layer (`server/src/browser_host/media.rs`) delivers atomic bina
 
 - **Serialize Once:** Complete immutable BHJF frame (16-byte prefix + target frame header + JPEG payload) is serialized once per publication.
 - **Zero App-Level Copies:** Broadcasts identical contiguous `Bytes` clones through Axum 0.8.8 / tungstenite 0.28.0 WebSocket `AxumWsMessage::Binary(Bytes)`. Viewers share the underlying memory buffer.
+- **Decoupled Bounded Media Writer (`media_writer.rs`):** `spawn_media_writer` extracts an independent bounded writer task communicating via bounded slots (`WriterSlots`: at most 1 frame in-flight/slot, 1 audio slot, 1 control slot) and 5s `WRITE_DEADLINE`. Decouples WebSocket writes from reader/control loops, allowing ACKs, discards, heartbeats, and auth cancellation to proceed during slow writes. Lifecycle events are emitted via bounded mpsc channel (`MEDIA_WRITER_EVENT_CAPACITY = 16`). Interrupted audio sends retire the physical WebSocket sink rather than risking corrupt multi-part state.
 
 ### Independent Per-Viewer Credit Governor
 
-- **Configurable Rate Ceiling:** Production `media_ws_handler` configures `ViewerCreditController::with_min_interval(subscription_epoch, min_delivery_interval)` from `budgets.frame_rate_fps` (`1..=30`, default `24 FPS` / $\approx 41.67\text{ ms}$), while `ViewerCreditController::new` retains legacy `MIN_DELIVERY_INTERVAL = 100ms` (10 FPS).
+- **Configurable Rate Ceiling & Runtime Pacing:** Production `media_ws_handler` configures `ViewerCreditController::with_min_interval(subscription_epoch, min_delivery_interval)` from `budgets.frame_rate_fps` (`1..=30`, default `24 FPS` / $\approx 41.67\text{ ms}$), acting as a hard ceiling. Delivery pacing adjusts dynamically per viewer via `set_min_delivery_interval(interval)`, while `send_suspended` halts sends during stalls. `ViewerCreditController::new` retains legacy `MIN_DELIVERY_INTERVAL = 100ms` (10 FPS).
 - **Credit Budget:** Maximum 2 outstanding frames (`MAX_OUTSTANDING_PER_VIEWER = 2`) + 1 latest pending frame (`MAX_PENDING_PER_VIEWER = 1`) per viewer.
 - **Outstanding Key:** Each delivery is tracked by `OutstandingKey(subscriptionEpoch, producerRun, viewportEpoch, frameSeq)`.
 - **Originating Socket Subscription Authority:** Incoming `frameAck` and `frameDiscarded` messages must match the connected socket's `subscriptionEpoch` (`control_sub == self.subscription_epoch`). Foreign, duplicate, future, or old-socket traffic cannot alter credit or clear replacement entries.
 - **Settled-Frame & 15 ms Pending Flush:** Releasing credit immediately flushes any buffered pending frame, and `run_media_session` ticks `flush_ticker` every `15ms` (`Duration::from_millis(15)`) to dispatch rate-governed pending frames promptly.
 - **Deadlines & Timeouts:** 30-second outstanding frame timeout (`OUTSTANDING_TIMEOUT = 30s`) and 5-second physical socket write deadline (`WRITE_DEADLINE = 5s`). Failed writes close the subscription, while buffer reservations survive until the last clone drops.
-- **Independent Audio Text Fanout:** `run_media_session` forwards `ProducerAudioChunk` as `BrowserAudioChunk` JSON text (`write_media_text`, 5s `WRITE_DEADLINE` raced against `cancel_token` and `doc_auth_rx.changed()`) without consuming video credits, skipping `!viewer_visible` or inadmissible `doc_epoch` chunks and dropping oldest on `RecvError::Lagged`.
+- **Independent Audio Text Fanout & Gate Generation:** `run_media_session` forwards `ProducerAudioChunk` as `BrowserAudioChunk` JSON text (`write_media_text`, 5s `WRITE_DEADLINE` raced against `cancel_token` and `doc_auth_rx.changed()`) without consuming video credits. Audio delivery is gated per viewer (`AudioGate`: `Allowed` vs `Suppressed(Muted | Hidden | Stalled | Constrained)`), bumping `audio_gen: u64` on every transition and calling `clear_audio()`. A write-time check (`audio_chunk_admissible`) requires active audio source, valid doc authority, matching `audio_gen`, and explicit allowance; suppressed states and unknown subscriptions fail closed.
 - **Per-Viewer Delivery Estimator (`viewer_delivery_estimator.rs`):** `ViewerCreditController` embeds `ViewerDeliveryEstimator` (`OBSERVATION_WINDOW = 1s`, `EWMA_ALPHA = 0.25`) classifying `SampleProvenance` (`Warming`, `Idle`, `ApplicationLimited`, `Busy`, `AckStarved`) with explicit `application_limited` and `ack_starved_pressure` flags. Tracks busy-window ACKed vs. congestion-discarded bytes (excluding `Hidden`/`Obsolete`/`OwnerChanged`), `min_service_baseline_ms` / `service_ewma_ms`, `oldest_outstanding_age_ms`, `pending_replacements`, `intentional_pacing_holds`, `broadcast_lagged_frames`, video/audio/control write bytes and durations (`record_frame_write`, `record_audio_write`, `record_control_write`), native capture vs. server receipt vs. local send timestamps, and `ClientTelemetryCorroboration`. Resets transient run samples on `producerRun` rotation and ignores mismatched-run or foreign-socket credit returns.
 
 ### Pause & Rebind Protocol
@@ -490,11 +494,59 @@ The media fanout layer (`server/src/browser_host/media.rs`) delivers atomic bina
 - **Demand Detachment:** Pausing detaches viewer demand and frees credit controller state.
 - **Fresh Socket Requirement:** Resuming requires a fresh media socket + new single-use capability ticket + new `subscriptionEpoch` and paired control connection. Old sockets cannot be retagged.
 
-### Viewer Capacity
+### Configured Viewer Capacity
 
-- **Global Ceiling:** Capped at 2 concurrent active streaming viewers globally (`MAX_GLOBAL_VIEWERS = 2`), guarded by RAII `ViewerPermit`. Admissions beyond capacity return HTTP 429 Too Many Requests (`kind: "browserBusy"`).
+- **Configured Global Ceiling:** Capped by effective configured viewer cap from `budgets.max_viewers` (clamped `1..=16`, default 2; `MAX_GLOBAL_VIEWERS = 2` fallback), guarded by RAII `ViewerPermit::try_acquire_with_cap(configured_max_viewers)` and `try_acquire_in`. Admissions beyond capacity return HTTP 429 Too Many Requests (`kind: "browserBusy"`).
 
-## 17. Memory Admission Controller & Stream Diagnostics (`diagnostics.rs`)
+## 17. Adaptive Capture Tiers & Stream Control (`capture_tier.rs`, `adaptive_stream_controller.rs`)
+
+The adaptive capture system coordinates shared video fidelity (resolution and JPEG quality) across viewers while independently governing per-viewer frame pacing and audio delivery.
+
+### 9-Stage Degradation Ladder & Calibration Targets
+
+A 9-stage ladder degrades FPS first, then JPEG quality, then resolution scale. Recovery occurs in exact reverse order (scale -> quality -> FPS), adjusting one knob per step:
+
+| Stage | Tier Anchor | FPS | JPEG Quality | Scale (permille) | Degradation Step |
+| --- | --- | --- | --- | --- | --- |
+| 0 | **High** | 20 | 80 | 1000 (1.0x) | Baseline high fidelity |
+| 1 | | 10 | 80 | 1000 (1.0x) | Lower FPS (20 -> 10) |
+| 2 | **Medium** | 10 | 65 | 1000 (1.0x) | Lower JPEG quality (80 -> 65) |
+| 3 | | 6 | 65 | 1000 (1.0x) | Lower FPS (10 -> 6) |
+| 4 | | 6 | 60 | 1000 (1.0x) | Lower JPEG quality (65 -> 60) |
+| 5 | **Low** | 6 | 60 | 750 (0.75x) | Downscale resolution (1.0x -> 0.75x) |
+| 6 | | 2 | 60 | 750 (0.75x) | Lower FPS (6 -> 2) |
+| 7 | | 2 | 55 | 750 (0.75x) | Lower JPEG quality (60 -> 55) |
+| 8 | **Constrained** | 2 | 55 | 500 (0.50x) | Downscale resolution (0.75x -> 0.50x) |
+
+*Calibration Target Notice:* All stage parameters and controller thresholds are untuned calibration targets, not measured network classes or empirical constants. Live Chromium downscale verification is not yet performed.
+
+- **Admin Ceilings (`CaptureCeilings`):** Configured `budgets.frame_rate_fps`, `budgets.jpeg_quality`, `budgets.max_width`, and `budgets.max_height` act as hard upper bounds; ladder rungs and proposals are clamped against them, merging adjacent no-op rungs.
+- **Warm-Start Behavior Change:** Auto mode warm-starts at **Medium** (stage 2: 10 FPS, JPEG quality 65, scale 1.0) clamped to admin ceilings, replacing the previous static 24 FPS / JPEG 75 startup until upward probes succeed.
+
+### Viewer Eligibility, Consensus Voting & Pacing
+
+- **Viewer Eligibility:** A viewer votes on shared capture fidelity only when: `visible == true`, report is unexpired (`REPORT_EXPIRY = 15s`), delivery is not stalled, and warm-up has passed (`healthy >= WARMUP_WINDOWS = 2`). Newcomers join in warm-up (no vote) if an established eligible viewer already exists; otherwise, the first viewer votes immediately.
+- **Slowest Eligible Consensus:** The slowest eligible viewer (highest stage index) dictates shared quality and resolution (`fidelity_stage`). Shared fidelity shifts at most one knob per dwell interval (`CAPTURE_DWELL = 5s`) toward the slowest vote.
+- **Shared Fidelity vs. Per-Viewer Pacing:** Resolution and JPEG quality are shared globally at the producer, but each viewer's delivery FPS interval (`min_delivery_interval`) is governed independently by its own stage. The native producer cadence runs at `max(slowest_eligible_fidelity_stage.fps, max_eligible_viewer.fps)`.
+- **Manual Preference:** `QualityPreference` (`Auto`, `High`, `Medium`, `Low`) acts as a requested fidelity floor; it never overrides congestion downshifts or admin ceilings.
+
+### Pressure Detection, Recovery & Stall Handling
+
+- **Congestion Pressure:** Triggered when ACK service EWMA exceeds baseline by $\max(100\text{ ms}, 0.5 \times \text{baseline})$ with pending backlog (`oldest_age_ms > service_ewma_ms - decode_ms`), or when ACK starvation occurs (`ack_starved == true`, no ACK beyond $2 \times \text{baseline} + 500\text{ ms} + \text{decode}$). Requires 2 pressured windows (`PRESSURE_WINDOWS = 2`) to downshift.
+- **Decoder Overload:** Elevated client decode time (`decode_ms_ewma`) applies an independent pacing cap down to the ladder floor, restoring when healthy without degrading shared fidelity. Idle or application-limited samples freeze inference.
+- **Hysteresis & Recovery:** Upward probing requires 10 healthy windows (`BASE_RECOVERY_WINDOWS`), elapsed 5s dwell, and $\ge 25\%$ delivered bandwidth headroom (`HEADROOM = 1.25`). Failed probes double the recovery requirement up to 60 windows (`MAX_RECOVERY_WINDOWS`).
+- **Stall Suspension:** Viewers lagging beyond $\text{clamp}(4 \times \text{baseline}, 5\text{s}, 15\text{s})$ are marked stalled: sends are suspended (`send_suspended = true`), their vote is excluded from shared consensus, and recovery requires a 2-window warm-up.
+
+### Capture Tier Switching, Lifecycle & Downscale Oracle
+
+- **Stop-Before-Start Switch Under State Lock:** `apply_capture_snapshot` executes `stop -> fresh-run start` under `self.state.write()`. A failed stop leaves the active run untouched. A failed start attempts a single revert to last proven effective parameters (`revert_to_effective()`); secondary failure retires the producer fail-closed. Retries enforce a 15-second backoff (`switch_backoff_until`), and heartbeat checks reapply unapplied snapshots.
+- **ProducerRun Rotation vs. Invariant Geometry:** Video `producerRun` rotates on every native capture restart, but CSS viewport dimensions, device pixel ratio (DPR), and `viewportEpoch` remain completely invariant. The cached frame is cleared on restart.
+- **Effective vs. Desired Snapshot:** `capture_snapshot()` returns the desired snapshot; `effective_capture()` returns the snapshot proven by a native frame from the current run combined with governor-applied FPS.
+- **Decoupled Audio Identity & Per-Viewer Gates:** Audio source identity (`AudioSource`: `run`, `cancel`) is decoupled from video `producerRun`. The audio drain task survives video capture restarts and tears down only on real session stop or retirement. Audio delivery is gated per viewer (`AudioGate`: `Allowed` vs `Suppressed(Muted | Hidden | Stalled | Constrained)`). Each state transition increments `audio_gen: u64`. Write-time checks (`audio_chunk_admissible`) enforce doc authority, active audio source, matching generation, and explicit allowance; unknown subscriptions fail closed.
+- **Zero-Demand Re-Verification:** When visible demand reaches zero, `stop_screencast` re-verifies demand under the lifecycle write lock before initiating teardown.
+- **Downscaled Input Trust & Qualification Oracle:** Scaled frames (`scale < 1.0`, Low 0.75x and Constrained 0.5x) are marked `input_trusted = false` with CSS dimensions pinned to authoritative geometry until the live-Chromium downscale oracle (`evaluate_downscale_oracle`, checking DOM `innerWidth`/`innerHeight`/`dpr`, metadata CSS dims, JPEG SOF dims, and click marker consistency) qualifies the scale. Live Chromium downscale oracle verification is not performed in Phase 03; scaled frames remain input-untrusted until Phase 05.
+
+## 18. Memory Admission Controller & Stream Diagnostics (`diagnostics.rs`)
 
 The memory admission controller (`server/src/browser_host/diagnostics.rs`) enforces strict bounds across all browser payload buffers:
 
@@ -513,7 +565,7 @@ The memory admission controller (`server/src/browser_host/diagnostics.rs`) enfor
 - **Operational Counters & Timestamp Separation:** Reports bounded-label atomic counters (`events_received`, `events_admitted`, `events_dropped`, `acks_enqueued`, `acks_failed`, `base64_decoded_bytes`, `jpeg_bytes_total`, `delivered_frames`, `acks_received`, `discards_received`, `timeouts_occurred`, `reservations_denied`, `native_capture_timestamps_valid`, `native_capture_timestamps_unavailable`, `last_native_capture_unix_ms`, `last_server_receipt_unix_ms`, `last_local_send_unix_ms`, `broadcast_lagged_frames`) distinguishing native capture from viewer delivery.
 - **Owner-Scoped Viewer Snapshot Registry & Qualification Ring:** `TrackedBhjfFrame` retains `server_received_unix_ms` and `received_at`; `StreamDiagnostics` maintains a bounded registry (`MAX_ADMITTED_VIEWER_SNAPSHOTS = 16`, `register_viewer_snapshot_for_owner`, `update_viewer_snapshot`, `remove_viewer_snapshot`, `viewer_snapshot_for_owner`), pending control-write accounting (`record_control_write`), and a 256-entry qualification ring (`MAX_QUALIFICATION_EVENTS = 256`).
 
-## 18. Streaming WebSocket Transports (`/api/browser/media` and `/api/browser/control`)
+## 19. Streaming WebSocket Transports (`/api/browser/media` and `/api/browser/control`)
 
 The streaming interface exposes two paired WebSocket routes:
 
@@ -525,7 +577,7 @@ The streaming interface exposes two paired WebSocket routes:
 - **Socket Pairing:** Paired via `AttachmentManager` requiring identical `viewerId` and `subscriptionEpoch` with a 15-second wait timeout.
 - **Continuous Auth Supervisor:** Active sockets share a `CancellationToken` wired to the 5s live auth check; revocation aborts both connections immediately without waiting for stalled media writes.
 
-## 19. Viewer Client Decoder & Android-Web Input Subsystem
+## 20. Viewer Client Decoder & Android-Web Input Subsystem
 
 The frontend client modules (`packages/ui/src/browser-host/`, `packages/ui/src/api/`, `packages/ui/src/os/`) implement the viewer-facing decode pipeline, tab-scoped resource continuity, native tab chrome UI, and user input dispatch over canonical `BrowserWindowState`:
 
@@ -545,11 +597,11 @@ The frontend client modules (`packages/ui/src/browser-host/`, `packages/ui/src/a
 
 ### Bounded Canvas Stream Controller (`stream-controller.ts`, `canvas-view.tsx`)
 
-- **1-Active + 1-Pending Decode Governor:** Canvas controller maintains at most one in-flight `createImageBitmap` decode and one pending compressed frame. Intermediate frames arriving during an active decode replace the pending slot and emit an immediate `frameDiscarded` (reason `replaced`) for the overwritten frame.
+- **1-Active + 1-Pending Decode Governor & Truthful Rendering:** Canvas controller maintains at most one in-flight `createImageBitmap` decode and one pending compressed frame. Intermediate frames arriving during an active decode replace the pending slot and emit an immediate `frameDiscarded` (reason `replaced`) for the overwritten frame. Missing `createImageBitmap` sets `"unsupported"` status, clears `lastDrawnRect`/`lastFrameHeader`, sends `frameDiscarded` (`decodeFailed`), and never ACKs. Thrown exceptions during decode or canvas draw set `"error"` status, clear hit geometry, and emit `frameDiscarded` (`decodeFailed`). Credit ACKs and trusted hit rects emit strictly after `drawBitmapToCanvas` succeeds.
 - **Captured Originating Socket & Subscription:** ACKs and discards are transmitted strictly over the captured originating media WebSocket with the frame's admission subscription epoch. If the socket closes, no replacement traffic is sent over subsequent connections.
 - **Synchronous Privacy Blackening:** Triggering privacy mode (`setPrivacyMode(true)`) synchronously clears and blacks the canvas, advances the decode epoch to invalidate in-flight decode completions, cancels queued frames, and closes active media and control WebSockets.
-- **Visibility & Detachment Lifecycle:** Hiding the viewer (`setVisibility(false)`) pauses stream delivery, detaches demand, and closes both WebSockets. Resuming requires fresh capability tickets, a new subscription epoch, and paired WebSocket handshakes.
-- **ImageBitmap Cleanup:** Guarantees `ImageBitmap.close()` execution across normal render, exceptional draw, and disposal paths.
+- **Visibility & Document Demand Lifecycle (`visibility-demand.ts`):** Stream demand requires `isDocumentVisible()` (`document.visibilityState === "visible"`). Window `blur` is explicitly ignored as demand loss. Hiding the viewer (`setVisibility(false)`) or backgrounding the document pauses stream delivery, detaches demand, and closes both WebSockets. Resuming requires fresh capability tickets, a new subscription epoch, and paired WebSocket handshakes.
+- **ImageBitmap Cleanup & 1x1 Parked Canvas:** Guarantees `ImageBitmap.close()` execution across normal render, exceptional draw, and disposal paths. Inactive/parked tab stream canvases shrink to 1x1 pixels (`canvas.width = 1`, `canvas.height = 1`) in `BrowserStreamKeepAliveHost` / `canvas-view.tsx` to eliminate background compositor/GPU memory, restoring layout dimensions upon reveal. Single-flight selection polling in `useHostBrowserSelection` aborts in-flight requests on visibility loss.
 - **Bounded Client Telemetry (`stream-controller.ts`, `browser-host-types.ts`):** Measures monotonic `performance.now()` decode+draw duration (`decodeMs`, `0.25` EWMA `decodeMsEwma`), counts same-run/same-epoch congestion replacements (`windowReplacedFrames`, excluding `obsolete`/retired runs via `retiredProducerRuns`), fences old-run decode/pending completions, validates serialized controls within `1024` bytes via `serializeMediaClientControl`/`isValidMediaClientControl`, and attaches `heartbeat.telemetry` on the existing 5s heartbeat without per-frame React state updates.
 
 ### WebAudio `PcmPlayer` & Root Audio Ownership (`pcm-player.ts`, `stream-controller.ts`, `BrowserStreamKeepAliveHost.tsx`, `BrowserApp.tsx`)
@@ -588,7 +640,7 @@ The frontend client modules (`packages/ui/src/browser-host/`, `packages/ui/src/a
 - **Root Lifecycle Ownership & 600s Unknown Reconciliation Boundary:** A single root-owned lifecycle service tracks create/close promises by `(scope, windowId, tabId, operationId)`, minting `creationKey` + immutable validated URL/viewport once and persisting pending markers under `dam-hopper:browser:v1:recovery-lock` before network dispatch (never holding Web Locks over network I/O). Repeated `Enter`/StrictMode remounts/selection cannot duplicate dispatch; `429/browserBusy` preserves placeholder URL for explicit retry and separates target vs. viewer admission (no guessed `targetCapacityReached` kind or fake occupancy counter). Late exact create results adopt only if intended tab and scope remain current; otherwise queue reference-checked cleanup (withheld on owner change until original scope re-verifies). Because backend `SessionRegistry` creation keys expire after `IDEMPOTENCY_TTL = 600s` (`server/src/browser_host/session.rs`) and list/GET DTOs do not expose `creationKey`, timeouts, aborted transports, reloads, or `502/nativeCloseUnconfirmed` persist durably as `create-unknown` or `close-unknown`. Clients NEVER replay unknown `POST`s, infer matches via URL/title/delta, or clear uncertainty from an empty inventory response. Durable unknown markers block automatic restore of **only their affected saved group**, surfacing `Check close status / Retry close`, manual owner-qualified session inventory with explicit selected-ID attach/reveal or close, and an explicit duplicate-risk acknowledgment (`"previous page may still exist; fresh pages can duplicate it"`) permitting fresh explicit intents while retaining the unresolved notice.
 - **Popup Lifecycle & Ordinary URL Privacy / Clear Suppression:** Popups keep lifetime provenance (`parentSessionId` verified against opener, scope, `browserIncarnation`, and `profileEpoch` across the native-key closing gate; redirect never downgrades to ordinary). Inserted adjacent once per `popupAdmissionId` and auto-selected once ONLY if opener remains active in that same focused Browser window at admission completion (no background focus steal). On popup close/`lost`/`404`, removes child and returns to surviving opener ONLY while popup remains active in that same focused window (background windows pick nearest fallback internally without focusing OS window or DOM; missing opener falls back to nearest ordinary tab or blank tab). Hidden popups hold zero sockets and reconcile lazily on activation or one single-flight GET when a visible opener snapshot changes `activePopupSessionId` (zero recurring polling); close never cascades across distinct referenced targets, and capacity notices explain popups share the unchanged `max_targets` budget (default 2) with zero automatic eviction. Ordinary committed HTTP(S) URLs retain full normalized `URL.href` (query and hash intact) as plaintext local/export metadata (omitting userinfo and non-HTTP(S) schemes while preserving local `sessionId` hint; unredacted same-tab OAuth query tokens are disclosed explicitly); **all** popup URLs are excluded everywhere. **Clear remembered pages** holds `dam-hopper:browser:v1:recovery-lock`, writes owner suppression first, rereads OS bytes to strip saved addresses/groups while preserving session hints and unknown operation markers, and clarifies it neither closes live pages nor resets Chromium profiles/cookies.
 
-## 20. Selection Artifacts, Actor Binding & Revoke-First Logout Reset (Phase 08)
+## 21. Selection Artifacts, Actor Binding & Revoke-First Logout Reset (Phase 08)
 
 Phase 08 integrates secure CDP DOM selection, actor-bound artifact authorization, revoke-first logout ordering, and confirmed profile reset UX:
 
@@ -596,7 +648,7 @@ Phase 08 integrates secure CDP DOM selection, actor-bound artifact authorization
 - **CDP Selection Preview & Atomic Terminal Delivery (`selection.rs`, `cdp.rs`, `selection-controller.ts`, `BrowserApp.tsx`):** `Overlay` inspect mode (`Overlay.setInspectMode`) and one-shot `inspectPoint` (`DOM.getNodeForLocation` + allowlisted `Runtime.callFunctionOn`) sanitize DOM metadata into `BrowserSelectionV1` (omitting form values, passwords, raw HTML, and control bytes) with optional cropped CDP PNG capture (`<= 4 MiB` at `1.0x`/`0.5x` scale). A session-lifetime background navigation watcher subscribes to projected `CdpLifecycleEvent` records (`MAX_LIFECYCLE_EVENT_SLOTS = 8`, bounded via `MemoryAdmissionController`) to invalidate selections/pending artifacts on main-frame or same-document navigation. Atomic handoff holds `acquire_managed_selection_fence` and executes `pty_manager.write_if_incarnation` with server-generated reference paths only (`[DamHopper browser-debug artifact ...]`); UI `useHostBrowserSelection` enforces 409 `navigationRevision` sync recovery and preserves Cooperative extension/bridge flows (`use-browser-debug.ts`, `browser-bridge`).
 - **Revoke-First Logout & Truthful Outcome UX (`api/auth.rs`, `AccountLogoutDialog.tsx`, `ServerProfilesDialog.tsx`, `ServerSettingsDialog.tsx`, `BrowserStreamKeepAliveHost.tsx`):** `POST /api/auth/logout` captures pre-revocation live Admin admission, then **always executes session revocation, media-ticket revocation, Browser attachment/lease teardown (`revoke_auth_session_browser_resources`), and cookie clearing FIRST**, returning HTTP 200 `{ browserResetState: "retained", resetRequired: true }` for legacy/missing/stale-confirmation callers. The response sets `sessionRevoked: true` only when the request's own credential was identified and revoked (accompanied by explicit `sessionIdentified: bool`); client-side auth clients never treat `sessionRevoked: true` as confirmation for an unsent Bearer token. Destructive reset additionally requires CSRF/Origin (`validate_destructive_browser_csrf`), `confirmed: true`, `expectedProfileEpoch`, `operationId`, and lock-guarded Admin recheck; if private artifact file purge remains incomplete, the outcome reports `browserResetState: "cleanupPending"`.
 
-## 21. Qualification Status & Open Proof Obligations
+## 22. Qualification Status & Open Proof Obligations
 
 Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) against real Google Chrome 157.0.8103.38:
 
@@ -615,8 +667,8 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Single-Use Capability Tickets | **PASS** | 256-bit OsRng, SHA-256 memory store, 30s TTL, single-use atomic consume, pair matching |
 | Leased Input Queue & Releases | **PASS** | 30s lease, 128-record queue, contiguous inputSeq, stuck key auto-release, aspect-fit mapping |
 | Agent CDP Gateway & Relay | **PASS** | Authenticated discovery URL rewriting, dedicated upstream relay, 4 MiB frame/message cap, 5s write timeout, exact Origin policy, dynamic connection budget (`budgets.max_raw_cdp_connections`, cap 8), manager target tracking (64 targets), viewport epoch fencing with stale input Conflict (409), live auth cancellation racing with socket writes and absolute deadline, and fast socket drop on revocation. Verified by 14 Rust gateway tests and 8 Playwright E2E tests in `agent.spec.ts` against production gateway mode. User approved after Cycle 3 (score 7/10; 57/57 tests passing). |
-| Screencast Producer & Ingress | **PASS** | Dedicated Page session, serial `producerRun`, prompt exact-once CDP ACK, single replaceable candidate, JPEG SOF dimension validation, `with_capture_policy` (24 FPS/JPEG 75 default, `100ms`/65 legacy preserved), zero periodic screenshots, and 15s visible demand stop |
-| Binary Media Fanout & Credits | **PASS** | Immutable BHJF v1 fanout via Axum `Binary(Bytes)` with zero per-viewer JPEG copies, `ViewerCreditController::with_min_interval` (24 FPS default, `100ms` legacy preserved), `15ms` pending flush, 2 outstanding + 1 pending, originating socket authority, 5s write deadline, and max 2 global viewers |
+| Screencast Producer & Ingress | **PASS** | Dedicated Page session, serial `producerRun`, prompt exact-once CDP ACK, single replaceable candidate, JPEG SOF dimension validation, `CaptureTierState` ladder switch under state lock with revert-to-effective, zero periodic screenshots, and 15s visible demand stop with lock recheck |
+| Binary Media Fanout & Credits | **PASS** | Immutable BHJF v1 fanout via Axum `Binary(Bytes)` with zero per-viewer JPEG copies, runtime `set_min_delivery_interval` pacing, `send_suspended` stall handling, write-time audio gate check with generation bump, 15ms pending flush, 2 outstanding + 1 pending, 5s write deadline, max 2 global viewers |
 | Video/Audio Streaming & Media Stealth (Cycle 13) | **AUTOMATED PASS / LIVE PENDING** | 40 Rust tests (`browser_host_{process,media,screencast}`), config & `AudioDocAuthority` (`C12-H2`/`C12-H6`) unit tests, 89 UI Vitest tests (`pcm-player`, `stream-controller`, `BrowserStreamKeepAliveHost`, `BrowserApp`), clean `@dam-hopper/ui build`, `pcm-player.ts` 199 LOC; Code Review 9/10 APPROVED WITH NOTES. Real output-browser live audible/privacy/two-viewer/FPS/latency qualification pending |
 | Stream Memory Admission | **PASS** | Hard 128 MiB global memory reservation ceiling across ingress, commands, raw gateway, BHJF frames, and audio chunks; `TrackedBhjfFrame` shared RAII reservation held until last clone drops; bounded stream diagnostics counters and ring buffer |
 | Viewer Client Decoder & Input | **PASS** | 1-active + 1-pending frame decode governor, captured subscription credit ACKs, `PcmPlayer` 24 kHz scheduling + sync flush, letterbox coordinate mapping, and IME deduplication. Verified by unit tests, Chromium browser tests, and UI builds (Phase 06 review 4/10 carryovers remediated in Phases 07–09 and Cycle 13) |
@@ -627,6 +679,8 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unimplemented; non-Unix launch returns `ContainmentUnavailable`. Retained fail-closed; no qualification claimed |
 
 ### Phase Verification & Open Release Gates
+- **Adaptive Stream Quality Phase 03 (2026-11-12):** Server adaptive capture tiers: 9-stage ladder clamped to admin ceilings, shared `Arc<CaptureTierState>` and deterministic-clock `AdaptiveStreamController` (1s windows), Auto warm-start at Medium (10fps/q65), stop->start tier switch under write lock with single revert to effective params and 15s backoff, video `producerRun` rotation with invariant CSS/DPR/viewportEpoch, decoupled `AudioSource` surviving video restarts, per-viewer audio gates (`Muted`/`Hidden`/`Stalled`/`Constrained`) with generation bumping and write-time admissibility, slowest-eligible viewer voting with 5s dwell, stall suspension `clamp(4x baseline, 5s, 15s)`, and downscale input-trust oracle (all scaled frames input-untrusted pending Phase 05 live-Chromium run). Verified by 95/95 lib unit tests, 128 integration tests across screencast/media/bounds/admission/input/etc.; Cycle 3 approved 7/10 with noted issues.
+- **Adaptive Stream Quality Phase 02 (2026-11-12):** Hot-path performance and client pacing: validated-frame metadata reuse (`ValidatedJpegDims`), decoupled media writer (`media_writer.rs`, 1 frame/slot, 1 audio, 1 control, cap 16), governor Skip ticks (`create_governor_interval`), viewport no-op bypass + coalescer (1 active / 1 pending, 100ms spacing, atomic take-or-retire, rollback), configured viewer permit cap (`budgets.max_viewers`), truthful client rendering, document-visibility demand gating (`visibility-demand.ts`), 1x1 parked canvas, input pacing budgets (<=40/s replaceable, <=80/s normal, <=100/s releases, code 1008 fail-closed), and secure-or-loopback transport guard. Verified by 63 server integration tests (3 runs), 65 lib tests, 138 UI Vitest tests, clean `tsc`. User approved after Cycle 3 (score 7/10, 0 critical). Tracked known limitations from review: H1a screencast resize fence not atomic with publication and input not fenced during resize; H1b first CDP timeout treated as unchanged native state; H3 media writer reservation released before shared WebSocket physically retired; H2 shutdown/failure paths dropping pending lifecycle accounting; test gaps under concurrent publication/resize, saturated accounting across cancel/failure, and real WS reader/writer blocked sink; diagnostics.rs 128 MiB ceiling ignoring configured memory_ceiling_bytes.
 
 - **Completed Automated Gates (Phases 04–09 & Cycle 13):** Phase 04 (57/57, score 7/10), Phase 05 (70/70, score 4/10), Phase 06 (70/70, score 4/10), Phase 07 (208/208, score 4/10), Phase 08 (237/237, score 7/10), Phase 09 (54/54 across 5 gates, score 4/10), and Browser Video/Audio Streaming Cycle 13 (42 Rust + 89 UI tests, clean UI build, Code Review 9/10 APPROVED WITH NOTES).
 - **Adaptive Stream Quality Phase 01 (2026-11-12):** Implemented per-viewer delivery estimation (`viewer_delivery_estimator.rs`), native capture vs. server receipt timestamp separation, owner-scoped snapshot diagnostics, and bounded `frameAck.decodeMs` / `heartbeat.telemetry` feedback (Cycle 3 reviewed 8/10, 0 critical; HTTP diagnostics export & Phase 02 reader separation follow-ups pending).
@@ -654,7 +708,7 @@ Phase 01 remediates backend authority, lifecycle truth, durable reset recovery, 
 - **Browser Tabs Acceptance & Visual Governance (`A01–A15`):** Phases 01–04 passed `@dam-hopper/ui` build, `@dam-hopper/web` bundle, full UI unit suite (396/396 files, 3,877/3,877 passed), and Phase 04 Cycle 3 code review (8/10 approved). Phase 05 implemented and verified targeted browser qualification fixtures, component regressions (10/10 files, 66/66 passed across `browser-native-tabs.browser.tsx` and migrated fixtures), unit regressions (19/19 files, 207/207 passed), and authored E2E session journeys (`tabs-session.spec.ts`, `tabs-recovery.spec.ts`, `tabs-visual.spec.ts`), with Gate 2 documentation reconciled. Live full-app visual acceptance and human decision receipt (`review.md` `ACCEPTED`) remain the final pending gate alongside existing release gates (real output-browser listening, physical Android IME, Windows host runner).
 - **Pre-Code Visual Acceptance Gate (`packages/ui/e2e/os-host-browser/tabs-visual/`):** Future full-viewport captures use `capture-evidence.ts` in one evidence session emitting colocated checkpoint PNGs, `evidence.json`, and `review.md` (optional attachment duplicates do not replace colocated files or act as golden baselines). Automation initializes/resets `review.md` to `PENDING_HUMAN_REVIEW` only. Visual qualification strictly requires an independent **actual-human** `ACCEPTED` receipt in `review.md` recording operator identity, timestamp, matching source fingerprint / Git HEAD / run ID, every inspected image SHA-256 digest, and visual notes; automated assertions, captures, or agent image inspections are separate evidence and cannot synthesize or bypass `ACCEPTED`.
 
-## 22. Source Map
+## 23. Source Map
 
 | Responsibility | Path |
 | --- | --- |
@@ -676,76 +730,29 @@ Phase 01 remediates backend authority, lifecycle truth, durable reset recovery, 
 | Media Stealth & Audio Capture Bridge | `server/src/browser_host/stealth.rs` |
 | Screencast Producer Actor | `server/src/browser_host/screencast.rs` |
 | Binary Media Fanout & Transports | `server/src/browser_host/media.rs` |
+| Decoupled Bounded Media Writer | `server/src/browser_host/media_writer.rs` |
+| Adaptive Capture Tier Ladder & Snapshots | `server/src/browser_host/capture_tier.rs` |
+| Adaptive Stream Decision Controller | `server/src/browser_host/adaptive_stream_controller.rs` |
 | Per-Viewer Delivery Estimator | `server/src/browser_host/viewer_delivery_estimator.rs` |
 | Stream Diagnostics & Memory Admission | `server/src/browser_host/diagnostics.rs` |
 | Managed Selection & Nav Watcher | `server/src/browser_host/selection.rs` |
 | Actor-Bound Debug Artifact Store | `server/src/browser_debug/{mod,store,error}.rs`, `server/src/api/browser_debug.rs` |
 | Revoke-First Logout & Cleanup Wiring | `server/src/api/auth.rs`, `server/src/api/router.rs`, `server/src/state.rs` |
 | Qualification Example Harness | `server/examples/browser_host_qualification.rs` |
-| Adapter & Protocol Test Suite | `server/tests/browser_host_adapter.rs` |
-| Process Containment Test Suite | `server/tests/browser_host_process.rs` |
-| Real-Engine Compatibility Test Suite | `server/tests/browser_host_compatibility.rs` |
-| Profile Lifecycle & Reset Test Suite | `server/tests/browser_host_lifecycle.rs` |
-| Graceful Shutdown Test Suite | `server/tests/browser_host_shutdown.rs` |
-| Admission & REST Test Suite | `server/tests/browser_host_admission.rs` |
-| Capability Ticket & Live Auth Test Suite | `server/tests/browser_host_auth.rs` |
-| Leased Input Queue Test Suite | `server/tests/browser_host_input.rs` |
-| Agent CDP Gateway Test Suite | `server/tests/browser_host_gateway.rs` |
-| Native Screencast Test Suite | `server/tests/browser_host_screencast.rs` |
-| Media Fanout & Credit Test Suite | `server/tests/browser_host_media.rs` |
-| Bounds Admission Test Suite | `server/tests/browser_host_bounds.rs` |
-| Actor-Bound Artifacts Test Suite | `server/tests/browser_debug_artifacts.rs` |
-| Managed Selection Test Suite | `server/tests/browser_host_selection.rs` |
-| Revoke-First Logout & Reset Suite | `server/tests/browser_host_logout.rs` |
-| Device Session & Cleanup Suite | `server/tests/auth_device_sessions.rs` |
-| E2E Qualification Harness Fixture | `packages/ui/e2e/fixtures/browser-host-qualification.ts` |
-| Playwright Compatibility Spec | `packages/ui/e2e/os-host-browser/compatibility.spec.ts` |
-| Agent CDP Qualification Spec | `packages/ui/e2e/os-host-browser/agent.spec.ts` |
-| Browser Host REST & Ticket Client | `packages/ui/src/api/browser-host-client.ts` |
-| Browser Host Client & Wire Types | `packages/ui/src/api/browser-host-types.ts` |
+| Server Integration Test Suites | `server/tests/browser_host_{adapter,process,compatibility,lifecycle,shutdown,admission,auth,input,gateway,screencast,media,bounds,selection,logout,security,platform}.rs`, `server/tests/{auth_device_sessions,browser_debug_artifacts}.rs` |
+| Browser Host REST & Ticket Client | `packages/ui/src/api/browser-host-{client,types}.ts` |
 | Binary BHJF Frame Codec & Parser | `packages/ui/src/browser-host/frame-protocol.ts` |
-| Bounded Canvas Stream Controller | `packages/ui/src/browser-host/stream-controller.ts` |
+| Bounded Canvas Stream Controller | `packages/ui/src/browser-host/stream-controller.ts`, `canvas-view.tsx`, `visibility-demand.ts` |
 | WebAudio Gapless PCM Player | `packages/ui/src/browser-host/pcm-player.ts` |
-| Bounded Canvas View Component | `packages/ui/src/browser-host/canvas-view.tsx` |
-| Virtual Input Controller | `packages/ui/src/browser-host/input-controller.ts` |
-| Soft-Keyboard & IME Text Proxy | `packages/ui/src/browser-host/text-input-proxy.tsx` |
-| Browser Host Client & Protocol Tests | `packages/ui/src/api/browser-host-client.test.ts`, `packages/ui/src/browser-host/frame-protocol.test.ts` |
-| Stream, Audio & Input Controller Tests | `packages/ui/src/browser-host/{stream-controller,pcm-player,input-controller}.test.ts` |
-| Chromium Decoder & Input Browser Tests | `packages/ui/browser-tests/host-browser-{decoder,input}.browser.tsx` |
+| Virtual Input Controller & IME Proxy | `packages/ui/src/browser-host/{input-controller,text-input-proxy}.ts` |
 | Root Browser Keep-Alive Host & App | `packages/ui/src/os/BrowserStreamKeepAliveHost.tsx`, `packages/ui/src/os/apps/BrowserApp.tsx` |
-| Keep-Alive & BrowserApp Unit/Browser Tests | `packages/ui/src/os/BrowserStreamKeepAliveHost.test.tsx`, `packages/ui/src/os/apps/BrowserApp.test.tsx`, `packages/ui/browser-tests/host-browser-lifecycle.browser.tsx` |
-| Verified Browser Connection Identity (Phase 01) | `packages/ui/src/api/connections.ts`, `packages/ui/src/api/connections.test.ts` |
-| Browser Tab Types, Owner Scope & Pure State (Phase 01) | `packages/ui/src/os/browser/{browser-tab-types,browser-owner-scope,browser-tab-state}.ts` |
-| Browser Owner Scope & Tab State Tests (Phase 01) | `packages/ui/src/os/browser/{browser-owner-scope,browser-tab-state}.test.ts` |
-| Browser Canonical Persistence & Projections (Phase 02) | `packages/ui/src/os/browser/{browser-persistence,browser-group-projection,browser-url-normalization}.ts` |
-| Browser Web Locks Recovery Store & Validation (Phase 02) | `packages/ui/src/os/browser/{browser-recovery-store,browser-recovery-validation}.ts` |
-| Browser Target Lifecycle & Closing Gates (Phase 02) | `packages/ui/src/os/browser/{browser-create-lifecycle,browser-close-lifecycle,browser-admission-guard,browser-closing-gates}.ts` |
-| Native Reference Census & Close Coordinator (Phase 02) | `packages/ui/src/os/browser/{browser-native-reference-census,browser-session-inventory,browser-window-close-coordinator}.ts` |
-| Browser Phase 02 Unit & Lifecycle Tests | `packages/ui/src/os/browser/{browser-persistence,browser-recovery-store,browser-create-lifecycle,browser-close-lifecycle,browser-session-inventory,browser-window-lifecycle}.test.ts` |
-| Browser Popup Tab Admission & Lifecycle (Phase 03) | `packages/ui/src/os/browser/browser-popup-tabs.ts` |
-| Browser Popup Tab Lifecycle Tests (Phase 03) | `packages/ui/src/os/browser/browser-popup-tabs.test.ts` |
-| Browser Session Sync & Dialog Preservation (Phase 03) | `packages/ui/src/os/browser-session-sync.ts`, `packages/ui/src/os/browser-session-sync.test.ts` |
-| Browser Native Tab Chrome Components (Phase 04) | `packages/ui/src/os/browser/{browser-tab-strip,browser-address-bar,browser-new-tab-page,browser-tools,browser-recovery-panel}.tsx` |
-| Browser Navigation CAS & Control Gate (Phase 04) | `packages/ui/src/os/browser/{browser-navigation.ts,browser-navigation.test.ts,browser-control-gate.ts}` |
-| Browser Chrome Responsive Styling (Phase 04) | `packages/ui/src/os/os.css` |
-| Browser Launch, Deep-Link & Recipe Cutover (Phase 04) | `packages/ui/src/os/{action-executor,OsShell,deep-links}.{ts,tsx}`, `packages/ui/src/os/recipes/{schema,recipe-engine}.ts` |
-| Browser Phase 04 Launch & Recipe Tests | `packages/ui/src/os/{action-executor,deep-links}.test.ts`, `packages/ui/src/os/recipes/{schema,recipe-engine}.test.ts` |
-| Browser Native Tabs Component Tests (Phase 05) | `packages/ui/browser-tests/browser-native-tabs.browser.tsx` |
-| Browser Session & Recovery E2E Specs (Phase 05) | `packages/ui/e2e/os-host-browser/{tabs-session,tabs-recovery,tabs-visual}.spec.ts` |
-| Playwright Selection E2E Spec | `packages/ui/e2e/os-host-browser/selection.spec.ts` |
-| Selection Preview & Handoff Controller | `packages/ui/src/browser-host/selection-controller.ts` |
-| Unified Cancel-First Logout Dialog | `packages/ui/src/components/organisms/AccountLogoutDialog.tsx` |
-| Profile Management & Settings Reset UI | `packages/ui/src/components/organisms/{ServerProfilesDialog,ServerSettingsDialog}.tsx` |
-| Chromium Selection & Logout Tests | `packages/ui/browser-tests/host-browser-{selection,logout}.browser.tsx` |
-| Security Matrix Integration Suite | `server/tests/browser_host_security.rs` |
-| Platform Containment & Reset Suite | `server/tests/browser_host_platform.rs` |
-| Android Web Interaction Browser Suite | `packages/ui/browser-tests/host-browser-android.browser.tsx` |
-| Real Host Browser E2E App Fixture | `packages/ui/e2e/fixtures/host-browser-app.ts` |
-| OS Lifecycle & Target Cap E2E Spec | `packages/ui/e2e/os-lifecycle/host-browser.spec.ts` |
-| Agent Same-Target Interference Spec | `packages/ui/e2e/os-host-browser/same-target.spec.ts` |
-| Tuning Grid & Zero-Polling E2E Spec | `packages/ui/e2e/os-host-browser/performance.spec.ts` |
-| Full-SPA Android Web E2E Spec | `packages/ui/e2e/os-host-browser/android.spec.ts` |
-| Integrated Qualification Report | `plans/261108-0237-host-browser-cdp-streaming/reports/integrated-qualification.md` |
-| Platform Qualification Report | `plans/261108-0237-host-browser-cdp-streaming/reports/platform-qualification.md` |
-| Performance & Tuning Qualification Report | `plans/261108-0237-host-browser-cdp-streaming/reports/performance-qualification.md` |
-| Human & Physical Acceptance Ledger | `plans/261108-0237-host-browser-cdp-streaming/reports/human-acceptance.md` |
+| Browser Tab Identity & Pure State (Phase 01) | `packages/ui/src/api/connections.ts`, `packages/ui/src/os/browser/{browser-tab-types,browser-owner-scope,browser-tab-state}.ts` |
+| Browser Persistence & Recovery Store (Phase 02) | `packages/ui/src/os/browser/{browser-persistence,browser-group-projection,browser-url-normalization,browser-recovery-store,browser-recovery-validation}.ts`, `os/persistence.ts` |
+| Browser Target Lifecycle & Gates (Phase 02) | `packages/ui/src/os/browser/{browser-create-lifecycle,browser-close-lifecycle,browser-admission-guard,browser-closing-gates,browser-native-reference-census,browser-session-inventory,browser-window-close-coordinator}.ts` |
+| Browser Popup Tab Admission (Phase 03) | `packages/ui/src/os/browser/browser-popup-tabs.ts`, `os/browser-session-sync.ts` |
+| Browser Native Tab Chrome & Navigation (Phase 04) | `packages/ui/src/os/browser/{browser-tab-strip,browser-address-bar,browser-new-tab-page,browser-tools,browser-recovery-panel,browser-navigation,browser-control-gate}.tsx`, `os/os.css` |
+| Browser Launch, Deep-Link & Recipes (Phase 04) | `packages/ui/src/os/{action-executor,OsShell,deep-links}.{ts,tsx}`, `packages/ui/src/os/recipes/{schema,recipe-engine}.ts` |
+| Selection Preview & Logout Dialogs (Phase 08) | `packages/ui/src/browser-host/selection-controller.ts`, `packages/ui/src/components/organisms/{AccountLogoutDialog,ServerProfilesDialog,ServerSettingsDialog}.tsx` |
+| UI Unit & Component Browser Tests | `packages/ui/src/**/*.test.{ts,tsx}`, `packages/ui/browser-tests/host-browser-{decoder,input,lifecycle,selection,logout,android}.browser.tsx`, `packages/ui/browser-tests/browser-native-tabs.browser.tsx` |
+| Playwright E2E Specifications & Fixtures | `packages/ui/e2e/os-host-browser/{compatibility,agent,same-target,performance,android,selection,tabs-session,tabs-recovery,tabs-visual}.spec.ts`, `packages/ui/e2e/os-lifecycle/host-browser.spec.ts`, `packages/ui/e2e/fixtures/*.ts` |
+| Qualification Reports & Ledger | `plans/261108-0237-host-browser-cdp-streaming/reports/{integrated,platform,performance}-qualification.md`, `reports/human-acceptance.md` |

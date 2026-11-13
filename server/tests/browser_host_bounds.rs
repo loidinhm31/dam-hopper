@@ -1,5 +1,4 @@
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use bytes::Bytes;
 use dam_hopper_server::browser_host::diagnostics::{
@@ -179,4 +178,116 @@ fn test_stream_diagnostics_counters_and_ring_buffer() {
     // Most recent event is the last in the ring
     let last = exported.last().unwrap();
     assert_eq!(last.frame_seq.as_deref(), Some("305"));
+}
+
+#[test]
+fn test_validated_bhjf_frame_reuses_header_across_clones_and_fanout() {
+    use dam_hopper_server::browser_host::protocol::pack_validated_bhjf_frame;
+
+    let controller = MemoryAdmissionController::new(MAX_BROWSER_PAYLOAD_MEMORY_BYTES);
+    let header = TargetFrameHeader {
+        browser_session_id: Uuid::new_v4().to_string(),
+        browser_incarnation: Uuid::new_v4().to_string(),
+        profile_epoch: "1".to_string(),
+        producer_run: Uuid::new_v4().to_string(),
+        viewport_epoch: "1".to_string(),
+        frame_seq: "7".to_string(),
+        width: 64,
+        height: 64,
+        capture_time_unix_ms: 1234,
+        geometry: TargetGeometry {
+            css_width: 64.0,
+            css_height: 64.0,
+            offset_top: 0.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            page_scale: 1.0,
+            visual_offset_x: 0.0,
+            visual_offset_y: 0.0,
+            dpr: 1.0,
+        },
+        input_trusted: true,
+    };
+
+    let validated = pack_validated_bhjf_frame(header.clone(), &make_dummy_jpeg())
+        .expect("pack validated frame");
+    let byte_len = validated.data().len();
+    let res = controller.try_reserve(byte_len).expect("reserve bytes");
+    let tracked1 = TrackedBhjfFrame::from_validated(validated, res);
+    let tracked2 = tracked1.clone();
+
+    assert_eq!(tracked1.header(), Some(&header));
+    assert_eq!(tracked2.header(), Some(&header));
+    assert!(std::sync::Arc::ptr_eq(
+        tracked1.header_arc().unwrap(),
+        tracked2.header_arc().unwrap()
+    ));
+}
+
+#[test]
+fn test_trusted_codec_rejects_mismatched_payload_and_invalid_jpeg() {
+    use dam_hopper_server::browser_host::protocol::{
+        pack_validated_bhjf_frame, unpack_bhjf_frame, unpack_validated_bhjf_frame, ProtocolError,
+    };
+
+    let mut header = TargetFrameHeader {
+        browser_session_id: Uuid::new_v4().to_string(),
+        browser_incarnation: Uuid::new_v4().to_string(),
+        profile_epoch: "1".to_string(),
+        producer_run: Uuid::new_v4().to_string(),
+        viewport_epoch: "1".to_string(),
+        frame_seq: "1".to_string(),
+        width: 128, // Mismatched! JPEG is 64x64
+        height: 64,
+        capture_time_unix_ms: 1000,
+        geometry: TargetGeometry {
+            css_width: 128.0,
+            css_height: 64.0,
+            offset_top: 0.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            page_scale: 1.0,
+            visual_offset_x: 0.0,
+            visual_offset_y: 0.0,
+            dpr: 1.0,
+        },
+        input_trusted: true,
+    };
+
+    // 1. Validated path rejects mismatched width (claimed 128, actual 64)
+    let err_mismatch = pack_validated_bhjf_frame(header.clone(), &make_dummy_jpeg()).unwrap_err();
+    assert!(
+        matches!(&err_mismatch, ProtocolError::InvalidGeometry(msg) if msg.contains("do not match JPEG SOF")),
+        "expected InvalidGeometry error, got: {:?}",
+        err_mismatch
+    );
+
+    // 2. Validated path rejects non-JPEG payload
+    header.width = 64;
+    let err_not_jpeg = pack_validated_bhjf_frame(header.clone(), b"not-a-jpeg-stream").unwrap_err();
+    assert!(
+        matches!(err_not_jpeg, ProtocolError::InvalidJpeg(_)),
+        "expected InvalidJpeg error, got: {:?}",
+        err_not_jpeg
+    );
+
+    // 3. Validated path rejects empty payload
+    let err_empty = pack_validated_bhjf_frame(header.clone(), b"").unwrap_err();
+    assert!(
+        matches!(err_empty, ProtocolError::InvalidJpeg(_) | ProtocolError::InvalidPayloadLength(_)),
+        "expected error on empty payload, got: {:?}",
+        err_empty
+    );
+
+    // 4. Exact matching dimensions succeed
+    let valid_frame = pack_validated_bhjf_frame(header.clone(), &make_dummy_jpeg())
+        .expect("matching dimensions must succeed");
+    assert_eq!(valid_frame.header().width, 64);
+    assert_eq!(valid_frame.header().height, 64);
+
+    // 5. Untrusted unpack validates strict boundaries
+    let mut corrupted = valid_frame.data().to_vec();
+    corrupted.truncate(10);
+    assert!(unpack_validated_bhjf_frame(bytes::Bytes::from(corrupted)).is_err());
+    assert!(unpack_bhjf_frame(b"random-bytes").is_err());
 }

@@ -17,3 +17,6 @@ pub mod diagnostics;
 pub mod selection;
 pub mod stealth;
 pub mod viewer_delivery_estimator;
+pub mod media_writer;
+pub mod capture_tier;
+pub mod adaptive_stream_controller;

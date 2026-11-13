@@ -18,9 +18,15 @@ class MockControlSocket {
   public static OPEN = 1;
   public readyState = MockControlSocket.OPEN;
   public sentMessages: string[] = [];
+  public closeCalls: Array<[number | undefined, string | undefined]> = [];
 
   public send(data: string): void {
     this.sentMessages.push(data);
+  }
+
+  public close(code?: number, reason?: string): void {
+    this.closeCalls.push([code, reason]);
+    this.readyState = 3;
   }
 }
 
@@ -619,6 +625,126 @@ describe("input-controller", () => {
 
       expect(keyUpMsg.event.kind).toBe("keyUp");
       expect(cancelMsg.event.kind).toBe("pointerCancel");
+    });
+  });
+
+  describe("rolling input budget", () => {
+    beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] }));
+    afterEach(() => { controller.dispose(); vi.useRealTimers(); });
+
+    const pointer = (clientX = 320) => ({
+      currentTarget: canvas, clientX, clientY: 240, button: 0,
+      altKey: false, ctrlKey: false, metaKey: false, shiftKey: false,
+    }) as unknown as PointerEvent;
+
+    /** Records live-send instants; max messages in any sliding 1s window. */
+    function recordSends(): { times: number[]; kinds: string[]; maxWindow: (pred?: (kind: string) => boolean) => number } {
+      const times: number[] = [];
+      const kinds: string[] = [];
+      const original = socket.send.bind(socket);
+      vi.spyOn(socket, "send").mockImplementation(message => {
+        times.push(Date.now());
+        kinds.push((JSON.parse(message) as InputMessage).event.kind);
+        original(message);
+      });
+      const maxWindow = (pred: (kind: string) => boolean = () => true): number => {
+        const selected = times.filter((_, i) => pred(kinds[i]));
+        let max = 0;
+        for (let i = 0; i < selected.length; i++) {
+          let j = i;
+          while (j < selected.length && selected[j] - selected[i] < 1000) j++;
+          max = Math.max(max, j - i);
+        }
+        return max;
+      };
+      return { times, kinds, maxWindow };
+    }
+
+    it("keeps 240Hz pointer moves at or below 40 records per second", async () => {
+      const sends = recordSends();
+      for (let elapsed = 0; elapsed < 3000; elapsed += 4) {
+        controller.handlePointerMove(pointer(300 + (elapsed % 50)));
+        await vi.advanceTimersByTimeAsync(4);
+      }
+      expect(sends.times.length).toBeGreaterThan(60);
+      expect(sends.maxWindow()).toBeLessThanOrEqual(40);
+    });
+
+    it("never lets pointer, wheel and key bursts cross the 100/s ceiling or leave sequence gaps", async () => {
+      const sends = recordSends();
+      const key = (type: "keydown" | "keyup") => new KeyboardEvent(type, { key: "Enter", code: "Enter" });
+      for (let elapsed = 0; elapsed < 3000; elapsed += 4) {
+        controller.handlePointerMove(pointer(300 + (elapsed % 50)));
+        if (elapsed % 8 === 0) {
+          controller.handleWheel({ ...pointer(), deltaX: 0, deltaY: 10 } as unknown as WheelEvent);
+        }
+        if (elapsed % 80 === 0) {
+          controller.handleKeyDown(key("keydown"));
+          controller.handleKeyUp(key("keyup"));
+        }
+        await vi.advanceTimersByTimeAsync(4);
+      }
+      // Sustained: traffic flows for the whole run (no early fail-closed shutdown).
+      expect(socket.closeCalls).toEqual([]);
+      expect(sends.times.at(-1)! - sends.times[0]).toBeGreaterThan(2500);
+      const isRelease = (kind: string) => kind === "keyUp" || kind === "pointerUp" || kind === "pointerCancel";
+      expect(sends.maxWindow()).toBeLessThanOrEqual(100);
+      expect(sends.maxWindow(kind => !isRelease(kind))).toBeLessThanOrEqual(80);
+      const seqs = socket.sentMessages.map(message => (JSON.parse(message) as InputMessage).inputSeq);
+      expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, i) => i + 1));
+    });
+
+    it("closes fail-closed on normal overflow past 80/s without recording held state", () => {
+      const errors: Error[] = [];
+      controller = new BrowserInputController({
+        getSessionId: () => "sess-1", getIncarnation: () => "inc-1", getProfileEpoch: () => 1,
+        getSubscriptionEpoch: () => subEpoch, getLeaseToken: () => leaseToken, getViewportEpoch: () => 1,
+        getDrawnRect: () => drawnRect, getControlSocket: () => socket as unknown as WebSocket,
+        onError: err => errors.push(err),
+      });
+      for (let i = 0; i < 80; i++) {
+        expect(controller.handleKeyDown(new KeyboardEvent("keydown", { key: "F1", code: `F${i}` }))).toBe(true);
+      }
+      expect(controller.handleKeyDown(new KeyboardEvent("keydown", { key: "F1", code: "Extra" }))).toBe(false);
+      expect(controller.getHeldKeys().has("Extra")).toBe(false);
+      expect(controller.handlePointerDown(pointer())).toBe(false);
+      expect(controller.getHeldButtons().size).toBe(0);
+      expect(errors.map(e => e.message)).toContain("Input rate budget saturated");
+      expect(socket.sentMessages).toHaveLength(80);
+      expect(socket.closeCalls).toEqual([[1008, "input rate budget exhausted"]]);
+    });
+
+    it("closes fail-closed rather than silently dropping a release beyond the 100/s ceiling", () => {
+      for (let i = 0; i < 80; i++) {
+        controller.handleKeyDown(new KeyboardEvent("keydown", { key: "F1", code: `F${i}` }));
+      }
+      controller.releaseAllHeldInput();
+      expect(socket.sentMessages).toHaveLength(100);
+      expect(socket.closeCalls).toEqual([[1008, "input rate budget exhausted"]]);
+    });
+
+    it("counts releases sent by a lease change before admitting the next event (never send #101)", () => {
+      for (let i = 0; i < 21; i++) {
+        controller.handleKeyDown(new KeyboardEvent("keydown", { key: "F1", code: `H${i}` }));
+      }
+      for (let i = 0; i < 58; i++) controller.handleInsertText(`t${i}`);
+      expect(socket.sentMessages).toHaveLength(79);
+      leaseToken = "lease-2";
+      expect(controller.handleInsertText("after-lease")).toBe(false);
+      expect(socket.sentMessages.length).toBeLessThanOrEqual(100);
+      const kinds = socket.sentMessages.map(message => (JSON.parse(message) as InputMessage).event);
+      expect(kinds.some(event => event.kind === "insertText" && event.text === "after-lease")).toBe(false);
+      expect(socket.closeCalls).toEqual([[1008, "input rate budget exhausted"]]);
+    });
+
+    it("keeps accumulated wheel deltas when a pointer move interleaves", async () => {
+      controller.handleWheel({ ...pointer(), deltaX: 0, deltaY: 10 } as unknown as WheelEvent);
+      controller.handleWheel({ ...pointer(), deltaX: 0, deltaY: 10 } as unknown as WheelEvent);
+      controller.handlePointerMove(pointer(400));
+      await vi.advanceTimersByTimeAsync(30);
+      const events = socket.sentMessages.map(message => (JSON.parse(message) as InputMessage).event);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ kind: "wheel", deltaY: 20, u: expect.closeTo((400 - 80) / 480, 4) });
     });
   });
 });

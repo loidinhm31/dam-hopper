@@ -39,6 +39,7 @@ pub const MIN_VIEWPORT_HEIGHT: u32 = 64;
 pub const MAX_VIEWPORT_HEIGHT: u32 = 1080;
 pub const MIN_DPR: f64 = 1.0;
 pub const MAX_DPR: f64 = 3.0;
+pub const VIEWPORT_DISPATCH_SPACING: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionError {
@@ -123,12 +124,43 @@ pub struct ViewportRequest {
 
 impl ViewportRequest {
     pub fn sanitize(&self) -> Self {
+        let dpr = if self.dpr.is_finite() {
+            self.dpr.clamp(MIN_DPR, MAX_DPR)
+        } else {
+            MIN_DPR
+        };
         Self {
             width: self.width.clamp(MIN_VIEWPORT_WIDTH, MAX_VIEWPORT_WIDTH),
             height: self.height.clamp(MIN_VIEWPORT_HEIGHT, MAX_VIEWPORT_HEIGHT),
-            dpr: self.dpr.clamp(MIN_DPR, MAX_DPR),
+            dpr,
         }
     }
+
+    pub fn matches_geometry(&self, geom: &TargetGeometry) -> bool {
+        (geom.css_width - self.width as f64).abs() < f64::EPSILON
+            && (geom.css_height - self.height as f64).abs() < f64::EPSILON
+            && (geom.dpr - self.dpr).abs() < f64::EPSILON
+    }
+}
+
+struct PendingViewportSlot {
+    request: ViewportRequest,
+    waiters: Vec<tokio::sync::oneshot::Sender<Result<BrowserSessionDto, SessionError>>>,
+}
+
+#[derive(Default)]
+struct ViewportCoalescer {
+    active: bool,
+    last_dispatch_at: Option<Instant>,
+    pending: Option<PendingViewportSlot>,
+}
+
+pub enum ViewportQueueOutcome {
+    Leader {
+        request: ViewportRequest,
+        spacing_wait: Duration,
+    },
+    Follower(tokio::sync::oneshot::Receiver<Result<BrowserSessionDto, SessionError>>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -338,6 +370,8 @@ struct RegistryInner {
     raw_targets: HashMap<(String, String), RawTarget>,
     /// Single-flight creation/publication gate per session id.
     gates: HashMap<String, Arc<Mutex<()>>>,
+    /// Per-session serialized viewport transaction + latest pending coalescer.
+    viewport_coalescers: HashMap<String, ViewportCoalescer>,
 }
 
 impl RegistryInner {
@@ -413,6 +447,7 @@ impl RegistryInner {
             self.clear_parent_popup_link(id, parent_id.as_deref());
             self.sessions.remove(id);
             self.gates.remove(id);
+            self.viewport_coalescers.remove(id);
         }
         expired.len()
     }
@@ -935,7 +970,7 @@ impl SessionRegistry {
         session.retire(SessionStatus::Closed, None);
         inner.sessions.remove(session_id);
         inner.gates.remove(session_id);
-        inner.clear_parent_popup_link(session_id, parent_id.as_deref());
+        inner.viewport_coalescers.remove(session_id);
         if let Some(recs) = inner.creation_records.get_mut(&principal) {
             if recs.get(&key).is_some_and(|r| r.session_id == session_id) {
                 recs.remove(&key);
@@ -1004,6 +1039,7 @@ impl SessionRegistry {
             let key = session.creation_key.clone();
             inner.sessions.remove(session_id);
             inner.gates.remove(session_id);
+            inner.viewport_coalescers.remove(session_id);
             if let Some(recs) = inner.creation_records.get_mut(&principal) {
                 if recs.get(&key).is_some_and(|r| r.session_id == session_id) {
                     recs.remove(&key);
@@ -1421,6 +1457,139 @@ impl SessionRegistry {
         Ok(session.to_dto())
     }
 
+    /// Evaluates whether a viewport request is a sanitized no-op before epoch/native mutation,
+    /// or queues it into the session's single active + one latest pending transaction coalescer.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn begin_viewport_transaction(
+        &self,
+        session_id: &str,
+        principal: &str,
+        expected_viewport_epoch: Option<u64>,
+        width: u32,
+        height: u32,
+        dpr: f64,
+    ) -> Result<Result<BrowserSessionDto, ViewportQueueOutcome>, SessionError> {
+        let sanitized = ViewportRequest { width, height, dpr }.sanitize();
+        let mut inner = self.inner.write().await;
+        let session = inner
+            .sessions
+            .get(session_id)
+            .ok_or(SessionError::NotFound)?;
+        if session.owner_principal != principal {
+            return Err(SessionError::NotFound);
+        }
+        if session.status != SessionStatus::Running {
+            return Err(SessionError::Conflict(format!(
+                "cannot update viewport of {} session",
+                session.status
+            )));
+        }
+        if let Some(exp) = expected_viewport_epoch {
+            if session.viewport_epoch != exp {
+                return Err(SessionError::Conflict(format!(
+                    "stale viewportEpoch (expected {}, current {})",
+                    exp, session.viewport_epoch
+                )));
+            }
+        }
+
+        let has_active_or_pending = inner
+            .viewport_coalescers
+            .get(session_id)
+            .is_some_and(|c| c.active || c.pending.is_some());
+        if !has_active_or_pending && sanitized.matches_geometry(&session.geometry) {
+            return Ok(Ok(session.to_dto()));
+        }
+
+        let now = Instant::now();
+        let coalescer = inner
+            .viewport_coalescers
+            .entry(session_id.to_string())
+            .or_default();
+        if !coalescer.active {
+            coalescer.active = true;
+            let spacing_wait = coalescer
+                .last_dispatch_at
+                .map(|last| {
+                    VIEWPORT_DISPATCH_SPACING.saturating_sub(now.saturating_duration_since(last))
+                })
+                .unwrap_or(Duration::ZERO);
+            return Ok(Err(ViewportQueueOutcome::Leader {
+                request: sanitized,
+                spacing_wait,
+            }));
+        }
+
+        const MAX_PENDING_VIEWPORT_WAITERS: usize = 32;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if let Some(mut prev) = coalescer.pending.take() {
+            if prev.waiters.len() >= MAX_PENDING_VIEWPORT_WAITERS {
+                coalescer.pending = Some(prev);
+                return Err(SessionError::Conflict("viewport queue saturated".to_string()));
+            }
+            prev.request = sanitized;
+            prev.waiters.push(tx);
+            coalescer.pending = Some(prev);
+        } else {
+            coalescer.pending = Some(PendingViewportSlot {
+                request: sanitized,
+                waiters: vec![tx],
+            });
+        }
+        Ok(Err(ViewportQueueOutcome::Follower(rx)))
+    }
+
+    /// Completes one active viewport transaction step and atomically returns the next coalesced
+    /// pending slot (if any) or retires the transaction (`active = false`) under one lock.
+    pub async fn take_next_coalesced_viewport(
+        &self,
+        session_id: &str,
+    ) -> Option<(
+        ViewportRequest,
+        Vec<tokio::sync::oneshot::Sender<Result<BrowserSessionDto, SessionError>>>,
+        Duration,
+    )> {
+        let mut inner = self.inner.write().await;
+        let coalescer = inner.viewport_coalescers.get_mut(session_id)?;
+        let now = Instant::now();
+        coalescer.last_dispatch_at = Some(now);
+        if let Some(pending) = coalescer.pending.take() {
+            let wait = VIEWPORT_DISPATCH_SPACING;
+            Some((pending.request, pending.waiters, wait))
+        } else {
+            coalescer.active = false;
+            None
+        }
+    }
+
+    /// Aborts any pending coalesced viewport waiters with explicit error and retires the
+    /// transaction coalescer (`active = false`) atomically under one lock.
+    pub async fn abort_viewport_coalescer(&self, session_id: &str, error: SessionError) {
+        let mut inner = self.inner.write().await;
+        if let Some(coalescer) = inner.viewport_coalescers.get_mut(session_id) {
+            coalescer.active = false;
+            if let Some(pending) = coalescer.pending.take() {
+                for waiter in pending.waiters {
+                    let _ = waiter.send(Err(error.clone()));
+                }
+            }
+        }
+    }
+
+    pub async fn rollback_viewport(
+        &self,
+        session_id: &str,
+        prev_geom: TargetGeometry,
+        prev_epoch: u64,
+    ) {
+        let mut inner = self.inner.write().await;
+        if let Some(session) = inner.sessions.get_mut(session_id) {
+            session.geometry = prev_geom;
+            session.viewport_epoch = prev_epoch;
+            session.publish_update();
+        }
+    }
+
     pub async fn update_viewport(
         &self,
         session_id: &str,
@@ -1429,7 +1598,24 @@ impl SessionRegistry {
         width: u32,
         height: u32,
         dpr: f64,
-    ) -> Result<BrowserSessionDto, SessionError> {
+    ) -> Result<(BrowserSessionDto, bool), SessionError> {
+        let (dto, changed, _, _) = self.apply_sanitized_viewport(
+            session_id,
+            principal,
+            Some(expected_viewport_epoch),
+            ViewportRequest { width, height, dpr }.sanitize(),
+        )
+        .await?;
+        Ok((dto, changed))
+    }
+
+    pub async fn apply_sanitized_viewport(
+        &self,
+        session_id: &str,
+        principal: &str,
+        expected_viewport_epoch: Option<u64>,
+        sanitized: ViewportRequest,
+    ) -> Result<(BrowserSessionDto, bool, TargetGeometry, u64), SessionError> {
         let mut inner = self.inner.write().await;
         let session = inner
             .sessions
@@ -1444,25 +1630,30 @@ impl SessionRegistry {
                 session.status
             )));
         }
-        if session.viewport_epoch != expected_viewport_epoch {
-            return Err(SessionError::Conflict(format!(
-                "stale viewportEpoch (expected {}, current {})",
-                expected_viewport_epoch, session.viewport_epoch
-            )));
+        if let Some(exp) = expected_viewport_epoch {
+            if session.viewport_epoch != exp {
+                return Err(SessionError::Conflict(format!(
+                    "stale viewportEpoch (expected {}, current {})",
+                    exp, session.viewport_epoch
+                )));
+            }
         }
 
-        let clamped_w = width.clamp(MIN_VIEWPORT_WIDTH, MAX_VIEWPORT_WIDTH);
-        let clamped_h = height.clamp(MIN_VIEWPORT_HEIGHT, MAX_VIEWPORT_HEIGHT);
-        let clamped_dpr = dpr.clamp(MIN_DPR, MAX_DPR);
+        let prev_geom = session.geometry.clone();
+        let prev_epoch = session.viewport_epoch;
+
+        if sanitized.matches_geometry(&session.geometry) {
+            return Ok((session.to_dto(), false, prev_geom, prev_epoch));
+        }
 
         // Epoch advances before command
         session.viewport_epoch = session.viewport_epoch.saturating_add(1);
-        session.geometry.css_width = clamped_w as f64;
-        session.geometry.css_height = clamped_h as f64;
-        session.geometry.dpr = clamped_dpr;
+        session.geometry.css_width = sanitized.width as f64;
+        session.geometry.css_height = sanitized.height as f64;
+        session.geometry.dpr = sanitized.dpr;
         session.publish_update();
 
-        Ok(session.to_dto())
+        Ok((session.to_dto(), true, prev_geom, prev_epoch))
     }
 
     pub async fn update_title(&self, session_id: &str, title: &str) {

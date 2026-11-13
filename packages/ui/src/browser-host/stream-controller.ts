@@ -30,8 +30,8 @@ import {
   type TargetGeometry,
 } from "../api/browser-host-types.js";
 import type { ViewerAttachmentCredentials } from "../api/browser-host-client.js";
+import { isSecureOrLoopbackOrigin } from "../api/auth-client.js";
 import { unpackBhjfFrame } from "./frame-protocol.js";
-
 const DECIMAL_SEQ_PATTERN = /^[1-9][0-9]{0,19}$/;
 const CANONICAL_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -110,10 +110,11 @@ export type StreamStatus =
   | "paused"
   | "privacy"
   | "disconnected"
+  | "unsupported"
   | "error";
 
 interface PendingFrame {
-  data: ArrayBuffer;
+  jpegPayload: Uint8Array;
   socket: WebSocket;
   subscriptionEpoch: string;
   header: TargetFrameHeader;
@@ -266,9 +267,25 @@ export class BrowserStreamController {
         reason: "obsolete",
       });
     }
-
     this.detachSockets();
     this.audioAttachmentRetired = false;
+
+    const mediaHttpEquiv = credentials.mediaWsUrl.replace(/^ws(s?):/, "http$1:");
+    const controlHttpEquiv = credentials.controlWsUrl.replace(/^ws(s?):/, "http$1:");
+    if (
+      !isSecureOrLoopbackOrigin(mediaHttpEquiv) ||
+      !isSecureOrLoopbackOrigin(controlHttpEquiv)
+    ) {
+      this.currentCredentials = null;
+      this.setStatus("error");
+      this.onError?.(
+        new Error(
+          "Browser stream WebSocket requires a wss:// or loopback ws:// origin",
+        ),
+      );
+      return;
+    }
+
     this.currentCredentials = credentials;
     this.setStatus("connecting");
     try {
@@ -572,9 +589,11 @@ export class BrowserStreamController {
     subscriptionEpoch: string,
   ): void {
     let header: TargetFrameHeader;
+    let jpegPayload: Uint8Array;
     try {
       const unpacked = unpackBhjfFrame(data);
       header = unpacked.header;
+      jpegPayload = unpacked.jpegPayload;
     } catch (err) {
       this.onError?.(
         new Error(`Failed to unpack frame: ${err instanceof Error ? err.message : String(err)}`),
@@ -665,14 +684,34 @@ export class BrowserStreamController {
           reason: isSameRunAndEpoch ? "replaced" : "obsolete",
         });
       }
-      this.pending = { data, socket, subscriptionEpoch, header };
+      this.pending = { jpegPayload, socket, subscriptionEpoch, header };
     } else {
-      this.decodeAndDrawFrame(data, socket, subscriptionEpoch, header);
+      this.decodeAndDrawFrame(jpegPayload, socket, subscriptionEpoch, header);
     }
   }
 
+  private isOriginatingOwnerValid(
+    socket: WebSocket,
+    subscriptionEpoch: string,
+    producerRun: string,
+    decodeEpoch: number,
+  ): boolean {
+    return (
+      !this.isDisposed &&
+      !this.isPrivacyActive &&
+      this.isVisible &&
+      decodeEpoch === this.decodeEpoch &&
+      this.mediaWs === socket &&
+      this.currentCredentials?.subscriptionEpoch === subscriptionEpoch &&
+      socket.readyState === WebSocket.OPEN &&
+      !this.retiredProducerRuns.has(producerRun) &&
+      (this.lastKnownProducerRun === null ||
+        this.lastKnownProducerRun === producerRun)
+    );
+  }
+
   private async decodeAndDrawFrame(
-    data: ArrayBuffer,
+    jpegPayload: Uint8Array,
     originatingSocket: WebSocket,
     originatingSubEpoch: string,
     header: TargetFrameHeader,
@@ -683,26 +722,24 @@ export class BrowserStreamController {
 
     let bitmap: ImageBitmap | null = null;
     let decodeSucceeded = false;
-    try {
-      // Unpack JPEG slice for decoding
-      const unpacked = unpackBhjfFrame(data);
-      const jpegBlob = new Blob([unpacked.jpegPayload as Uint8Array<ArrayBuffer>], {
-        type: "image/jpeg",
-      });
-
-      if (typeof createImageBitmap === "function") {
-        bitmap = await createImageBitmap(jpegBlob);
-      } else {
-        // Fallback for non-browser/test environments without createImageBitmap
-        bitmap = {
-          width: header.width,
-          height: header.height,
-          close: () => {},
-        } as unknown as ImageBitmap;
+    if (typeof createImageBitmap !== "function") {
+      if (
+        this.isOriginatingOwnerValid(
+          originatingSocket,
+          originatingSubEpoch,
+          header.producerRun,
+          currentEpoch,
+        )
+      ) {
+        this.lastDrawnRect = null;
+        this.lastFrameHeader = null;
+        this.setStatus("unsupported");
+        this.onError?.(
+          new Error(
+            "Browser stream decoding unsupported: createImageBitmap is unavailable",
+          ),
+        );
       }
-      decodeSucceeded = true;
-    } catch {
-      decodeSucceeded = false;
       this.sendMediaControl(originatingSocket, {
         kind: "frameDiscarded",
         subscriptionEpoch: originatingSubEpoch,
@@ -711,66 +748,132 @@ export class BrowserStreamController {
         frameSeq: header.frameSeq,
         reason: "decodeFailed",
       });
-    }
-
-    try {
-      // Re-check owner/epoch/privacy and originating socket fidelity
-      const isStillValid =
-        !this.isDisposed &&
-        !this.isPrivacyActive &&
-        this.isVisible &&
-        currentEpoch === this.decodeEpoch &&
-        this.mediaWs === originatingSocket &&
-        this.currentCredentials?.subscriptionEpoch === originatingSubEpoch &&
-        originatingSocket.readyState === WebSocket.OPEN &&
-        !this.retiredProducerRuns.has(header.producerRun) &&
-        (this.lastKnownProducerRun === null ||
-          this.lastKnownProducerRun === header.producerRun);
-      if (decodeSucceeded && bitmap && isStillValid) {
-        this.drawBitmapToCanvas(bitmap, header);
-        const decodeMs = this.sanitizeDecodeMs(
-          this.nowMonoMs() - decodeStartMonoMs,
-        );
-        if (decodeMs !== null) {
-          this.lastDecodeMs = decodeMs;
-          this. decodeMsEwma =
-            this.decodeMsEwma === null
-              ? decodeMs
-              : Math.round(
-                  (0.25 * decodeMs + 0.75 * this.decodeMsEwma) * 100,
-                ) / 100;
+    } else {
+      try {
+        const jpegBlob = new Blob([jpegPayload as Uint8Array<ArrayBuffer>], {
+          type: "image/jpeg",
+        });
+        bitmap = await createImageBitmap(jpegBlob);
+        if (
+          !bitmap ||
+          typeof bitmap.width !== "number" ||
+          typeof bitmap.height !== "number" ||
+          bitmap.width <= 0 ||
+          bitmap.height <= 0
+        ) {
+          bitmap?.close?.();
+          bitmap = null;
+          throw new Error("Decoded ImageBitmap has invalid dimensions");
         }
-        this.windowDecodedFrames = Math.min(
-          MAX_HEARTBEAT_FRAME_COUNT,
-          this.windowDecodedFrames + 1,
-        );
-        this.totalDecodedFrames += 1;
-        // Keep cached bitmap for layout redraws
-        if (this.lastCachedBitmap && this.lastCachedBitmap !== bitmap) {
-          try {
-            this.lastCachedBitmap.close();
-          } catch {
-            // Ignore close error on previous bitmap
-          }
+        decodeSucceeded = true;
+      } catch (err) {
+        decodeSucceeded = false;
+        if (
+          this.isOriginatingOwnerValid(
+            originatingSocket,
+            originatingSubEpoch,
+            header.producerRun,
+            currentEpoch,
+          )
+        ) {
+          this.lastDrawnRect = null;
+          this.lastFrameHeader = null;
+          this.setStatus("error");
+          this.onError?.(
+            err instanceof Error
+              ? err
+              : new Error(`Frame decode failed: ${String(err)}`),
+          );
         }
-        this.lastCachedBitmap = bitmap;
-
-        // Draw then ACK exact key
         this.sendMediaControl(originatingSocket, {
-          kind: "frameAck",
+          kind: "frameDiscarded",
           subscriptionEpoch: originatingSubEpoch,
           producerRun: header.producerRun,
           viewportEpoch: header.viewportEpoch,
           frameSeq: header.frameSeq,
-          ...(decodeMs !== null ? { decodeMs } : {}),
+          reason: "decodeFailed",
         });
-        this.onPresentFrame?.({
-          frameSeq: header.frameSeq,
-          viewportEpoch: header.viewportEpoch,
-          producerRun: header.producerRun,
-          captureTimeUnixMs: header.captureTimeUnixMs,
-          presentTimeUnixMs: Date.now(),
-        });
+      }
+    }
+
+    try {
+      // Re-check owner/epoch/privacy and originating socket fidelity
+      const isStillValid = this.isOriginatingOwnerValid(
+        originatingSocket,
+        originatingSubEpoch,
+        header.producerRun,
+        currentEpoch,
+      );
+      if (decodeSucceeded && bitmap && isStillValid) {
+        const drawSucceeded = this.drawBitmapToCanvas(bitmap, header);
+        if (drawSucceeded) {
+          if (this.status === "error") {
+            this.setStatus("streaming");
+          }
+          const decodeMs = this.sanitizeDecodeMs(
+            this.nowMonoMs() - decodeStartMonoMs,
+          );
+          if (decodeMs !== null) {
+            this.lastDecodeMs = decodeMs;
+            this.decodeMsEwma =
+              this.decodeMsEwma === null
+                ? decodeMs
+                : Math.round(
+                    (0.25 * decodeMs + 0.75 * this.decodeMsEwma) * 100,
+                  ) / 100;
+          }
+          this.windowDecodedFrames = Math.min(
+            MAX_HEARTBEAT_FRAME_COUNT,
+            this.windowDecodedFrames + 1,
+          );
+          this.totalDecodedFrames += 1;
+          // Keep cached bitmap for layout redraws
+          if (this.lastCachedBitmap && this.lastCachedBitmap !== bitmap) {
+            try {
+              this.lastCachedBitmap.close();
+            } catch {
+              // Ignore close error on previous bitmap
+            }
+          }
+          this.lastCachedBitmap = bitmap;
+
+          // Draw then ACK exact key
+          this.sendMediaControl(originatingSocket, {
+            kind: "frameAck",
+            subscriptionEpoch: originatingSubEpoch,
+            producerRun: header.producerRun,
+            viewportEpoch: header.viewportEpoch,
+            frameSeq: header.frameSeq,
+            ...(decodeMs !== null ? { decodeMs } : {}),
+          });
+          this.onPresentFrame?.({
+            frameSeq: header.frameSeq,
+            viewportEpoch: header.viewportEpoch,
+            producerRun: header.producerRun,
+            captureTimeUnixMs: header.captureTimeUnixMs,
+            presentTimeUnixMs: Date.now(),
+          });
+        } else {
+          try {
+            bitmap.close();
+          } catch {
+            // Ignore close error
+          }
+          this.lastDrawnRect = null;
+          this.lastFrameHeader = null;
+          this.setStatus("error");
+          this.onError?.(
+            new Error("Failed to render decoded browser frame onto canvas"),
+          );
+          this.sendMediaControl(originatingSocket, {
+            kind: "frameDiscarded",
+            subscriptionEpoch: originatingSubEpoch,
+            producerRun: header.producerRun,
+            viewportEpoch: header.viewportEpoch,
+            frameSeq: header.frameSeq,
+            reason: "decodeFailed",
+          });
+        }
       } else if (decodeSucceeded && bitmap) {
         // Late or invalidated frame: send discarded control
         this.sendMediaControl(originatingSocket, {
@@ -792,7 +895,7 @@ export class BrowserStreamController {
         this.pending = null;
         if (!this.isPrivacyActive && !this.isDisposed) {
           this.decodeAndDrawFrame(
-            next.data,
+            next.jpegPayload,
             next.socket,
             next.subscriptionEpoch,
             next.header,
@@ -813,16 +916,26 @@ export class BrowserStreamController {
 
   /**
    * Aspect-fit rendering with letterboxing and canvas clearing.
+   * Returns true only when the 2D context is valid, canvas dimensions are positive,
+   * and drawImage completes without throwing.
    */
   private drawBitmapToCanvas(
     bitmap: ImageBitmap,
     header: TargetFrameHeader,
-  ): void {
-    if (!this.ctx) return;
+  ): boolean {
+    if (!this.ctx) {
+      this.lastDrawnRect = null;
+      this.lastFrameHeader = null;
+      return false;
+    }
 
     const canvasW = this.canvas.width;
     const canvasH = this.canvas.height;
-    if (canvasW <= 0 || canvasH <= 0) return;
+    if (canvasW <= 0 || canvasH <= 0 || header.width <= 0 || header.height <= 0) {
+      this.lastDrawnRect = null;
+      this.lastFrameHeader = null;
+      return false;
+    }
 
     const imgW = header.width;
     const imgH = header.height;
@@ -846,15 +959,21 @@ export class BrowserStreamController {
       drawY = (canvasH - drawH) / 2;
     }
 
-    // Letterbox: clear whole canvas to black
-    this.ctx.fillStyle = "#000000";
-    this.ctx.fillRect(0, 0, canvasW, canvasH);
+    if (drawW <= 0 || drawH <= 0 || !Number.isFinite(drawW) || !Number.isFinite(drawH)) {
+      this.lastDrawnRect = null;
+      this.lastFrameHeader = null;
+      return false;
+    }
 
-    // Draw frame image
     try {
+      // Letterbox: clear whole canvas to black
+      this.ctx.fillStyle = "#000000";
+      this.ctx.fillRect(0, 0, canvasW, canvasH);
       this.ctx.drawImage(bitmap, drawX, drawY, drawW, drawH);
     } catch {
-      // In non-canvas test environments drawImage might not be implemented
+      this.lastDrawnRect = null;
+      this.lastFrameHeader = null;
+      return false;
     }
 
     this.lastDrawnRect = {
@@ -869,6 +988,7 @@ export class BrowserStreamController {
       inputTrusted: header.inputTrusted,
     };
     this.lastFrameHeader = header;
+    return true;
   }
   /**
    * Redraws the last cached frame (e.g. after canvas resize) maintaining aspect fit.
@@ -877,12 +997,20 @@ export class BrowserStreamController {
     if (
       this.lastCachedBitmap &&
       this.lastFrameHeader &&
-      !this.isPrivacyActive
+      !this.isPrivacyActive &&
+      this.isVisible &&
+      this.canvas.width > 1 &&
+      this.canvas.height > 1
     ) {
       this.drawBitmapToCanvas(this.lastCachedBitmap, this.lastFrameHeader);
+    } else {
+      this.lastDrawnRect = null;
     }
   }
 
+  public invalidatePresentation(): void {
+    this.lastDrawnRect = null;
+  }
   /**
    * Synchronously clears the canvas to solid black on Cognito/Privacy activation.
    * Cancels in-flight demand and invalidates decode tokens so late decodes cannot repaint.
@@ -946,7 +1074,7 @@ export class BrowserStreamController {
         this.lastCachedBitmap = null;
       }
       this.lastDrawnRect = null;
-
+      this.lastFrameHeader = null;
       if (this.pending) {
         const p = this.pending;
         this.pending = null;

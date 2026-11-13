@@ -7,8 +7,8 @@ use bytes::Bytes;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use super::protocol::{unpack_validated_bhjf_frame, TargetFrameHeader, ValidatedBhjfFrame};
 use super::viewer_delivery_estimator::ViewerDeliverySnapshot;
-
 pub const MAX_BROWSER_PAYLOAD_MEMORY_BYTES: usize = 128 * 1024 * 1024; // 128 MiB
 pub const MAX_QUALIFICATION_EVENTS: usize = 256;
 pub const MAX_ADMITTED_VIEWER_SNAPSHOTS: usize = 16;
@@ -123,6 +123,7 @@ impl Drop for FrameReservationOwner {
 #[derive(Debug)]
 pub struct TrackedBhjfFrame {
     data: Bytes,
+    header: Option<Arc<TargetFrameHeader>>,
     owner: Arc<FrameReservationOwner>,
     controller: Arc<MemoryAdmissionController>,
     server_received_unix_ms: Option<u64>,
@@ -131,6 +132,22 @@ pub struct TrackedBhjfFrame {
 
 impl TrackedBhjfFrame {
     pub fn new(data: Bytes, reservation: MemoryReservation) -> Self {
+        let header = unpack_validated_bhjf_frame(data.clone())
+            .ok()
+            .map(|v| v.into_parts().1);
+        Self::new_inner(data, header, reservation)
+    }
+
+    pub fn from_validated(validated: ValidatedBhjfFrame, reservation: MemoryReservation) -> Self {
+        let (data, header) = validated.into_parts();
+        Self::new_inner(data, Some(header), reservation)
+    }
+
+    fn new_inner(
+        data: Bytes,
+        header: Option<Arc<TargetFrameHeader>>,
+        reservation: MemoryReservation,
+    ) -> Self {
         let controller = reservation.controller.clone();
         controller.active_clones.fetch_add(1, Ordering::SeqCst);
         controller.unique_buffers.fetch_add(1, Ordering::SeqCst);
@@ -140,6 +157,7 @@ impl TrackedBhjfFrame {
         });
         Self {
             data,
+            header,
             owner,
             controller,
             server_received_unix_ms: None,
@@ -155,6 +173,14 @@ impl TrackedBhjfFrame {
         self.server_received_unix_ms = Some(server_received_unix_ms);
         self.received_at = Some(received_at);
         self
+    }
+
+    pub fn header(&self) -> Option<&TargetFrameHeader> {
+        self.header.as_deref()
+    }
+
+    pub fn header_arc(&self) -> Option<&Arc<TargetFrameHeader>> {
+        self.header.as_ref()
     }
 
     pub fn server_received_unix_ms(&self) -> Option<u64> {
@@ -183,6 +209,7 @@ impl Clone for TrackedBhjfFrame {
         self.controller.active_clones.fetch_add(1, Ordering::SeqCst);
         Self {
             data: self.data.clone(),
+            header: self.header.clone(),
             owner: self.owner.clone(),
             controller: self.controller.clone(),
             server_received_unix_ms: self.server_received_unix_ms,

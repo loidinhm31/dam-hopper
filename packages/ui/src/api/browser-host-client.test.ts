@@ -14,9 +14,14 @@ import {
   releaseBrowserControl,
   reloadBrowser,
   renewBrowserControl,
+  getBrowserProfileResetStatus,
+  getBrowserProfileResetStatusForOrigin,
+  preflightBrowserCapabilitiesForOrigin,
   resetBrowserProfile,
+  resetBrowserProfileForOrigin,
   respondBrowserDialog,
   setBrowserViewport,
+  requestBrowserHostJson,
 } from "./browser-host-client.js";
 import { BrowserHostClientError } from "./browser-host-types.js";
 import { ConnectionOwnerError } from "./ownership.js";
@@ -308,5 +313,212 @@ describe("browser-host-client", () => {
     await expect(
       mintViewerAttachmentTickets(mockOwner, "sess-1", "inc-1", 1),
     ).rejects.toThrow(ConnectionOwnerError);
+  });
+
+  it("rejects cleartext non-loopback HTTP origins before fetch or ticket minting (never transmitting Bearer token)", async () => {
+    vi.spyOn(connections, "getConnectionSnapshot").mockReturnValue({
+      owner: mockOwner,
+      status: "connected",
+      intent: true,
+      serverUrl: "http://192.168.1.50:4801",
+      error: null,
+    });
+
+    await expect(getBrowserCapabilities(mockOwner)).rejects.toThrowError(
+      BrowserHostClientError,
+    );
+    await expect(
+      requestBrowserHostJson(mockOwner, "/api/browser/sessions"),
+    ).rejects.toMatchObject({
+      kind: "insecureOrigin",
+      status: 0,
+    });
+    await expect(
+      mintViewerAttachmentTickets(
+        mockOwner,
+        "12345678-1234-4234-8234-123456789abc",
+        "fedcba98-7654-4321-8901-abcdef012345",
+        1,
+      ),
+    ).rejects.toMatchObject({
+      kind: "insecureOrigin",
+      status: 0,
+    });
+  });
+
+  it("permits loopback HTTP and remote HTTPS origins for ticket minting", async () => {
+    fetchSpy.mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          ticket: "ticket-abc",
+          expiresAtUnixMs: Date.now() + 30_000,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    for (const allowedOrigin of [
+      "http://127.0.0.1:4801",
+      "http://localhost:4801",
+      "http://[::1]:4801",
+      "https://damhopper.example.com",
+    ]) {
+      vi.spyOn(connections, "getConnectionSnapshot").mockReturnValue({
+        owner: mockOwner,
+        status: "connected",
+        intent: true,
+        serverUrl: allowedOrigin,
+        error: null,
+      });
+
+      const creds = await mintViewerAttachmentTickets(
+        mockOwner,
+        "12345678-1234-4234-8234-123456789abc",
+        "fedcba98-7654-4321-8901-abcdef012345",
+        1,
+      );
+
+      if (allowedOrigin.startsWith("https://")) {
+        expect(creds.mediaWsUrl.startsWith("wss://")).toBe(true);
+        expect(creds.controlWsUrl.startsWith("wss://")).toBe(true);
+      } else {
+        expect(creds.mediaWsUrl.startsWith("ws://")).toBe(true);
+        expect(creds.controlWsUrl.startsWith("ws://")).toBe(true);
+      }
+    }
+  });
+
+  it("rejects reset and preflight functions on insecure remote origin without constructing fetch or WebSocket", async () => {
+    const wsSpy = vi.fn();
+    vi.stubGlobal("WebSocket", wsSpy);
+    fetchSpy.mockClear();
+
+    const insecureOrigin = "http://192.168.1.50:4801";
+
+    await expect(
+      preflightBrowserCapabilitiesForOrigin(insecureOrigin, "test-token"),
+    ).rejects.toMatchObject({
+      kind: "insecureOrigin",
+      status: 0,
+    });
+
+    await expect(
+      resetBrowserProfileForOrigin(insecureOrigin, "test-token", {
+        profileEpoch: 1,
+        reason: "insecure-test",
+      }),
+    ).rejects.toMatchObject({
+      kind: "insecureOrigin",
+      status: 0,
+    });
+
+    await expect(
+      getBrowserProfileResetStatusForOrigin(insecureOrigin, "test-token", "op-123"),
+    ).rejects.toMatchObject({
+      kind: "insecureOrigin",
+      status: 0,
+    });
+
+    vi.spyOn(connections, "getConnectionSnapshot").mockReturnValue({
+      owner: mockOwner,
+      status: "connected",
+      intent: true,
+      serverUrl: insecureOrigin,
+      error: null,
+    });
+
+    await expect(
+      resetBrowserProfile(mockOwner, {
+        profileEpoch: 1,
+        reason: "insecure-test",
+      }),
+    ).rejects.toMatchObject({
+      kind: "insecureOrigin",
+      status: 0,
+    });
+
+    await expect(
+      getBrowserProfileResetStatus(mockOwner, "op-123"),
+    ).rejects.toMatchObject({
+      kind: "insecureOrigin",
+      status: 0,
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(wsSpy).not.toHaveBeenCalled();
+  });
+
+  it("permits reset and preflight functions on loopback HTTP and remote HTTPS origins", async () => {
+    for (const allowedOrigin of [
+      "http://127.0.0.1:4801",
+      "http://localhost:4801",
+      "http://[::1]:4801",
+      "https://damhopper.example.com",
+    ]) {
+      fetchSpy.mockReset();
+      fetchSpy.mockImplementation(async (url: string) => {
+        if (url.includes("/api/browser/capabilities")) {
+          return new Response(
+            JSON.stringify({
+              available: true,
+              profileEpoch: 1,
+              runningSessions: 1,
+              maxConcurrentSessions: 5,
+              supportedProtocols: ["bhjf-v1"],
+              features: { audio: true, video: true },
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                "x-browser-reset-state": "ready",
+                "x-browser-epoch": "1",
+              },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            operationId: "op-abc",
+            profileId: "profile-1",
+            status: "completed",
+            profileEpoch: 2,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      });
+
+      const preflight = await preflightBrowserCapabilitiesForOrigin(
+        allowedOrigin,
+        "token-123",
+      );
+      expect(preflight.kind).toBe("admitted");
+      expect(preflight.available).toBe(true);
+      expect(preflight.profileEpoch).toBe(1);
+
+      const resetRes = await resetBrowserProfileForOrigin(
+        allowedOrigin,
+        "token-123",
+        { profileEpoch: 1, reason: "unit-test" },
+      );
+      expect(resetRes.operationId).toBe("op-abc");
+      expect(resetRes.status).toBe("completed");
+
+      const statusRes = await getBrowserProfileResetStatusForOrigin(
+        allowedOrigin,
+        "token-123",
+        "op-abc",
+      );
+      expect(statusRes.operationId).toBe("op-abc");
+      expect(statusRes.status).toBe("completed");
+
+      for (const call of fetchSpy.mock.calls) {
+        const init = call[1] as RequestInit;
+        expect(init.credentials).toBe("include");
+        expect((init.headers as Record<string, string>)["Authorization"]).toBe(
+          "Bearer token-123",
+        );
+      }
+    }
   });
 });

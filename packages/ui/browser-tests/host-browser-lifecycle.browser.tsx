@@ -558,6 +558,18 @@ describe("Host Browser Lifecycle & Window Policy Browser Tests", () => {
     // Session is NOT deleted, window remains in store
     expect(useWindowStore.getState().session.windows["win-browser-persist"]).toBeDefined();
 
+    // While parked on an inactive desktop, the parking host and parked canvas shrink to 1x1
+    const parkingHost = document.querySelector<HTMLElement>(
+      '[data-testid="browser-keep-alive-host"]',
+    );
+    expect(parkingHost?.style.width).toBe("1px");
+    expect(parkingHost?.style.height).toBe("1px");
+    const parkedCanvas = containerEl?.querySelector("canvas");
+    if (parkedCanvas) {
+      expect(parkedCanvas.width).toBeLessThanOrEqual(1);
+      expect(parkedCanvas.height).toBeLessThanOrEqual(1);
+    }
+
     // Switch back to desk-1
     await act(async () => {
       useWindowStore.getState().switchDesktop("desktop-1");

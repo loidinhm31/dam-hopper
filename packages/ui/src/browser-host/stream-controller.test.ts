@@ -91,6 +91,15 @@ describe("stream-controller", () => {
     } as unknown as CanvasRenderingContext2D;
     vi.spyOn(canvas, "getContext").mockReturnValue(ctx);
 
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockImplementation(async () => ({
+        width: 640,
+        height: 480,
+        close: vi.fn(),
+      })),
+    );
+
     controller = new BrowserStreamController({
       canvas,
     });
@@ -895,5 +904,438 @@ describe("stream-controller", () => {
         reason: "toString" as unknown as "replaced",
       }),
     ).toBe(false);
+  });
+
+  it("parses BHJF header once per incoming frame even when queued as pending", async () => {
+    let resolveDecode1: ((bitmap: ImageBitmap) => void) | null = null;
+    let resolveDecode2: ((bitmap: ImageBitmap) => void) | null = null;
+    let decodeCall = 0;
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockImplementation(() => {
+        decodeCall += 1;
+        const { promise, resolve } = Promise.withResolvers<ImageBitmap>();
+        if (decodeCall === 1) {
+          resolveDecode1 = resolve;
+        } else {
+          resolveDecode2 = resolve;
+        }
+        return promise;
+      }),
+    );
+
+    const jsonParseSpy = vi.spyOn(JSON, "parse");
+    controller.attach(mockCreds);
+    const mediaWs = MockWebSocket.instances[0];
+    mediaWs.onopen?.();
+
+    const jpeg = createMockJpeg(640, 480);
+    const frame1 = packBhjfFrame(makeHeader("1"), jpeg);
+    const frame2 = packBhjfFrame(makeHeader("2"), jpeg);
+
+    jsonParseSpy.mockClear();
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frame1.buffer }));
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frame2.buffer }));
+
+    // Exactly 2 JSON.parse calls (one per incoming binary message), never re-parsed during decode/drain
+    expect(jsonParseSpy).toHaveBeenCalledTimes(2);
+
+    resolveDecode1!({
+      width: 640,
+      height: 480,
+      close: vi.fn(),
+    } as unknown as ImageBitmap);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    resolveDecode2!({
+      width: 640,
+      height: 480,
+      close: vi.fn(),
+    } as unknown as ImageBitmap);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(jsonParseSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports unsupported/error and discards without frameAck or trusted hit rectangle when createImageBitmap is absent or draw fails", async () => {
+    const statuses: string[] = [];
+    const errors: Error[] = [];
+    const onPresentFrame = vi.fn();
+    controller.dispose();
+    controller = new BrowserStreamController({
+      canvas,
+      onStatusChange: (s) => statuses.push(s),
+      onError: (e) => errors.push(e),
+      onPresentFrame,
+    });
+
+    // 1. Absent createImageBitmap -> unsupported status + decodeFailed discard + null drawnRect
+    vi.stubGlobal("createImageBitmap", undefined);
+    controller.attach(mockCreds);
+    const mediaWs = MockWebSocket.instances[0];
+    mediaWs.onopen?.();
+
+    const jpeg = createMockJpeg(640, 480);
+    const frame1 = packBhjfFrame(makeHeader("1"), jpeg);
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frame1.buffer }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(controller.getStatus()).toBe("unsupported");
+    expect(controller.getDrawnRect()).toBeNull();
+    expect(onPresentFrame).not.toHaveBeenCalled();
+    expect(controller.getTelemetrySnapshot().totalDecodedFrames).toBe(0);
+    expect(JSON.parse(mediaWs.sentMessages.at(-1)!)).toEqual({
+      kind: "frameDiscarded",
+      subscriptionEpoch: "sub-epoch-uuid-1",
+      producerRun: "fedcba98-7654-4321-8901-abcdef012345",
+      viewportEpoch: "1",
+      frameSeq: "1",
+      reason: "decodeFailed",
+    });
+
+    // 2. Throwing drawImage -> error status + bitmap closed + decodeFailed discard + null drawnRect
+    const closeSpy = vi.fn();
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockImplementation(async () => ({
+        width: 640,
+        height: 480,
+        close: closeSpy,
+      })),
+    );
+    vi.spyOn(ctx, "drawImage").mockImplementation(() => {
+      throw new Error("GPU context lost");
+    });
+
+    const frame2 = packBhjfFrame(makeHeader("2"), jpeg);
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frame2.buffer }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(controller.getStatus()).toBe("error");
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(controller.getDrawnRect()).toBeNull();
+    expect(onPresentFrame).not.toHaveBeenCalled();
+    expect(controller.getTelemetrySnapshot().totalDecodedFrames).toBe(0);
+    expect(JSON.parse(mediaWs.sentMessages.at(-1)!)).toEqual({
+      kind: "frameDiscarded",
+      subscriptionEpoch: "sub-epoch-uuid-1",
+      producerRun: "fedcba98-7654-4321-8901-abcdef012345",
+      viewportEpoch: "1",
+      frameSeq: "2",
+      reason: "decodeFailed",
+    });
+
+    // 3. Zero-sized canvas -> error status + decodeFailed discard + null drawnRect
+    vi.spyOn(ctx, "drawImage").mockImplementation(() => {});
+    canvas.width = 0;
+    canvas.height = 0;
+    const frame3 = packBhjfFrame(makeHeader("3"), jpeg);
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frame3.buffer }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(controller.getDrawnRect()).toBeNull();
+    expect(JSON.parse(mediaWs.sentMessages.at(-1)!)).toMatchObject({
+      kind: "frameDiscarded",
+      frameSeq: "3",
+      reason: "decodeFailed",
+    });
+    expect(errors.length).toBeGreaterThanOrEqual(2);
+  });
+  it("fences decode failure: stale-socket decode failure leaves status/hit rect/onError untouched while discarding on originating socket, and current-owner failure reports error and clears hit geometry", async () => {
+    const statuses: StreamStatus[] = [];
+    const errors: Error[] = [];
+    controller = new BrowserStreamController({
+      canvas,
+      onStatusChange: (s) => statuses.push(s),
+      onError: (e) => errors.push(e),
+    });
+
+    // 1. Establish valid streaming session and non-null hit geometry
+    controller.attach(mockCreds);
+    const mediaWs1 = MockWebSocket.instances[0];
+    mediaWs1.onopen?.();
+    expect(controller.getStatus()).toBe("streaming");
+
+    const jpeg = createMockJpeg(640, 480);
+    const frame1 = packBhjfFrame(makeHeader("1"), jpeg);
+    mediaWs1.onmessage?.(new MessageEvent("message", { data: frame1.buffer }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const initialDrawnRect = controller.getDrawnRect();
+    expect(initialDrawnRect).not.toBeNull();
+    expect(errors.length).toBe(0);
+
+    // 2. Queue in-flight decode for frame 2 on socket 1
+    let rejectDecodeFrame2: ((err: Error) => void) | null = null;
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockImplementation(() => {
+        const { promise, reject } = Promise.withResolvers<ImageBitmap>();
+        rejectDecodeFrame2 = reject;
+        return promise;
+      }),
+    );
+
+    const frame2 = packBhjfFrame(makeHeader("2"), jpeg);
+    mediaWs1.onmessage?.(new MessageEvent("message", { data: frame2.buffer }));
+
+    // 3. Reattach with new subscription epoch to make socket 1 stale
+    const mockCreds2: ViewerAttachmentCredentials = {
+      ...mockCreds,
+      subscriptionEpoch: "sub-epoch-uuid-2",
+      mediaTicket: "med-tok-2",
+      controlTicket: "ctrl-tok-2",
+    };
+    controller.attach(mockCreds2);
+    const mediaWs2 = MockWebSocket.instances[2];
+    // Keep socket 1 open so discard delivery on originating socket can be observed
+    mediaWs1.readyState = MockWebSocket.OPEN;
+    mediaWs2.onopen?.();
+
+    expect(controller.getStatus()).toBe("streaming");
+    expect(controller.getDrawnRect()).toEqual(initialDrawnRect);
+
+    // 4. Reject decode for frame 2 on now-stale socket 1
+    expect(rejectDecodeFrame2).not.toBeNull();
+    rejectDecodeFrame2!(new Error("Corrupt jpeg on stale socket 1"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Verify stale socket failure leaves status, hit rect, and onError untouched
+    expect(errors.length).toBe(0);
+    expect(controller.getStatus()).toBe("streaming");
+    expect(controller.getDrawnRect()).toEqual(initialDrawnRect);
+
+    // Verify originating socket 1 received the decodeFailed discard
+    const staleDiscardMsg = JSON.parse(mediaWs1.sentMessages.at(-1)!);
+    expect(staleDiscardMsg).toEqual({
+      kind: "frameDiscarded",
+      subscriptionEpoch: "sub-epoch-uuid-1",
+      producerRun: "fedcba98-7654-4321-8901-abcdef012345",
+      viewportEpoch: "1",
+      frameSeq: "2",
+      reason: "decodeFailed",
+    });
+
+    // 5. Test current-owner failure on socket 2: reports error and clears hit geometry
+    let rejectDecodeFrame3: ((err: Error) => void) | null = null;
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockImplementation(() => {
+        const { promise, reject } = Promise.withResolvers<ImageBitmap>();
+        rejectDecodeFrame3 = reject;
+        return promise;
+      }),
+    );
+
+    const frame3 = packBhjfFrame(makeHeader("3"), jpeg);
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: frame3.buffer }));
+
+    expect(rejectDecodeFrame3).not.toBeNull();
+    rejectDecodeFrame3!(new Error("Corrupt jpeg on current owner socket 2"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(errors.length).toBe(1);
+    expect(errors[0].message).toContain("Corrupt jpeg on current owner socket 2");
+    expect(controller.getStatus()).toBe("error");
+    expect(controller.getDrawnRect()).toBeNull();
+
+    const currentDiscardMsg = JSON.parse(mediaWs2.sentMessages.at(-1)!);
+    expect(currentDiscardMsg).toEqual({
+      kind: "frameDiscarded",
+      subscriptionEpoch: "sub-epoch-uuid-2",
+      producerRun: "fedcba98-7654-4321-8901-abcdef012345",
+      viewportEpoch: "1",
+      frameSeq: "3",
+      reason: "decodeFailed",
+    });
+  });
+
+
+  it("paces high-rate pointerMove and wheel bursts to <=40 Hz while immediately flushing before discrete pointerUp/keyDown", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(canvas, "getBoundingClientRect").mockImplementation(() => ({
+      left: 0,
+      top: 0,
+      width: 640,
+      height: 480,
+      right: 640,
+      bottom: 480,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    }));
+    canvas.width = 640;
+    canvas.height = 480;
+    controller.attach(mockCreds);
+    const mediaWs = MockWebSocket.instances[0];
+    const controlWs = MockWebSocket.instances[1];
+    mediaWs.onopen?.();
+    controlWs.onopen?.();
+
+    const header = makeHeader("1");
+    const frame = packBhjfFrame(header, createMockJpeg(640, 480));
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frame.buffer }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(controller.getDrawnRect()).not.toBeNull();
+
+    let currentLease: string | null = "lease-1";
+    const input = new BrowserInputController({
+      getSessionId: () => header.browserSessionId,
+      getIncarnation: () => header.browserIncarnation,
+      getProfileEpoch: () => 1,
+      getSubscriptionEpoch: () => mockCreds.subscriptionEpoch,
+      getLeaseToken: () => currentLease,
+      getViewportEpoch: () => 1,
+      getDrawnRect: () => controller.getDrawnRect(),
+      getControlSocket: () => controller.getControlSocket(),
+    });
+
+    // 1. Burst 200 pointerMove events over 250ms (800Hz raw input rate)
+    for (let i = 1; i <= 200; i++) {
+      input.handlePointerMove({
+        currentTarget: canvas,
+        clientX: Math.min(639, i * 3),
+        clientY: 240,
+        button: 0,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+      });
+      if (i % 20 === 0) {
+        await vi.advanceTimersByTimeAsync(25);
+      }
+    }
+    await vi.advanceTimersByTimeAsync(30);
+
+    const sentMoves = controlWs.sentMessages.map((m) => JSON.parse(m));
+    // At 25ms min spacing over ~250ms, at most ~12 messages are sent (<=40/s cadence)
+    expect(sentMoves.length).toBeGreaterThanOrEqual(7);
+    expect(sentMoves.length).toBeLessThanOrEqual(13);
+    sentMoves.forEach((msg, idx) => {
+      expect(msg.inputSeq).toBe(idx + 1);
+      expect(msg.event.kind).toBe("pointerMove");
+    });
+    // Latest coordinates are preserved in the final coalesced move
+    expect(sentMoves.at(-1)!.event.u).toBeCloseTo(600 / 640, 3);
+
+    // 2. Pending pointerMove immediately flushes BEFORE discrete pointerDown / pointerUp with contiguous inputSeq
+    const countBeforeDiscrete = controlWs.sentMessages.length;
+    input.handlePointerMove({
+      currentTarget: canvas,
+      clientX: 160,
+      clientY: 120,
+      button: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    });
+    // Within the 16ms window, the move is still buffered
+    expect(controlWs.sentMessages.length).toBe(countBeforeDiscrete);
+
+    // Discrete pointerDown must flush the pending move first, then send pointerDown
+    input.handlePointerDown({
+      currentTarget: canvas,
+      clientX: 320,
+      clientY: 240,
+      button: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    });
+    expect(controlWs.sentMessages.length).toBe(countBeforeDiscrete + 2);
+    const flushedMove = JSON.parse(controlWs.sentMessages[countBeforeDiscrete]);
+    const discreteDown = JSON.parse(controlWs.sentMessages[countBeforeDiscrete + 1]);
+    expect(flushedMove.event).toMatchObject({ kind: "pointerMove", u: 0.25, v: 0.25 });
+    expect(discreteDown.event).toMatchObject({ kind: "pointerDown", u: 0.5, v: 0.5 });
+    expect(discreteDown.inputSeq).toBe(flushedMove.inputSeq + 1);
+
+    // 3. Wheel burst coalescing sums deltas across the pacing window
+    const countBeforeWheel = controlWs.sentMessages.length;
+    input.handleWheel({
+      currentTarget: canvas,
+      clientX: 320,
+      clientY: 240,
+      deltaX: 5,
+      deltaY: 10,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    } as unknown as WheelEvent);
+    input.handleWheel({
+      currentTarget: canvas,
+      clientX: 320,
+      clientY: 240,
+      deltaX: 7,
+      deltaY: 15,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    } as unknown as WheelEvent);
+    expect(controlWs.sentMessages.length).toBe(countBeforeWheel);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(controlWs.sentMessages.length).toBe(countBeforeWheel + 1);
+    const wheelMsg = JSON.parse(controlWs.sentMessages.at(-1)!);
+    expect(wheelMsg.event).toMatchObject({
+      kind: "wheel",
+      deltaX: 12,
+      deltaY: 25,
+      delta_x: 12,
+      delta_y: 25,
+    });
+
+    // 4. Lease loss cancels pending timer without leaking stale events
+    input.handlePointerMove({
+      currentTarget: canvas,
+      clientX: 100,
+      clientY: 100,
+      button: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    });
+    currentLease = null;
+    input.dispose();
+    const countAfterDispose = controlWs.sentMessages.length;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(controlWs.sentMessages.length).toBe(countAfterDispose);
+    vi.useRealTimers();
+  });
+
+  it("rejects cleartext non-loopback ws:// URLs in attach() before constructing WebSockets", () => {
+    const errors: Error[] = [];
+    controller.dispose();
+    controller = new BrowserStreamController({
+      canvas,
+      onError: (err) => errors.push(err),
+    });
+
+    MockWebSocket.instances = [];
+    controller.attach({
+      ...mockCreds,
+      mediaWsUrl: "ws://192.168.1.99:4801/api/browser/media",
+      controlWsUrl: "ws://192.168.1.99:4801/api/browser/control",
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(0);
+    expect(controller.getStatus()).toBe("error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain("wss:// or loopback ws://");
   });
 });

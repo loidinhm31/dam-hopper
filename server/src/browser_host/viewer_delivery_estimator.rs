@@ -23,6 +23,7 @@ pub struct ViewerDeliverySnapshot {
     pub estimated_delivered_kbps: Option<f64>, pub useful_drawn_kbps: Option<f64>,
     pub delivered_kbps_ewma: Option<f64>, pub useful_drawn_kbps_ewma: Option<f64>,
     pub audio_kbps_ewma: f64, pub min_service_baseline_ms: Option<f64>, pub service_ewma_ms: Option<f64>,
+    pub frame_bytes_ewma: Option<f64>,
     pub oldest_outstanding_age_ms: u64, pub outstanding_frames: usize, pub outstanding_bytes: usize,
     pub has_pending_frame: bool, pub last_queued_duration_ms: Option<f64>,
     pub last_write_duration_ms: Option<f64>, pub write_duration_ewma_ms: Option<f64>,
@@ -41,7 +42,7 @@ struct EstimatorAccumulators {
     total_acked_drawn_bytes: u64, total_discarded_bytes: u64,
     estimated_delivered_kbps: Option<f64>, useful_drawn_kbps: Option<f64>,
     delivered_kbps_ewma: Option<f64>, useful_drawn_kbps_ewma: Option<f64>, audio_kbps_ewma: f64,
-    min_service_baseline_ms: Option<f64>, service_ewma_ms: Option<f64>,
+    min_service_baseline_ms: Option<f64>, service_ewma_ms: Option<f64>, frame_bytes_ewma: Option<f64>,
     last_queued_duration_ms: Option<f64>, last_write_duration_ms: Option<f64>, write_duration_ewma_ms: Option<f64>,
     video_bytes_written: u64, audio_bytes_written: u64, control_bytes_written: u64,
     pending_replacements: u64, intentional_pacing_holds: u64, broadcast_lagged_frames: u64,
@@ -70,7 +71,8 @@ impl ViewerDeliveryEstimator {
             self.acc.last_window_acked_bytes = 0; self.acc.last_window_discarded_bytes = 0; self.acc.last_window_elapsed_ms = 0;
             self.acc.estimated_delivered_kbps = None; self.acc.useful_drawn_kbps = None;
             self.acc.delivered_kbps_ewma = None; self.acc.useful_drawn_kbps_ewma = None;
-            self.acc.service_ewma_ms = None; self.acc.client_corroboration = ClientTelemetryCorroboration::default();
+            self.acc.service_ewma_ms = None; self.acc.frame_bytes_ewma = None;
+            self.acc.client_corroboration = ClientTelemetryCorroboration::default();
         }
         self.acc.last_native_capture_time_unix_ms = native_capture_ms;
         if server_receipt_ms.is_some() { self.acc.last_server_receipt_unix_ms = server_receipt_ms; }
@@ -123,6 +125,7 @@ impl ViewerDeliveryEstimator {
             let service_ms = service_duration.as_secs_f64() * 1000.0;
             self.acc.min_service_baseline_ms = Some(self.acc.min_service_baseline_ms.map_or(service_ms, |c| c.min(service_ms)));
             self.acc.service_ewma_ms = ewma(self.acc.service_ewma_ms, service_ms);
+            self.acc.frame_bytes_ewma = ewma(self.acc.frame_bytes_ewma, frame_bytes as f64);
         }
         if let Some(ms) = decode_ms {
             self.acc.client_corroboration.last_decode_ms = Some(ms);
@@ -185,6 +188,7 @@ impl ViewerDeliveryEstimator {
             estimated_delivered_kbps: self.acc.estimated_delivered_kbps, useful_drawn_kbps: self.acc.useful_drawn_kbps,
             delivered_kbps_ewma: self.acc.delivered_kbps_ewma, useful_drawn_kbps_ewma: self.acc.useful_drawn_kbps_ewma,
             audio_kbps_ewma: self.acc.audio_kbps_ewma, min_service_baseline_ms: self.acc.min_service_baseline_ms, service_ewma_ms: self.acc.service_ewma_ms,
+            frame_bytes_ewma: self.acc.frame_bytes_ewma,
             oldest_outstanding_age_ms: oldest_age.as_millis() as u64, outstanding_frames, outstanding_bytes, has_pending_frame: has_pending,
             last_queued_duration_ms: self.acc.last_queued_duration_ms, last_write_duration_ms: self.acc.last_write_duration_ms,
             write_duration_ewma_ms: self.acc.write_duration_ewma_ms, video_bytes_written: self.acc.video_bytes_written,

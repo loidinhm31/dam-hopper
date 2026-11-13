@@ -1,7 +1,7 @@
 use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-
+use std::sync::Arc;
 // Constants from architecture-contracts.md
 pub const BHJF_MAGIC: &[u8; 4] = b"BHJF";
 pub const BHJF_VERSION: u8 = 1;
@@ -315,26 +315,37 @@ pub fn parse_jpeg_dimensions(data: &[u8]) -> Result<(u32, u32), ProtocolError> {
     Err(ProtocolError::InvalidJpeg("SOF marker not found".to_string()))
 }
 
-/// Pack a complete target BHJF frame into an immutable contiguous Bytes buffer.
-pub fn pack_bhjf_frame(header: &TargetFrameHeader, jpeg_payload: &[u8]) -> Result<Bytes, ProtocolError> {
-    header.validate()?;
+/// Immutable validated BHJF frame carrying pre-validated header and packed bytes.
+/// Constructed only via `pack_validated_bhjf_frame` or `unpack_validated_bhjf_frame`
+/// after header, payload bounds, and JPEG SOF dimension verification.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidatedBhjfFrame {
+    data: Bytes,
+    header: Arc<TargetFrameHeader>,
+}
 
-    if jpeg_payload.is_empty() {
-        return Err(ProtocolError::InvalidPayloadLength(0));
-    }
-    if jpeg_payload.len() > MAX_JPEG_PAYLOAD_BYTES {
-        return Err(ProtocolError::InvalidPayloadLength(jpeg_payload.len()));
-    }
-
-    // Validate actual JPEG dimensions against header
-    let (real_w, real_h) = parse_jpeg_dimensions(jpeg_payload)?;
-    if real_w != header.width || real_h != header.height {
-        return Err(ProtocolError::InvalidGeometry(format!(
-            "header dimensions ({}x{}) do not match JPEG SOF ({}x{})",
-            header.width, header.height, real_w, real_h
-        )));
+impl ValidatedBhjfFrame {
+    pub fn data(&self) -> &Bytes {
+        &self.data
     }
 
+    pub fn into_parts(self) -> (Bytes, Arc<TargetFrameHeader>) {
+        (self.data, self.header)
+    }
+
+    pub fn header(&self) -> &TargetFrameHeader {
+        &self.header
+    }
+
+    pub fn header_arc(&self) -> &Arc<TargetFrameHeader> {
+        &self.header
+    }
+}
+
+fn pack_bhjf_frame_bytes_checked(
+    header: &TargetFrameHeader,
+    jpeg_payload: &[u8],
+) -> Result<Bytes, ProtocolError> {
     let header_json = serde_json::to_string(header)
         .map_err(|e| ProtocolError::InvalidJson(e.to_string()))?;
     let header_bytes = header_json.as_bytes();
@@ -376,6 +387,87 @@ pub fn pack_bhjf_frame(header: &TargetFrameHeader, jpeg_payload: &[u8]) -> Resul
     buf.extend_from_slice(jpeg_payload);
 
     Ok(buf.freeze())
+}
+
+/// Pack a complete target BHJF frame into an immutable contiguous Bytes buffer.
+pub fn pack_bhjf_frame(header: &TargetFrameHeader, jpeg_payload: &[u8]) -> Result<Bytes, ProtocolError> {
+    Ok(pack_validated_bhjf_frame(header.clone(), jpeg_payload)?.data)
+}
+
+/// Proof of verified JPEG SOF dimensions, constructible only by SOF validation functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValidatedJpegDims {
+    width: u32,
+    height: u32,
+}
+
+impl ValidatedJpegDims {
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+}
+
+/// Parses JPEG SOF marker to inspect and validate actual image dimensions without a full decode,
+/// returning a proof token `ValidatedJpegDims`.
+pub fn validate_jpeg_sof(data: &[u8]) -> Result<ValidatedJpegDims, ProtocolError> {
+    let (width, height) = parse_jpeg_dimensions(data)?;
+    Ok(ValidatedJpegDims { width, height })
+}
+
+/// Validates header and JPEG SOF dimensions once, packs the BHJF frame, and returns a
+/// `ValidatedBhjfFrame` retaining the immutable `Arc<TargetFrameHeader>` alongside the `Bytes`.
+pub fn pack_validated_bhjf_frame(
+    header: TargetFrameHeader,
+    jpeg_payload: &[u8],
+) -> Result<ValidatedBhjfFrame, ProtocolError> {
+    let dims = validate_jpeg_sof(jpeg_payload)?;
+    pack_validated_bhjf_frame_with_dims(header, jpeg_payload, dims)
+}
+
+pub(crate) fn pack_validated_bhjf_frame_with_dims(
+    header: TargetFrameHeader,
+    jpeg_payload: &[u8],
+    dims: ValidatedJpegDims,
+) -> Result<ValidatedBhjfFrame, ProtocolError> {
+    header.validate()?;
+
+    if jpeg_payload.is_empty() {
+        return Err(ProtocolError::InvalidPayloadLength(0));
+    }
+    if jpeg_payload.len() > MAX_JPEG_PAYLOAD_BYTES {
+        return Err(ProtocolError::InvalidPayloadLength(jpeg_payload.len()));
+    }
+
+    let (real_w, real_h) = dims.dimensions();
+    if real_w != header.width || real_h != header.height {
+        return Err(ProtocolError::InvalidGeometry(format!(
+            "header dimensions ({}x{}) do not match JPEG SOF ({}x{})",
+            header.width, header.height, real_w, real_h
+        )));
+    }
+
+    let data = pack_bhjf_frame_bytes_checked(&header, jpeg_payload)?;
+    Ok(ValidatedBhjfFrame {
+        data,
+        header: Arc::new(header),
+    })
+}
+
+/// Unpacks and validates raw BHJF bytes into a `ValidatedBhjfFrame`.
+pub fn unpack_validated_bhjf_frame(data: Bytes) -> Result<ValidatedBhjfFrame, ProtocolError> {
+    let (header, _) = unpack_bhjf_frame(&data)?;
+    Ok(ValidatedBhjfFrame {
+        data,
+        header: Arc::new(header),
+    })
 }
 
 /// Unpack and validate a BHJF frame from raw binary WebSocket data.

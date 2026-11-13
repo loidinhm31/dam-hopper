@@ -24,7 +24,28 @@ export const MAX_INSERT_TEXT_BYTES = 4096;
 export const MAX_HANDOFF_BYTES = 16 * 1024;
 // Leave headroom below the control channel's 100/s limit for pointer/cleanup records.
 const HANDOFF_INTERVAL_MS = 25;
+/**
+ * Minimum interval between replaceable coalescable flushes (pointerMove / wheel).
+ * Bound to 25ms (<=40/s) per performance contract.
+ */
+export const COALESCABLE_MIN_INTERVAL_MS = 25;
 
+/**
+ * Maximum rolling replaceable messages per second (pointerMove, wheel) - capped at <=40/s.
+ */
+export const MAX_REPLACEABLE_ROLLING_PER_SEC = 40;
+
+/**
+ * Combined rolling ceiling for normal traffic (replaceable + discrete presses/text). Leaves
+ * 20/s of headroom beneath the server's 100/s sustained control limit.
+ */
+export const MAX_NORMAL_ROLLING_PER_SEC = 80;
+
+/**
+ * Hard combined rolling ceiling, equal to the server's sustained control limit. Only release
+ * transitions (keyUp/pointerUp/pointerCancel) may use the headroom above the normal ceiling.
+ */
+export const MAX_COMBINED_ROLLING_PER_SEC = 100;
 type KeyboardInput = Extract<InputEvent, { kind: "keyDown" | "keyUp" | "insertText" }>;
 
 interface ControlHandoff {
@@ -106,6 +127,12 @@ export class BrowserInputController {
   private heldButtons = new Set<MouseButton>();
   private lastPointerCoords: { u: number; v: number } | null = null;
   private pendingCoalescable: InputMessage | null = null;
+  private coalescableTimer: number | null = null;
+  private lastCoalescableFlushAt = -Infinity;
+  /** Every message actually sent live (replaceable + discrete), rolling 1s. */
+  private sentTimestamps: number[] = [];
+  /** Subset of sentTimestamps that were replaceable (pointerMove / wheel). */
+  private replaceableSentTimestamps: number[] = [];
   private isDisposed = false;
   private handoff: ControlHandoff | null = null;
   private handoffId = 0;
@@ -206,7 +233,7 @@ export class BrowserInputController {
   }
 
   private dispatchKeyboardInput(event: KeyboardInput): boolean {
-    this.flushCoalescable();
+    this.flushCoalescable(true);
     if (!this.sendInputEvent(event)) return false;
     // Only remotely dispatched keys belong in held-state cleanup.
     if (event.kind === "keyDown") this.heldKeys.set(event.code, { key: event.key, code: event.code });
@@ -262,18 +289,24 @@ export class BrowserInputController {
     if (!coords) return false;
 
     const button = mapPointerButton(e.button);
-    this.heldButtons.add(button);
     this.lastPointerCoords = coords;
 
-    this.flushCoalescable();
+    this.flushCoalescable(true);
 
-    return this.sendInputEvent({
-      kind: "pointerDown",
-      button,
-      u: coords.u,
-      v: coords.v,
-      modifiers: extractModifiers(e),
-    });
+    // Record held state only after the press was actually dispatched.
+    if (
+      !this.sendInputEvent({
+        kind: "pointerDown",
+        button,
+        u: coords.u,
+        v: coords.v,
+        modifiers: extractModifiers(e),
+      })
+    ) {
+      return false;
+    }
+    this.heldButtons.add(button);
+    return true;
   }
 
   public handlePointerUp(
@@ -290,7 +323,7 @@ export class BrowserInputController {
     this.heldButtons.delete(button);
     this.lastPointerCoords = coords;
 
-    this.flushCoalescable();
+    this.flushCoalescable(true);
 
     return this.sendInputEvent({
       kind: "pointerUp",
@@ -323,12 +356,11 @@ export class BrowserInputController {
   public handlePointerCancel(): boolean {
     if (this.isDisposed) return false;
     this.heldButtons.clear();
-    this.flushCoalescable();
+    this.flushCoalescable(true);
     return this.sendInputEvent({
       kind: "pointerCancel",
     });
   }
-
   public handleWheel(
     e: WheelEvent | React.WheelEvent<HTMLCanvasElement>,
   ): boolean {
@@ -429,7 +461,13 @@ export class BrowserInputController {
     if (this.pendingCoalescable) {
       const prev = this.pendingCoalescable.event;
       if (prev.kind === "pointerMove" && event.kind === "pointerMove") {
-        // Coalesce pointer move: update coordinates and modifiers
+        prev.u = event.u;
+        prev.v = event.v;
+        prev.modifiers = event.modifiers;
+        return true;
+      }
+      if (prev.kind === "wheel" && event.kind === "pointerMove") {
+        // Never overwrite accumulated wheel deltas: the wheel carries the latest pointer position.
         prev.u = event.u;
         prev.v = event.v;
         prev.modifiers = event.modifiers;
@@ -445,12 +483,12 @@ export class BrowserInputController {
         prev.modifiers = event.modifiers;
         return true;
       }
-      // Different event: flush pending before creating new
-      this.flushCoalescable();
+      // Different coalescable event: replace pending event while preserving scheduled cadence
+      this.pendingCoalescable.event = event;
+      this.scheduleCoalescableFlush();
+      return true;
     }
-
     const vpEpoch = Number(this.getViewportEpoch());
-    const seq = ++this.inputSeq;
 
     this.pendingCoalescable = {
       browserSessionId: this.getSessionId(),
@@ -458,44 +496,125 @@ export class BrowserInputController {
       profileEpoch: this.getProfileEpoch(),
       subscriptionEpoch: subEpoch,
       leaseToken,
-      inputSeq: seq,
+      inputSeq: 0,
       viewportEpoch: Number.isFinite(vpEpoch) ? vpEpoch : 1,
       event,
     };
 
-    // Schedule immediate microtask flush
-    queueMicrotask(() => {
-      this.flushCoalescable();
-    });
+    this.scheduleCoalescableFlush();
 
     return true;
   }
 
-  private flushCoalescable(): void {
-    if (!this.pendingCoalescable) return;
-    const msg = this.pendingCoalescable;
-    this.pendingCoalescable = null;
-
-    const socket = this.getControlSocket();
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      if (socket.bufferedAmount > 256 * 1024) {
-        this.onError?.(new Error("Control socket output queue saturated"));
-        return;
-      }
-      try {
-        socket.send(JSON.stringify(msg));
-      } catch (err) {
-        this.onError?.(err instanceof Error ? err : new Error(String(err)));
-      }
+  private scheduleCoalescableFlush(): void {
+    if (this.coalescableTimer !== null || !this.pendingCoalescable) return;
+    const now = Date.now();
+    const elapsed = now - this.lastCoalescableFlushAt;
+    const delayMs = Math.max(0, COALESCABLE_MIN_INTERVAL_MS - elapsed);
+    if (delayMs === 0) {
+      queueMicrotask(() => {
+        this.flushCoalescable(false);
+      });
+    } else {
+      this.coalescableTimer = window.setTimeout(() => {
+        this.coalescableTimer = null;
+        this.flushCoalescable(false);
+      }, delayMs);
     }
   }
 
+  private cancelCoalescableTimer(): void {
+    if (this.coalescableTimer !== null) {
+      clearTimeout(this.coalescableTimer);
+      this.coalescableTimer = null;
+    }
+  }
+
+  private pruneBudget(now: number): void {
+    const cutoff = now - 1000;
+    while (this.sentTimestamps.length > 0 && this.sentTimestamps[0] < cutoff) {
+      this.sentTimestamps.shift();
+    }
+    while (
+      this.replaceableSentTimestamps.length > 0 &&
+      this.replaceableSentTimestamps[0] < cutoff
+    ) {
+      this.replaceableSentTimestamps.shift();
+    }
+  }
+
+  private canSendReplaceable(now: number): boolean {
+    this.pruneBudget(now);
+    return (
+      this.replaceableSentTimestamps.length < MAX_REPLACEABLE_ROLLING_PER_SEC &&
+      this.sentTimestamps.length < MAX_NORMAL_ROLLING_PER_SEC
+    );
+  }
+
+  private canSendDiscrete(now: number, isRelease: boolean): boolean {
+    this.pruneBudget(now);
+    return (
+      this.sentTimestamps.length <
+      (isRelease ? MAX_COMBINED_ROLLING_PER_SEC : MAX_NORMAL_ROLLING_PER_SEC)
+    );
+  }
+  private flushCoalescable(isBarrier = false): void {
+    this.cancelCoalescableTimer();
+    if (!this.pendingCoalescable) return;
+    const msg = this.pendingCoalescable;
+
+    const socket = this.getControlSocket();
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (socket.bufferedAmount > 256 * 1024) {
+      this.onError?.(new Error("Control socket output queue saturated"));
+      return;
+    }
+
+    const currentLease = this.getLeaseToken();
+    const currentSubEpoch = this.getSubscriptionEpoch();
+    if (
+      currentLease !== msg.leaseToken ||
+      currentSubEpoch !== msg.subscriptionEpoch
+    ) {
+      this.pendingCoalescable = null;
+      return;
+    }
+
+    const now = Date.now();
+    const elapsed = now - this.lastCoalescableFlushAt;
+    if (!isBarrier && elapsed < COALESCABLE_MIN_INTERVAL_MS) {
+      this.scheduleCoalescableFlush();
+      return;
+    }
+
+    if (!this.canSendReplaceable(now)) {
+      this.pendingCoalescable = null;
+      return;
+    }
+
+    this.pendingCoalescable = null;
+    msg.inputSeq = ++this.inputSeq;
+    this.lastCoalescableFlushAt = now;
+    this.sentTimestamps.push(now);
+    this.replaceableSentTimestamps.push(now);
+
+    try {
+      socket.send(JSON.stringify(msg));
+    } catch (err) {
+      this.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
   private syncLeaseState(): string | null {
     const currentLease = this.getLeaseToken();
     if (currentLease !== this.lastLeaseToken) {
       const priorLease = this.lastLeaseToken;
-      // Flush pending coalescable events on prior lease before resetting
-      this.flushCoalescable();
+      // Discard or flush pending coalescable events on prior lease before resetting
+      if (currentLease === null) {
+        this.cancelCoalescableTimer();
+        this.pendingCoalescable = null;
+      } else {
+        this.flushCoalescable();
+      }
       this.lastLeaseToken = currentLease;
       this.inputSeq = 0;
       if (priorLease !== null) {
@@ -516,7 +635,28 @@ export class BrowserInputController {
       return false;
     }
 
+    // Lease synchronisation may itself send release records: run it before admission so those
+    // sends are counted and the budget check sits immediately before this event's send.
     const leaseToken = this.syncLeaseState();
+    if (socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    const now = Date.now();
+    const isRelease =
+      event.kind === "keyUp" ||
+      event.kind === "pointerUp" ||
+      event.kind === "pointerCancel";
+    if (!this.canSendDiscrete(now, isRelease)) {
+      this.onError?.(new Error("Input rate budget saturated"));
+      // Key/button transitions are never silently dropped or queued without bound: close
+      // fail-closed so the server releases lease-held input and the owner reconnects.
+      try {
+        socket.close(1008, "input rate budget exhausted");
+      } catch {
+        // already closing
+      }
+      return false;
+    }
     const subEpoch = this.getSubscriptionEpoch();
     if (!leaseToken || !subEpoch) {
       return false;
@@ -537,6 +677,7 @@ export class BrowserInputController {
 
     try {
       socket.send(JSON.stringify(msg));
+      this.sentTimestamps.push(now);
       return true;
     } catch (err) {
       this.onError?.(err instanceof Error ? err : new Error(String(err)));
@@ -548,6 +689,8 @@ export class BrowserInputController {
    * Cleans up all held keys and pointer buttons to prevent stuck keys on blur/privacy/modal.
    */
   public releaseAllHeldInput(): void {
+    this.cancelCoalescableTimer();
+    this.pendingCoalescable = null;
     this.cancelControlHandoff();
     this.releaseDispatchedInput();
   }
@@ -572,12 +715,13 @@ export class BrowserInputController {
       this.heldButtons.clear();
     }
 
-    this.flushCoalescable();
   }
 
   public dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
+    this.cancelCoalescableTimer();
+    this.pendingCoalescable = null;
     this.releaseAllHeldInput();
   }
 }

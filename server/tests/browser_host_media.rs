@@ -2110,3 +2110,827 @@ fn viewer_delivery_estimator_duplicate_foreign_and_run_rotation_fences() {
     );
     assert!(MediaClientControlWire::parse_and_validate(&bad_hb).is_err());
 }
+
+#[test]
+fn test_viewer_credit_controller_admits_and_flushes_validated_frame_without_reunpack() {
+    use dam_hopper_server::browser_host::protocol::pack_validated_bhjf_frame;
+    use std::time::Instant;
+
+    let sub = Uuid::new_v4().to_string();
+    let run = Uuid::new_v4().to_string();
+    let t0 = Instant::now();
+    let mut ctrl = ViewerCreditController::with_min_interval_at(sub.clone(), Duration::from_millis(100), t0);
+
+    let make_validated = |seq: &str| {
+        let header = TargetFrameHeader {
+            browser_session_id: Uuid::new_v4().to_string(),
+            browser_incarnation: Uuid::new_v4().to_string(),
+            profile_epoch: "1".to_string(),
+            producer_run: run.clone(),
+            viewport_epoch: "1".to_string(),
+            frame_seq: seq.to_string(),
+            width: 64,
+            height: 64,
+            capture_time_unix_ms: 1000,
+            geometry: TargetGeometry {
+                css_width: 64.0,
+                css_height: 64.0,
+                offset_top: 0.0,
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+                page_scale: 1.0,
+                visual_offset_x: 0.0,
+                visual_offset_y: 0.0,
+                dpr: 1.0,
+            },
+            input_trusted: true,
+        };
+        let validated = pack_validated_bhjf_frame(header, &make_dummy_jpeg()).unwrap();
+        let res = global_memory_controller()
+            .try_reserve(validated.data().len())
+            .unwrap();
+        TrackedBhjfFrame::from_validated(validated, res)
+    };
+
+    let f1 = make_validated("1");
+    let f2 = make_validated("2");
+    let f1_hdr_ptr = f1.header_arc().unwrap().clone();
+    let f2_hdr_ptr = f2.header_arc().unwrap().clone();
+
+    let sent1 = ctrl.on_incoming_frame_at(f1, t0).expect("f1 admitted");
+    assert!(Arc::ptr_eq(sent1.header_arc().unwrap(), &f1_hdr_ptr));
+
+    // Immediate f2 held as pending
+    assert!(ctrl.on_incoming_frame_at(f2, t0 + Duration::from_millis(10)).is_none());
+    assert!(ctrl.has_pending());
+
+    // Flush pending f2 after interval -> retains exact Arc<TargetFrameHeader> without re-parsing
+    let sent2 = ctrl
+        .check_flush_pending_at(t0 + Duration::from_millis(110))
+        .expect("f2 flushed");
+    assert!(Arc::ptr_eq(sent2.header_arc().unwrap(), &f2_hdr_ptr));
+}
+
+#[tokio::test]
+async fn test_decoupled_media_writer_blocked_sink_reservation_audio_drop_and_cancel() {
+    use dam_hopper_server::browser_host::diagnostics::MemoryAdmissionController;
+    use dam_hopper_server::browser_host::media_writer::{
+        spawn_media_writer, MediaPacketSink, MediaWriterEvent, OutboundMediaPacket,
+    };
+    use dam_hopper_server::browser_host::protocol::{
+        pack_validated_bhjf_frame, ProducerAudioChunk, AUDIO_CHANNELS, AUDIO_ENCODING_PCM16LE,
+        AUDIO_SAMPLE_RATE,
+    };
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::time::Instant;
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
+
+    struct BlockedSink {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+        sent_packets: Arc<parking_lot::Mutex<Vec<OutboundMediaPacket>>>,
+    }
+
+    impl MediaPacketSink for BlockedSink {
+        fn send_packet(
+            &mut self,
+            packet: OutboundMediaPacket,
+        ) -> Pin<Box<dyn Future<Output = Result<(), &'static str>> + Send + '_>> {
+            let started = self.started.clone();
+            let release = self.release.clone();
+            let sent_packets = self.sent_packets.clone();
+            Box::pin(async move {
+                started.notify_one();
+                release.notified().await;
+                sent_packets.lock().push(packet);
+                Ok(())
+            })
+        }
+    }
+
+    let mem_ctrl = MemoryAdmissionController::new(1024 * 1024);
+    let sub = Uuid::new_v4().to_string();
+    let run = Uuid::new_v4().to_string();
+    let t0 = Instant::now();
+    let mut ctrl = ViewerCreditController::with_min_interval_at(
+        sub.clone(),
+        Duration::from_millis(10),
+        t0,
+    );
+
+    let make_tracked = |seq: &str| {
+        let header = TargetFrameHeader {
+            browser_session_id: Uuid::new_v4().to_string(),
+            browser_incarnation: Uuid::new_v4().to_string(),
+            profile_epoch: "1".to_string(),
+            producer_run: run.clone(),
+            viewport_epoch: "1".to_string(),
+            frame_seq: seq.to_string(),
+            width: 64,
+            height: 64,
+            capture_time_unix_ms: 1000,
+            geometry: TargetGeometry {
+                css_width: 64.0,
+                css_height: 64.0,
+                offset_top: 0.0,
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+                page_scale: 1.0,
+                visual_offset_x: 0.0,
+                visual_offset_y: 0.0,
+                dpr: 1.0,
+            },
+            input_trusted: true,
+        };
+        let validated = pack_validated_bhjf_frame(header, &make_dummy_jpeg()).unwrap();
+        let res = mem_ctrl.try_reserve(validated.data().len()).unwrap();
+        TrackedBhjfFrame::from_validated(validated, res)
+    };
+
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let sent_packets = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let cancel = CancellationToken::new();
+
+    let (writer, mut events, join) = spawn_media_writer(
+        BlockedSink {
+            started: started.clone(),
+            release: release.clone(),
+            sent_packets: sent_packets.clone(),
+        },
+        cancel.clone(),
+        None,
+        |_, _| true,
+    );
+
+    let f1 = make_tracked("1");
+    let f1_bytes = f1.byte_length();
+    let admitted1 = ctrl
+        .on_incoming_frame_with_writer_state_at(f1, writer.is_frame_busy(), t0)
+        .expect("f1 admitted");
+    assert!(writer.enqueue_admitted_frame(admitted1));
+
+    // Wait for writer to enter blocked send of f1
+    started.notified().await;
+    assert!(writer.is_frame_busy());
+
+    // While sink is blocked on f1:
+    // 1. Reader processes ACK for f1 immediately without blocking!
+    //    Because writer_frame_busy is true, freeing credit does NOT admit a second frame into writer.
+    let f2 = make_tracked("2");
+    let f3 = make_tracked("3");
+    assert!(
+        ctrl.on_incoming_frame_with_writer_state_at(
+            f2,
+            writer.is_frame_busy(),
+            t0 + Duration::from_millis(20),
+        )
+        .is_none(),
+        "writer busy prevents admitting f2 into outstanding; f2 stays in pending_frame"
+    );
+    assert!(
+        ctrl.on_incoming_frame_with_writer_state_at(
+            f3,
+            writer.is_frame_busy(),
+            t0 + Duration::from_millis(30),
+        )
+        .is_none(),
+        "f3 replaces f2 in pending_frame without creating a second FIFO"
+    );
+    // Even after ACK for f1 arrives while writer is still flushing f1's tail bytes,
+    // f1's MemoryReservation remains held by the writer until physical send completes!
+    let flushed_on_ack = ctrl.on_credit_return_with_writer_state_at(
+        &sub,
+        &run,
+        "1",
+        "1",
+        false,
+        None,
+        Some(4.0),
+        writer.is_frame_busy(),
+        t0 + Duration::from_millis(35),
+    );
+    assert!(flushed_on_ack.is_none(), "pending f3 stays in controller while writer is busy");
+    assert_eq!(ctrl.total_acked, 1);
+    assert_eq!(
+        mem_ctrl.current_reserved_bytes(),
+        f1_bytes * 2,
+        "both in-flight writer frame f1 and pending frame f3 hold reservations; f2 was dropped"
+    );
+
+    // 2. Enqueue 3 audio chunks while sink is blocked -> only latest audio chunk (seq 3) is retained
+    use base64::Engine as _;
+    let valid_audio_b64: Arc<str> = Arc::from(base64::engine::general_purpose::STANDARD.encode(&[0u8; 960]));
+    for seq in ["1", "2", "3"] {
+        let chunk = ProducerAudioChunk {
+            browser_session_id: Uuid::new_v4().to_string(),
+            browser_incarnation: Uuid::new_v4().to_string(),
+            profile_epoch: "1".to_string(),
+            producer_run: run.clone(),
+            doc_epoch: 1,
+            audio_seq: seq.to_string(),
+            sample_rate: AUDIO_SAMPLE_RATE,
+            channels: AUDIO_CHANNELS,
+            encoding: AUDIO_ENCODING_PCM16LE.to_string(),
+            data: valid_audio_b64.clone(),
+            reservation: None,
+        };
+        assert!(writer.enqueue_latest_audio(&sub, chunk));
+    }
+
+    // Release blocked sink for f1
+    release.notify_one();
+    let ev1 = events.recv().await.expect("frame sent event");
+    assert!(matches!(ev1, MediaWriterEvent::FrameSent { byte_len, .. } if byte_len == f1_bytes));
+
+    // Wait for writer to start sending the single latest audio chunk (seq 3) and release it
+    started.notified().await;
+    release.notify_one();
+    let ev_audio = events.recv().await.expect("audio sent event");
+    assert!(matches!(ev_audio, MediaWriterEvent::AudioSent { .. }));
+
+    // Verify only 1 binary frame and 1 audio text message (audioSeq "3") were sent
+    {
+        let sent = sent_packets.lock();
+        assert_eq!(sent.len(), 2);
+        match &sent[1] {
+            OutboundMediaPacket::Text(json) => {
+                assert!(json.contains(r#""audioSeq":"3""#), "stale audio 1 & 2 must be dropped");
+            }
+            _ => panic!("expected text audio packet"),
+        }
+    }
+
+    // Cancel writer and drop controller -> all reservations return to 0
+    cancel.cancel();
+    let _ = join.await;
+    drop(ctrl);
+    assert_eq!(mem_ctrl.current_reserved_bytes(), 0);
+}
+
+#[test]
+fn test_viewer_permit_respects_configured_max_viewers() {
+    // Private counter: the global ACTIVE_VIEWERS is held by concurrently running live handler tests.
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    use dam_hopper_server::browser_host::media::ViewerPermit;
+
+    // max_viewers = 1 rejects second viewer permit, max_viewers = 3 admits up to 3
+    {
+        let p1 = ViewerPermit::try_acquire_in(&COUNTER, 1).expect("first viewer admitted at cap=1");
+        assert!(
+            ViewerPermit::try_acquire_in(&COUNTER, 1).is_err(),
+            "second viewer must be rejected when max_viewers=1"
+        );
+        drop(p1);
+    }
+    {
+        let p1 = ViewerPermit::try_acquire_in(&COUNTER, 3).expect("viewer 1 at cap=3");
+        let p2 = ViewerPermit::try_acquire_in(&COUNTER, 3).expect("viewer 2 at cap=3");
+        let p3 = ViewerPermit::try_acquire_in(&COUNTER, 3).expect("viewer 3 at cap=3");
+        assert!(
+            ViewerPermit::try_acquire_in(&COUNTER, 3).is_err(),
+            "viewer 4 rejected at cap=3"
+        );
+        drop(p1);
+        drop(p2);
+        drop(p3);
+    }
+    assert_eq!(COUNTER.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn test_media_writer_lifecycle_channel_saturation_lossless_flush() {
+    use dam_hopper_server::browser_host::media_writer::{
+        spawn_media_writer, MediaPacketSink, MediaWriterEvent, OutboundMediaPacket,
+    };
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio_util::sync::CancellationToken;
+
+    struct FastRecordingSink {
+        sent_count: Arc<AtomicUsize>,
+    }
+    impl MediaPacketSink for FastRecordingSink {
+        fn send_packet(
+            &mut self,
+            _packet: OutboundMediaPacket,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<(), &'static str>> + Send + '_>> {
+            self.sent_count.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    let sent_count = Arc::new(AtomicUsize::new(0));
+    let cancel = CancellationToken::new();
+    let (writer, mut events, join) = spawn_media_writer(
+        FastRecordingSink {
+            sent_count: sent_count.clone(),
+        },
+        cancel.clone(),
+        None,
+        |_, _| true,
+    );
+
+    // Consumer is STALLED: we do not read from `events` channel.
+    // Channel capacity is 16. We send 25 control messages sequentially.
+    let mut expected_control_bytes = 0usize;
+    for i in 0..25 {
+        let text = format!("control-message-{:03}", i);
+        expected_control_bytes += text.len();
+        writer.enqueue_control_text(text);
+        // Small yield so writer task has time to process and write each item to sink
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // Give writer a moment to settle to idle with pending aggregates
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Now consumer drains `events`: capacity returns, idle writer flushes pending aggregates
+    let mut drained_control_bytes = 0usize;
+    let mut events_count = 0usize;
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(100), events.recv()).await {
+        events_count += 1;
+        if let MediaWriterEvent::ControlSent { byte_len, .. } = ev {
+            drained_control_bytes += byte_len;
+        }
+    }
+
+    assert_eq!(
+        drained_control_bytes, expected_control_bytes,
+        "exact total control bytes must be delivered losslessly across saturation and aggregation"
+    );
+    assert!(events_count > 0);
+
+    cancel.cancel();
+    let _ = join.await;
+}
+
+#[tokio::test]
+async fn test_media_writer_audio_cancellation_retires_sink_without_stale_leak() {
+    use base64::Engine as _;
+    use dam_hopper_server::browser_host::diagnostics::MemoryAdmissionController;
+    use dam_hopper_server::browser_host::media_writer::{
+        spawn_media_writer, MediaPacketSink, MediaWriterEvent, OutboundMediaPacket,
+    };
+    use dam_hopper_server::browser_host::protocol::{
+        ProducerAudioChunk, AUDIO_CHANNELS, AUDIO_ENCODING_PCM16LE, AUDIO_SAMPLE_RATE,
+    };
+    use dam_hopper_server::browser_host::screencast::AudioDocAuthority;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
+
+    struct AcceptThenBlockFlushSink {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+        send_count: Arc<AtomicUsize>,
+    }
+    impl MediaPacketSink for AcceptThenBlockFlushSink {
+        fn send_packet(
+            &mut self,
+            _packet: OutboundMediaPacket,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<(), &'static str>> + Send + '_>> {
+            let started = self.started.clone();
+            let release = self.release.clone();
+            let send_count = self.send_count.clone();
+            Box::pin(async move {
+                send_count.fetch_add(1, Ordering::SeqCst);
+                started.notify_one();
+                release.notified().await;
+                Ok(())
+            })
+        }
+    }
+
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let send_count = Arc::new(AtomicUsize::new(0));
+    let cancel = CancellationToken::new();
+
+    let (doc_tx, doc_rx) = tokio::sync::watch::channel(AudioDocAuthority::for_epoch(1));
+    let mem_ctrl = MemoryAdmissionController::new(1024 * 1024);
+    let reservation = mem_ctrl.try_reserve(2048).expect("reserve 2048 bytes");
+    assert_eq!(mem_ctrl.current_reserved_bytes(), 2048);
+
+    let (writer, mut events, join) = spawn_media_writer(
+        AcceptThenBlockFlushSink {
+            started: started.clone(),
+            release: release.clone(),
+            send_count: send_count.clone(),
+        },
+        cancel.clone(),
+        Some(doc_rx),
+        |_, _| true,
+    );
+
+    let valid_b64: Arc<str> = Arc::from(base64::engine::general_purpose::STANDARD.encode(&[0u8; 960]));
+    let chunk = ProducerAudioChunk {
+        browser_session_id: Uuid::new_v4().to_string(),
+        browser_incarnation: Uuid::new_v4().to_string(),
+        profile_epoch: "1".to_string(),
+        producer_run: Uuid::new_v4().to_string(),
+        doc_epoch: 1,
+        audio_seq: "1".to_string(),
+        sample_rate: AUDIO_SAMPLE_RATE,
+        channels: AUDIO_CHANNELS,
+        encoding: AUDIO_ENCODING_PCM16LE.to_string(),
+        data: valid_b64,
+        reservation: Some(Arc::new(reservation)),
+    };
+
+    assert!(writer.enqueue_latest_audio("sub-1", chunk));
+
+    // Wait until sink accepts payload and enters blocked flush
+    started.notified().await;
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    assert_eq!(mem_ctrl.current_reserved_bytes(), 2048, "reservation must be held while sink is flushing");
+
+    // Change document authority to epoch 2 mid-flush
+    doc_tx.send(AudioDocAuthority::for_epoch(2)).unwrap();
+
+    // Writer must detect interrupt after sink accepted item:
+    // Transport is retired (cancel token cancelled), reservation released only after retirement, and task exits.
+    let _ = join.await;
+
+    assert!(cancel.is_cancelled(), "media transport must be retired/cancelled on doc change mid-flush");
+    assert_eq!(
+        mem_ctrl.current_reserved_bytes(),
+        0,
+        "memory reservation must be released after transport retirement"
+    );
+
+    // Verify TransportFailed was emitted
+    let ev = events.recv().await.expect("transport failed event");
+    assert!(
+        matches!(ev, MediaWriterEvent::TransportFailed(_)),
+        "expected TransportFailed, got: {:?}",
+        ev
+    );
+
+    // Sink is NEVER reused: send_count remains 1
+    assert_eq!(send_count.load(Ordering::SeqCst), 1, "sink must not be reused after retirement");
+}
+
+#[test]
+fn credit_controller_runtime_pacing_and_stall_suspension_keep_credits_and_bounded_pending() {
+    use std::time::Instant;
+    let sub = Uuid::new_v4().to_string();
+    let run = Uuid::new_v4().to_string();
+    let now = Instant::now();
+    let mut c = ViewerCreditController::with_min_interval_at(sub.clone(), Duration::from_millis(40), now);
+
+    assert!(c.on_incoming_frame_at(make_test_frame(&run, "1", "1"), now).is_some());
+    // Adaptive pacing slows this viewer only; the held frame stays the single bounded pending slot.
+    c.set_min_delivery_interval(Duration::from_millis(500));
+    assert!(c.on_incoming_frame_at(make_test_frame(&run, "1", "2"), now + Duration::from_millis(100)).is_none());
+    assert!(c.has_pending());
+    assert!(c.check_flush_pending_at(now + Duration::from_millis(499)).is_none());
+    let f2 = c.check_flush_pending_at(now + Duration::from_millis(501)).expect("flushes after the new interval");
+    assert_eq!(f2.header().unwrap().frame_seq, "2");
+    assert_eq!(c.outstanding_count(), MAX_OUTSTANDING_PER_VIEWER);
+
+    let t = now + Duration::from_secs(1);
+    assert!(c.on_credit_return_with_feedback_at(&sub, &run, "1", "1", false, None, None, t).is_none());
+    assert!(c.on_credit_return_with_feedback_at(&sub, &run, "1", "2", false, None, None, t).is_none());
+    assert_eq!(c.outstanding_count(), 0);
+
+    // Stalled viewer: no new sends, newest frame replaces the pending slot, resume sends the newest.
+    c.set_send_suspended(true);
+    let t2 = t + Duration::from_secs(2);
+    assert!(c.on_incoming_frame_at(make_test_frame(&run, "1", "3"), t2).is_none());
+    assert!(c.on_incoming_frame_at(make_test_frame(&run, "1", "4"), t2 + Duration::from_millis(10)).is_none());
+    assert!(c.check_flush_pending_at(t2 + Duration::from_secs(5)).is_none(), "suspended viewer gets no sends");
+    assert_eq!(c.outstanding_count(), 0);
+    c.set_send_suspended(false);
+    let resumed = c.check_flush_pending_at(t2 + Duration::from_secs(5)).expect("resume");
+    assert_eq!(resumed.header().unwrap().frame_seq, "4", "only the newest frame survives suspension");
+}
+
+async fn collect_audio_seqs<S>(ws: &mut S, window: Duration) -> Vec<String>
+where
+    S: futures_util::Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Unpin,
+{
+    use futures_util::StreamExt;
+    let end = tokio::time::Instant::now() + window;
+    let mut seqs = Vec::new();
+    while let Ok(Some(Ok(msg))) = tokio::time::timeout_at(end, ws.next()).await {
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if v["kind"] == "audioChunk" {
+                    seqs.push(v["audioSeq"].as_str().unwrap().to_string());
+                }
+            }
+        }
+    }
+    seqs
+}
+
+#[tokio::test]
+async fn test_live_media_session_withholds_muted_viewer_audio_server_side_and_resumes_fresh() {
+    use base64::engine::general_purpose::STANDARD as B64;
+    use base64::Engine as _;
+    use dam_hopper_server::agent_store::AgentStoreService;
+    use dam_hopper_server::api::browser_host::global_attachment_manager;
+    use dam_hopper_server::api::build_router;
+    use dam_hopper_server::browser_host::attachments::{AttachmentPurpose, IssueTicketRequest};
+    use dam_hopper_server::browser_host::auth::BrowserAdmission;
+    use dam_hopper_server::browser_host::cdp::CdpClient;
+    use dam_hopper_server::browser_host::media::get_or_register_producer;
+    use dam_hopper_server::browser_host::screencast::ScreencastProducer;
+    use dam_hopper_server::config::{DamHopperConfig, FeaturesConfig, GlobalConfig, WorkspaceInfo};
+    use dam_hopper_server::crypto::DamHopperOpaqueSuite;
+    use dam_hopper_server::diagnostics::DiagnosticStore;
+    use dam_hopper_server::fs::FsSubsystem;
+    use dam_hopper_server::pty::{BroadcastEventSink, PtySessionManager};
+    use dam_hopper_server::state::AppState;
+    use dam_hopper_server::tunnel::{CloudflaredDriver, TunnelSessionManager};
+    use futures_util::{SinkExt, StreamExt};
+    use opaque_ke::ServerSetup;
+    use rand::rngs::OsRng;
+    use tempfile::tempdir;
+    use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    // Mock CDP: replies success to every command (enough for page session + screencast start).
+    let cdp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cdp_addr = cdp_listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let Ok((stream, _)) = cdp_listener.accept().await else { return };
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) = ws.next().await {
+            let cmd: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let reply = if cmd["method"] == "Target.attachToTarget" {
+                serde_json::json!({"id": cmd["id"], "result": {"sessionId": "MOCK-PAGE-SESSION"}})
+            } else {
+                serde_json::json!({"id": cmd["id"], "result": {}})
+            };
+            if ws
+                .send(tokio_tungstenite::tungstenite::Message::Text(reply.to_string().into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    let client = CdpClient::connect(&format!("ws://{cdp_addr}")).await.expect("mock cdp");
+
+    let tmp = tempdir().unwrap();
+    let workspace_root = tmp.path().to_path_buf();
+    let (event_sink, _rx) = BroadcastEventSink::new(512);
+    let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
+    let config = DamHopperConfig {
+        workspace: WorkspaceInfo { name: "test".into(), root: workspace_root.display().to_string() },
+        agent_store: None,
+        server: dam_hopper_server::config::ServerConfig::default(),
+        projects: vec![],
+        features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
+        config_path: workspace_root.join("dam-hopper.toml"),
+    };
+    let state = AppState::new(
+        workspace_root.clone(),
+        config,
+        GlobalConfig::default(),
+        pty_manager,
+        AgentStoreService::new(workspace_root.join(".dam-hopper/agent-store")),
+        event_sink.clone(),
+        "test-secret-audio-gate".to_string(),
+        FsSubsystem::new(vec![]),
+        None,
+        true,
+        TunnelSessionManager::new(Arc::new(event_sink), Arc::new(CloudflaredDriver)),
+        None,
+        ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+        DiagnosticStore::new(workspace_root.join("diagnostics.jsonl")),
+    )
+    .expect("test AppState");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local_addr = listener.local_addr().unwrap();
+    state.record_bound_listener(local_addr).expect("record listener");
+    let router = build_router(state);
+    tokio::spawn(async move {
+        axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let inc = Uuid::new_v4().to_string();
+    let (dto, _) = dam_hopper_server::api::browser_host::global_session_registry()
+        .insert_running_for_test(
+            "dev-user",
+            true,
+            &inc,
+            1,
+            &dam_hopper_server::browser_host::session::CreateSessionRequest {
+                creation_key: Uuid::new_v4().to_string(),
+                url: "about:blank".to_string(),
+                viewport: dam_hopper_server::browser_host::session::ViewportRequest { width: 1280, height: 900, dpr: 1.0 },
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+    let session_id = dto.browser_session_id;
+    let producer = Arc::new(
+        ScreencastProducer::new(
+            session_id.clone(),
+            inc.clone(),
+            1,
+            1,
+            client,
+            "PAGE-AUDIO-GATE".to_string(),
+            TargetGeometry {
+                css_width: 1280.0, css_height: 900.0, offset_top: 0.0, scroll_x: 0.0, scroll_y: 0.0,
+                page_scale: 1.0, visual_offset_x: 0.0, visual_offset_y: 0.0, dpr: 1.0,
+            },
+        )
+        .with_capture_policy(24, 75),
+    );
+    producer.ensure_page_session().await.expect("page session");
+    producer.start_screencast_run().await.expect("start run");
+    get_or_register_producer(&session_id, producer.clone()).await;
+
+    let viewer_id = "audio-gate-viewer";
+    let sub_epoch = Uuid::new_v4().to_string();
+    let admission = BrowserAdmission {
+        principal: "dev-user".to_string(),
+        is_dev: true,
+        session_id: Some("dev-sess".to_string()),
+        auth_version: Some(1),
+        credential_version: Some(1),
+        effective_deadline: None,
+    };
+    let ticket = global_attachment_manager()
+        .issue_ticket(
+            &admission,
+            &IssueTicketRequest {
+                purpose: AttachmentPurpose::Media,
+                browser_session_id: Some(session_id.clone()),
+                viewer_id: Some(viewer_id.to_string()),
+                subscription_epoch: Some(sub_epoch.clone()),
+                browser_incarnation: inc.clone(),
+                profile_epoch: 1,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let mut req = format!("ws://{local_addr}/api/browser/media").into_client_request().unwrap();
+    req.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        format!("damhopper.browser.media.v1, damhopper.ticket.{}", ticket.ticket).parse().unwrap(),
+    );
+    let (mut media_ws, _) = connect_async(req).await.expect("media ws connect");
+    for _ in 0..80 {
+        if producer.viewer_audio_gate(&sub_epoch).is_some() {
+            break;
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+    assert!(producer.viewer_audio_gate(&sub_epoch).is_some(), "media session registered its subscription");
+
+    let pcm = B64.encode([0x12u8, 0x34, 0x56, 0x78]);
+    // Attach can race the run's first zero-demand tick: wait until the producer is settled.
+    for _ in 0..120 {
+        if producer.state().await == dam_hopper_server::browser_host::screencast::ScreencastState::Streaming
+            && producer.audio_source_run().is_some()
+        {
+            break;
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+    let run = producer.audio_source_run().expect("audio source");
+    let doc = producer.audio_doc_epoch();
+
+    // 1. Allowed viewer receives audio.
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 1");
+    assert_eq!(collect_audio_seqs(&mut media_ws, Duration::from_millis(900)).await, vec!["1"]);
+
+    // 2. After the mute gate is acknowledged, zero new chunks are sent (server-side, not player gain).
+    assert!(producer.set_viewer_muted(&sub_epoch, true));
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 2 admitted by producer");
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 3 admitted by producer");
+    assert!(
+        collect_audio_seqs(&mut media_ws, Duration::from_millis(700)).await.is_empty(),
+        "muted viewer must receive zero newly sent audio chunks"
+    );
+
+    // 3. Unmute resumes with fresh chunks only; suppressed chunks are never replayed.
+    assert!(producer.set_viewer_muted(&sub_epoch, false));
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 4");
+    assert_eq!(collect_audio_seqs(&mut media_ws, Duration::from_millis(900)).await, vec!["4"]);
+
+    // 4. A removed/expired subscription fails closed even while another viewer keeps the source alive.
+    producer
+        .register_viewer_demand("keepalive-viewer", &Uuid::new_v4().to_string(), true)
+        .await;
+    producer.remove_viewer_demand(&sub_epoch).await;
+    assert!(producer.viewer_audio_gate(&sub_epoch).is_none());
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 5 admitted by producer");
+    assert!(
+        collect_audio_seqs(&mut media_ws, Duration::from_millis(700)).await.is_empty(),
+        "a subscription unknown to the controller receives no audio"
+    );
+
+    let _ = media_ws.close(None).await;
+}
+
+#[tokio::test]
+async fn test_media_writer_drops_queued_audio_when_gate_closes_before_the_write() {
+    use dam_hopper_server::browser_host::media_writer::{
+        spawn_media_writer, MediaPacketSink, MediaWriterEvent, OutboundMediaPacket,
+    };
+    use dam_hopper_server::browser_host::protocol::{
+        ProducerAudioChunk, AUDIO_CHANNELS, AUDIO_ENCODING_PCM16LE, AUDIO_SAMPLE_RATE,
+    };
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
+
+    struct BlockedSink {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+        sent: Arc<parking_lot::Mutex<Vec<OutboundMediaPacket>>>,
+    }
+    impl MediaPacketSink for BlockedSink {
+        fn send_packet(
+            &mut self,
+            packet: OutboundMediaPacket,
+        ) -> Pin<Box<dyn Future<Output = Result<(), &'static str>> + Send + '_>> {
+            let (started, release, sent) = (self.started.clone(), self.release.clone(), self.sent.clone());
+            Box::pin(async move {
+                started.notify_one();
+                release.notified().await;
+                sent.lock().push(packet);
+                Ok(())
+            })
+        }
+    }
+
+    let (started, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let sent = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let gate_open = Arc::new(AtomicBool::new(true));
+    let gate = gate_open.clone();
+    let cancel = CancellationToken::new();
+    let (writer, mut events, join) = spawn_media_writer(
+        BlockedSink { started: started.clone(), release: release.clone(), sent: sent.clone() },
+        cancel.clone(),
+        None,
+        move |_run, _doc| gate.load(Ordering::SeqCst),
+    );
+    let sub = Uuid::new_v4().to_string();
+    let chunk = |seq: &str| {
+        use base64::Engine as _;
+        ProducerAudioChunk {
+            browser_session_id: Uuid::new_v4().to_string(),
+            browser_incarnation: Uuid::new_v4().to_string(),
+            profile_epoch: "1".to_string(),
+            producer_run: Uuid::new_v4().to_string(),
+            doc_epoch: 1,
+            audio_seq: seq.to_string(),
+            sample_rate: AUDIO_SAMPLE_RATE,
+            channels: AUDIO_CHANNELS,
+            encoding: AUDIO_ENCODING_PCM16LE.to_string(),
+            data: Arc::from(base64::engine::general_purpose::STANDARD.encode([0u8; 960])),
+            reservation: None,
+        }
+    };
+
+    // Block the writer on a control write, queue audio behind it, then close the gate.
+    writer.enqueue_control_text("{\"kind\":\"status\"}".to_string());
+    started.notified().await;
+    assert!(writer.enqueue_latest_audio(&sub, chunk("1")));
+    gate_open.store(false, Ordering::SeqCst);
+    release.notify_one();
+    assert!(matches!(events.recv().await, Some(MediaWriterEvent::ControlSent { .. })));
+    sleep(Duration::from_millis(150)).await;
+    assert_eq!(sent.lock().len(), 1, "queued audio never crosses the closed gate; only the control packet was written");
+
+    // Reopened gate: a fresh chunk is written; the dropped one is never replayed.
+    gate_open.store(true, Ordering::SeqCst);
+    assert!(writer.enqueue_latest_audio(&sub, chunk("2")));
+    started.notified().await;
+    release.notify_one();
+    assert!(matches!(events.recv().await, Some(MediaWriterEvent::AudioSent { .. })));
+    let packets = sent.lock();
+    assert_eq!(packets.len(), 2);
+    match &packets[1] {
+        OutboundMediaPacket::Text(t) => assert!(t.contains("\"audioSeq\":\"2\""), "{t}"),
+        other => panic!("unexpected packet {other:?}"),
+    }
+    drop(packets);
+    cancel.cancel();
+    let _ = join.await;
+}

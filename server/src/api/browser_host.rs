@@ -21,7 +21,10 @@ use crate::browser_host::manager::{
 };
 use crate::browser_host::network_policy::NetworkPolicy;
 use crate::browser_host::selection::{self, InspectPoint, SelectionError};
-use crate::browser_host::session::{CreateSessionRequest, SessionError, SessionRegistry};
+use crate::browser_host::session::{
+    BrowserSessionDto, CreateSessionRequest, SessionError, SessionRegistry, ViewportQueueOutcome,
+    ViewportRequest,
+};
 use crate::state::AppState;
 fn deserialize_u64_or_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
@@ -872,42 +875,150 @@ pub async fn update_viewport(
         return err.into();
     }
 
-    match global_session_registry()
-        .update_viewport(
+    let registry = global_session_registry();
+    let initial = match registry
+        .begin_viewport_transaction(
             &id,
             &admission.principal,
-            body.viewport_epoch,
+            Some(body.viewport_epoch),
             body.width,
             body.height,
             body.dpr,
         )
         .await
     {
-        Ok(dto) => {
-            if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
-                let new_geom = crate::browser_host::protocol::TargetGeometry {
-                    css_width: body.width as f64,
-                    css_height: body.height as f64,
-                    offset_top: 0.0,
-                    scroll_x: 0.0,
-                    scroll_y: 0.0,
-                    page_scale: 1.0,
-                    visual_offset_x: 0.0,
-                    visual_offset_y: 0.0,
-                    dpr: body.dpr,
-                };
-                let _ = prod.update_geometry(new_geom).await;
-            }
-            input_mgr
-                .set_expected_viewport_epoch(body.viewport_epoch + 1)
-                .await;
-            no_store_response(
+        Ok(Ok(noop_dto)) => {
+            return no_store_response(
+                StatusCode::OK,
+                serde_json::to_value(&noop_dto).unwrap_or_default(),
+            );
+        }
+        Ok(Err(outcome)) => outcome,
+        Err(err) => return err.into(),
+    };
+
+    match initial {
+        ViewportQueueOutcome::Follower(rx) => match rx.await {
+            Ok(Ok(dto)) => no_store_response(
                 StatusCode::OK,
                 serde_json::to_value(&dto).unwrap_or_default(),
+            ),
+            Ok(Err(err)) => err.into(),
+            Err(_) => SessionError::Internal("viewport transaction cancelled".to_string()).into(),
+        },
+        ViewportQueueOutcome::Leader {
+            request: first_req,
+            spacing_wait: first_wait,
+        } => {
+            if !first_wait.is_zero() {
+                tokio::time::sleep(first_wait).await;
+            }
+            if let Err(_) = input_mgr.validate_lease(&body.lease_token).await {
+                let lease_err = SessionError::Conflict("control lease revoked".to_string());
+                global_session_registry()
+                    .abort_viewport_coalescer(&id, lease_err.clone())
+                    .await;
+                return lease_err.into();
+            }
+            let first_res = apply_single_viewport_step(
+                &id,
+                &admission.principal,
+                Some(body.viewport_epoch),
+                first_req,
+                &input_mgr,
             )
+            .await;
+
+            // Drain any coalesced pending slot in a background/inline loop so superseded HTTP
+            // callers receive the authoritative applied result after the 100ms spacing window.
+            let session_id = id.clone();
+            let principal = admission.principal.clone();
+            let mgr_clone = input_mgr.clone();
+            let lease_token = body.lease_token.clone();
+            tokio::spawn(async move {
+                loop {
+                    let next = global_session_registry()
+                        .take_next_coalesced_viewport(&session_id)
+                        .await;
+                    let Some((next_req, mut waiters, wait_dur)) = next else {
+                        break;
+                    };
+                    if !wait_dur.is_zero() {
+                        tokio::time::sleep(wait_dur).await;
+                    }
+                    if let Err(_) = mgr_clone.validate_lease(&lease_token).await {
+                        let lease_err = SessionError::Conflict("control lease revoked".to_string());
+                        for waiter in waiters.drain(..) {
+                            let _ = waiter.send(Err(lease_err.clone()));
+                        }
+                        global_session_registry()
+                            .abort_viewport_coalescer(&session_id, lease_err)
+                            .await;
+                        break;
+                    }
+                    let step_res = apply_single_viewport_step(
+                        &session_id,
+                        &principal,
+                        None,
+                        next_req,
+                        &mgr_clone,
+                    )
+                    .await;
+                    for waiter in waiters.drain(..) {
+                        let _ = waiter.send(step_res.clone());
+                    }
+                }
+            });
+
+            match first_res {
+                Ok(dto) => no_store_response(
+                    StatusCode::OK,
+                    serde_json::to_value(&dto).unwrap_or_default(),
+                ),
+                Err(err) => err.into(),
+            }
         }
-        Err(err) => err.into(),
     }
+}
+
+async fn apply_single_viewport_step(
+    session_id: &str,
+    principal: &str,
+    expected_viewport_epoch: Option<u64>,
+    sanitized: ViewportRequest,
+    input_mgr: &Arc<SessionInputManager>,
+) -> Result<BrowserSessionDto, SessionError> {
+    let (dto, changed, prev_geom, prev_epoch) = global_session_registry()
+        .apply_sanitized_viewport(session_id, principal, expected_viewport_epoch, sanitized.clone())
+        .await?;
+    if !changed {
+        return Ok(dto);
+    }
+    if let Some(prod) = crate::browser_host::media::get_producer(session_id).await {
+        let new_geom = crate::browser_host::protocol::TargetGeometry {
+            css_width: sanitized.width as f64,
+            css_height: sanitized.height as f64,
+            offset_top: 0.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            page_scale: 1.0,
+            visual_offset_x: 0.0,
+            visual_offset_y: 0.0,
+            dpr: sanitized.dpr,
+        };
+        if let Err(err) = prod.update_geometry(new_geom).await {
+            global_session_registry()
+                .rollback_viewport(session_id, prev_geom, prev_epoch)
+                .await;
+            return Err(SessionError::NativeUnavailable(format!(
+                "failed to apply native viewport geometry: {err}"
+            )));
+        }
+    }
+    if let Ok(applied_epoch) = dto.viewport_epoch.parse::<u64>() {
+        input_mgr.set_expected_viewport_epoch(applied_epoch).await;
+    }
+    Ok(dto)
 }
 
 #[derive(Debug, Deserialize)]

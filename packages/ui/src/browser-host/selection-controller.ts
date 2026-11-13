@@ -22,7 +22,10 @@ import {
 } from "@/lib/browser-terminal-handoff.js";
 import { latestTerminalSessionIncarnation } from "@/lib/terminal-incarnation-state.js";
 import type { OsWindow } from "@/os/types.js";
-
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "./visibility-demand.js";
 export interface InspectPoint {
   x: number;
   y: number;
@@ -332,6 +335,7 @@ export interface UseHostBrowserSelectionOptions {
   onNavigationSync?: (update: { navigationRevision: string; url?: string }) => void;
   targets: HostTerminalCandidate[];
   pollIntervalMs?: number;
+  enabled?: boolean;
 }
 
 export interface HostBrowserSelectionController {
@@ -363,6 +367,7 @@ export function useHostBrowserSelection({
   onNavigationSync,
   targets,
   pollIntervalMs = 200,
+  enabled = true,
 }: UseHostBrowserSelectionOptions): HostBrowserSelectionController {
   const [selectionActive, setSelectionActive] = useState(false);
   const [selectionRevision, setSelectionRevision] = useState(0);
@@ -481,7 +486,7 @@ export function useHostBrowserSelection({
 
   // Poll session navigation/selection state while inspecting, previewing, or holding an artifact
   const shouldWatchNavigation = Boolean(
-    sessionId && (selectionActive || preview || preparedArtifact),
+    enabled && sessionId && (selectionActive || preview || preparedArtifact),
   );
   useEffect(() => {
     if (!shouldWatchNavigation || !sessionId) return;
@@ -490,14 +495,65 @@ export function useHostBrowserSelection({
       generation: ownerGeneration,
     };
     let stopped = false;
+    let inFlightAbort: AbortController | null = null;
+    let timer: number | null = null;
+    let pollGeneration = 0;
 
-    const poll = async () => {
-      if (stopped || !mountedRef.current || !isCurrentConnection(activeOwner)) {
+    const cancelCurrentPoll = () => {
+      pollGeneration += 1;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (inFlightAbort) {
+        inFlightAbort.abort();
+        inFlightAbort = null;
+      }
+    };
+
+    const scheduleNext = () => {
+      if (
+        stopped ||
+        !mountedRef.current ||
+        !isDocumentVisible() ||
+        !isCurrentConnection(activeOwner)
+      ) {
         return;
       }
+      const scheduledGen = pollGeneration;
+      timer = window.setTimeout(() => {
+        timer = null;
+        void runSingleFlightPoll(scheduledGen);
+      }, pollIntervalMs);
+    };
+
+    const runSingleFlightPoll = async (expectedGen: number) => {
+      if (
+        stopped ||
+        expectedGen !== pollGeneration ||
+        inFlightAbort !== null ||
+        !mountedRef.current ||
+        !isDocumentVisible() ||
+        !isCurrentConnection(activeOwner)
+      ) {
+        return;
+      }
+      const abortCtrl = new AbortController();
+      inFlightAbort = abortCtrl;
       try {
-        const res = await getHostBrowserSelectionState(activeOwner, sessionId);
-        if (stopped || !mountedRef.current || !isCurrentConnection(activeOwner)) {
+        const res = await getHostBrowserSelectionState(
+          activeOwner,
+          sessionId,
+          abortCtrl.signal,
+        );
+        if (
+          stopped ||
+          abortCtrl.signal.aborted ||
+          expectedGen !== pollGeneration ||
+          !mountedRef.current ||
+          !isDocumentVisible() ||
+          !isCurrentConnection(activeOwner)
+        ) {
           return;
         }
         if (
@@ -538,16 +594,41 @@ export function useHostBrowserSelection({
           return;
         }
       } catch {
-        // transient poll error
+        // transient or aborted poll error
+      } finally {
+        if (inFlightAbort === abortCtrl) {
+          inFlightAbort = null;
+        }
+        if (
+          !stopped &&
+          !abortCtrl.signal.aborted &&
+          expectedGen === pollGeneration &&
+          mountedRef.current &&
+          isDocumentVisible() &&
+          isCurrentConnection(activeOwner)
+        ) {
+          scheduleNext();
+        }
       }
     };
 
-    const timer = setInterval(() => {
-      void poll();
-    }, pollIntervalMs);
+    const onDocVisibilityChange = () => {
+      if (!isDocumentVisible()) {
+        cancelCurrentPoll();
+      } else if (timer === null && inFlightAbort === null) {
+        scheduleNext();
+      }
+    };
+
+    const unsubVis = subscribeDocumentVisibility(onDocVisibilityChange);
+    if (isDocumentVisible()) {
+      scheduleNext();
+    }
+
     return () => {
       stopped = true;
-      clearInterval(timer);
+      unsubVis();
+      cancelCurrentPoll();
     };
   }, [
     shouldWatchNavigation,
@@ -556,9 +637,9 @@ export function useHostBrowserSelection({
     ownerProfileId,
     ownerGeneration,
     pollIntervalMs,
+    enabled,
     discardUnclaimedArtifact,
   ]);
-
   const startSelection = useCallback(
     async (inspectPoint?: InspectPoint) => {
       if (!sessionId || !leaseToken) {

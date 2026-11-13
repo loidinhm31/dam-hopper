@@ -197,6 +197,7 @@ describe("host-browser-decoder in Chromium", () => {
       producerRun: "fedcba98-7654-4321-8901-abcdef012345",
       viewportEpoch: "1",
       frameSeq: "1",
+      decodeMs: expect.any(Number),
     });
 
     // Check drawn rect metrics
@@ -299,9 +300,79 @@ describe("host-browser-decoder in Chromium", () => {
       producerRun: "fedcba98-7654-4321-8901-abcdef012345",
       viewportEpoch: "1",
       frameSeq: "2",
+      decodeMs: expect.any(Number),
     });
 
     // Restore original window.createImageBitmap
     window.createImageBitmap = originalCreateImageBitmap;
+  });
+
+  it("never emits frameAck or trusted hit geometry when createImageBitmap is unavailable or drawImage throws", async () => {
+    act(() => {
+      root.render(
+        <CanvasView
+          ref={(node) => {
+            canvasElement = node;
+          }}
+          controller={null}
+        />,
+      );
+    });
+    await vi.waitFor(() => expect(canvasElement).not.toBeNull());
+
+    const statuses: string[] = [];
+    controller = new BrowserStreamController({
+      canvas: canvasElement!,
+      onStatusChange: (s) => statuses.push(s),
+    });
+    controller.attach(creds1);
+    const mediaWs = MockWebSocket.instances[0];
+    mediaWs.onopen?.();
+
+    const jpeg = await createRealJpeg(320, 240);
+    const originalCreateImageBitmap = window.createImageBitmap;
+
+    try {
+      // Case 1: absent createImageBitmap
+      Reflect.set(window, "createImageBitmap", undefined);
+      const frame1 = packBhjfFrame(makeHeader("1"), jpeg);
+      mediaWs.onmessage?.(new MessageEvent("message", { data: frame1.buffer }));
+
+      await vi.waitFor(() => expect(mediaWs.sentMessages.length).toBe(1));
+      expect(JSON.parse(mediaWs.sentMessages[0])).toEqual({
+        kind: "frameDiscarded",
+        subscriptionEpoch: "sub-1",
+        producerRun: "fedcba98-7654-4321-8901-abcdef012345",
+        viewportEpoch: "1",
+        frameSeq: "1",
+        reason: "decodeFailed",
+      });
+      expect(controller.getStatus()).toBe("unsupported");
+      expect(controller.getDrawnRect()).toBeNull();
+
+      // Case 2: throwing drawImage
+      window.createImageBitmap = originalCreateImageBitmap;
+      const ctx = canvasElement!.getContext("2d")!;
+      const drawSpy = vi.spyOn(ctx, "drawImage").mockImplementation(() => {
+        throw new Error("drawImage failure");
+      });
+      const frame2 = packBhjfFrame(makeHeader("2"), jpeg);
+      mediaWs.onmessage?.(new MessageEvent("message", { data: frame2.buffer }));
+
+      await vi.waitFor(() => expect(mediaWs.sentMessages.length).toBe(2));
+      expect(JSON.parse(mediaWs.sentMessages[1])).toEqual({
+        kind: "frameDiscarded",
+        subscriptionEpoch: "sub-1",
+        producerRun: "fedcba98-7654-4321-8901-abcdef012345",
+        viewportEpoch: "1",
+        frameSeq: "2",
+        reason: "decodeFailed",
+      });
+      expect(controller.getStatus()).toBe("error");
+      expect(controller.getDrawnRect()).toBeNull();
+      drawSpy.mockRestore();
+    } finally {
+      window.createImageBitmap = originalCreateImageBitmap;
+    }
   });
 });

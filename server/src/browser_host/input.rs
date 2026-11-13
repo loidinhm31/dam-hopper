@@ -273,6 +273,18 @@ impl SessionInputManager {
         guard.as_ref().map(|l| l.viewer_id == viewer_id).unwrap_or(false)
     }
 
+    pub async fn validate_lease(&self, lease_token: &str) -> Result<(), InputError> {
+        let now = Instant::now();
+        let lease_guard = self.lease.lock().await;
+        let lease = lease_guard.as_ref().ok_or(InputError::LeaseNotFound)?;
+        if lease.lease_token != lease_token {
+            return Err(InputError::NotLeaseHolder);
+        }
+        if lease.expires_at <= now {
+            return Err(InputError::LeaseExpired);
+        }
+        Ok(())
+    }
     /// Acquires cooperative control lease.
     ///
     /// Returns lease token and expires_at unix ms.
