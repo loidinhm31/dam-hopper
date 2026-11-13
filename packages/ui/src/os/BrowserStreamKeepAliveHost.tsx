@@ -46,8 +46,19 @@ import {
 import type {
   BrowserAudioChunk,
   BrowserSessionDto,
+  QualityPreference,
   ServerControlEvent,
+  StreamQualityEvent,
 } from "../api/browser-host-types.js";
+import {
+  clearStreamQuality,
+  getQualityPreference,
+  publishStreamQuality,
+  releaseGeneration,
+  releaseTab,
+  subscribeStreamQuality,
+  type StreamQualityTuple,
+} from "./browser/browser-stream-quality.js";
 import type { OsWindow } from "./types.js";
 import { runSerializedBrowserControlAcquire } from "./browser/browser-control-gate.js";
 import {
@@ -204,6 +215,7 @@ export function fenceBrowserViewsForProfile(
   if (expectedGeneration !== undefined && gen !== expectedGeneration) {
     return;
   }
+  releaseGeneration(profileId, gen);
   fencedBrowserProfiles.set(profileId, { generation: gen, reason });
   // Notify fence listeners FIRST so active audio/sockets flush synchronously before store mutations
   fenceListeners.forEach((l) => l());
@@ -553,6 +565,54 @@ function ParkedBrowserStreamItem({
   const ownerRef = useRef<ConnectionRef>(owner);
   ownerRef.current = owner;
   const lastAudioDocEpochRef = useRef<string | null>(null);
+  const isSuppressedRef = useRef(isSuppressed);
+  isSuppressedRef.current = isSuppressed;
+  const isEffectiveVisibleRef = useRef(false);
+  const tabPhaseRef = useRef(tab.phase);
+  tabPhaseRef.current = tab.phase;
+  const connSnapRef = useRef(connSnap);
+  connSnapRef.current = connSnap;
+
+  const qualityTuple = useMemo<StreamQualityTuple>(
+    () => ({
+      profileId: win.ctx.profileId,
+      generation: currentGen,
+      windowId: win.id,
+      tabId: tab.tabId,
+    }),
+    [win.ctx.profileId, currentGen, win.id, tab.tabId],
+  );
+
+  const latestTupleRef = useRef<StreamQualityTuple>(qualityTuple);
+  latestTupleRef.current = qualityTuple;
+  const lastPublishedTupleRef = useRef<StreamQualityTuple | null>(null);
+
+  const prevGenRef = useRef(currentGen);
+  useEffect(() => {
+    if (prevGenRef.current !== currentGen) {
+      releaseGeneration(win.ctx.profileId, prevGenRef.current);
+      prevGenRef.current = currentGen;
+    }
+  }, [currentGen, win.ctx.profileId]);
+
+  const lastSentPrefRef = useRef<QualityPreference | null>(getQualityPreference(qualityTuple));
+
+  useEffect(() => {
+    const unsubscribe = subscribeStreamQuality(qualityTuple, () => {
+      const pref = getQualityPreference(qualityTuple);
+      if (lastSentPrefRef.current !== pref) {
+        lastSentPrefRef.current = pref;
+        streamControllerRef.current?.setQualityPreference(pref);
+      }
+    });
+    const initialPref = getQualityPreference(qualityTuple);
+    if (lastSentPrefRef.current !== initialPref) {
+      lastSentPrefRef.current = initialPref;
+      streamControllerRef.current?.setQualityPreference(initialPref);
+    }
+    return unsubscribe;
+  }, [qualityTuple]);
+
 
   const canConnectTab = useCallback(
     (targetOwner: ConnectionRef = ownerRef.current): boolean => {
@@ -616,6 +676,24 @@ function ParkedBrowserStreamItem({
     },
     [slotKey, tab.tabId, win.id],
   );
+  const computeLiveMuteState = useCallback((): boolean => {
+    const liveSlot = slotRegistry.get(slotKey);
+    const liveSuppressed =
+      useCognitoModeStore.getState().active ||
+      useLockScreenStore.getState().isLocked ||
+      isBrowserViewFenced(win.ctx.profileId, connSnapRef.current?.owner.generation);
+    if (!liveSlot || Boolean(liveSlot.audioMuted) || !isEffectiveVisibleRef.current || liveSuppressed) {
+      return true;
+    }
+    if (!canConnectTab()) {
+      return true;
+    }
+    const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+    if (!cur || cur.tab.phase !== "live" || cur.tab.snapshot?.status !== "running") {
+      return true;
+    }
+    return false;
+  }, [canConnectTab, slotKey, tab.tabId, win.ctx.profileId, win.id]);
 
   const canStreamTab = useCallback(
     (creds?: ViewerAttachmentCredentials): boolean => {
@@ -909,6 +987,7 @@ function ParkedBrowserStreamItem({
       (tab.phase === "connecting" || tab.phase === "live"),
   );
   pointerVisibleRef.current = isEffectiveVisible;
+  isEffectiveVisibleRef.current = isEffectiveVisible;
 
   // Synchronous style updates for suppression and visibility
   useLayoutEffect(() => {
@@ -923,6 +1002,7 @@ function ParkedBrowserStreamItem({
     if (isSuppressed) {
       pcmPlayerRef.current?.flush();
       currentAttachedCredsRef.current = null;
+      clearStreamQuality(qualityTuple);
     }
     if (streamControllerRef.current) {
       streamControllerRef.current.setPrivacyMode(isSuppressed);
@@ -932,7 +1012,7 @@ function ParkedBrowserStreamItem({
         inputControllerRef.current?.releaseAllHeldInput();
       }
     }
-  }, [isSuppressed, cancelPendingGesture]);
+  }, [isSuppressed, cancelPendingGesture, qualityTuple]);
 
   useLayoutEffect(() => {
     if (!isEffectiveVisible || slot?.audioMuted) {
@@ -945,11 +1025,12 @@ function ParkedBrowserStreamItem({
       inputControllerRef.current?.releaseAllHeldInput();
       setActiveDialog(null);
       setControlError(null);
+      clearStreamQuality(qualityTuple);
     }
     if (streamControllerRef.current) {
       streamControllerRef.current.setVisibility(isEffectiveVisible);
     }
-  }, [isEffectiveVisible, slot?.audioMuted, cancelPendingGesture]);
+  }, [isEffectiveVisible, slot?.audioMuted, cancelPendingGesture, qualityTuple]);
 
   // Retire an old acquisition and flush audio/authority immediately on session identity change.
   useLayoutEffect(() => {
@@ -957,11 +1038,13 @@ function ParkedBrowserStreamItem({
     pcmPlayerRef.current?.flush();
     streamControllerRef.current?.resetAudioAuthority();
     cancelPendingGesture();
+    clearStreamQuality(qualityTuple);
     return () => {
       lastAudioDocEpochRef.current = null;
       pcmPlayerRef.current?.flush();
       streamControllerRef.current?.resetAudioAuthority();
       cancelPendingGesture();
+      clearStreamQuality(qualityTuple);
     };
   }, [
     owner,
@@ -970,7 +1053,24 @@ function ParkedBrowserStreamItem({
     tab.snapshot?.browserIncarnation,
     tab.snapshot?.profileEpoch,
     cancelPendingGesture,
+    qualityTuple,
   ]);
+
+  useLayoutEffect(() => {
+    const liveMute = computeLiveMuteState();
+    streamControllerRef.current?.setAudioMuted(liveMute);
+  }, [slot?.audioMuted, isEffectiveVisible, isSuppressed, computeLiveMuteState]);
+  useLayoutEffect(() => {
+    const verified = captureVerifiedBrowserOwner(win.ctx.profileId);
+    if (
+      !verified ||
+      verified.owner.generation !== currentGen ||
+      !isCurrentConnection(owner) ||
+      tab.phase !== "live"
+    ) {
+      clearStreamQuality(qualityTuple);
+    }
+  }, [win.ctx.profileId, currentGen, owner, tab.phase, qualityTuple]);
 
   useLayoutEffect(() => {
     const navRev = tab.snapshot?.navigationRevision;
@@ -1076,7 +1176,17 @@ function ParkedBrowserStreamItem({
     if (!streamControllerRef.current) {
       const streamCtrl = new BrowserStreamController({
         canvas: canvasEl,
-        onStatusChange: (status) => setStreamStatus(status),
+        onStatusChange: (status) => {
+          setStreamStatus(status);
+          if (status !== "streaming" && status !== "connecting") {
+            lastSentPrefRef.current = null;
+            clearStreamQuality(latestTupleRef.current);
+          }
+        },
+        onStreamQualityReset: () => {
+          lastSentPrefRef.current = null;
+          clearStreamQuality(latestTupleRef.current);
+        },
         onGeometryChange: () => {},
         onAudioChunk: (chunk: BrowserAudioChunk, credentials) => {
           if (!canPlayAudioRef.current() || !canStreamTabRef.current(credentials)) {
@@ -1088,6 +1198,51 @@ function ParkedBrowserStreamItem({
         },
         onAudioReset: () => {
           pcmPlayerRef.current?.flush();
+        },
+        onStreamQuality: (event: StreamQualityEvent, credentials) => {
+          const verified = captureVerifiedBrowserOwner(
+            credentials.owner.profileId,
+          );
+          if (
+            !verified ||
+            verified.owner.generation !== credentials.owner.generation ||
+            !isCurrentConnection(credentials.owner)
+          ) {
+            return;
+          }
+          const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+          if (
+            !cur ||
+            cur.win.ctx.profileId !== credentials.owner.profileId ||
+            cur.appState.closing ||
+            (cur.appState.ownerScope &&
+              !areBrowserOwnerScopesEqual(
+                cur.appState.ownerScope,
+                verified.scope,
+              )) ||
+            cur.tab.sessionId !== credentials.browserSessionId ||
+            cur.tab.snapshot?.browserIncarnation !==
+              credentials.browserIncarnation ||
+            String(cur.tab.snapshot?.profileEpoch) !==
+              String(credentials.profileEpoch) ||
+            streamControllerRef.current?.getCurrentSubscriptionEpoch() !==
+              credentials.subscriptionEpoch
+          ) {
+            return;
+          }
+          const currentLiveTuple = latestTupleRef.current;
+          if (
+            credentials.owner.profileId !== currentLiveTuple.profileId ||
+            credentials.owner.generation !== currentLiveTuple.generation
+          ) {
+            return;
+          }
+          if (isSuppressedRef.current || !isEffectiveVisibleRef.current || tabPhaseRef.current !== "live") {
+            clearStreamQuality(currentLiveTuple);
+            return;
+          }
+          lastPublishedTupleRef.current = currentLiveTuple;
+          publishStreamQuality(currentLiveTuple, event);
         },
         onControlEvent: (event: ServerControlEvent, credentials) => {
           const verified = captureVerifiedBrowserOwner(
@@ -1145,6 +1300,7 @@ function ParkedBrowserStreamItem({
               streamControllerRef.current?.resetAudioAuthority();
               currentAttachedCredsRef.current = null;
               streamControllerRef.current?.setVisibility(false);
+              clearStreamQuality(qualityTuple);
               cancelPendingGesture();
               textInputProxyRef.current?.blur();
               inputControllerRef.current?.releaseAllHeldInput();
@@ -1271,11 +1427,20 @@ function ParkedBrowserStreamItem({
 
       streamCtrl.setPrivacyMode(isSuppressed);
       streamCtrl.setVisibility(isEffectiveVisible);
+      const initialPref = getQualityPreference(latestTupleRef.current);
+      lastSentPrefRef.current = initialPref;
+      const initialMute = computeLiveMuteState();
+      streamCtrl.setPrivacyMode(isSuppressed);
+      streamCtrl.setVisibility(isEffectiveVisible);
+      streamCtrl.setQualityPreference(initialPref);
+      streamCtrl.setAudioMuted(initialMute);
       streamControllerRef.current = streamCtrl;
       setStreamController(streamCtrl);
 
       if (pendingCredsRef.current) {
         currentAttachedCredsRef.current = pendingCredsRef.current;
+        streamCtrl.setQualityPreference(initialPref);
+        streamCtrl.setAudioMuted(initialMute);
         streamCtrl.attach(pendingCredsRef.current);
       }
     }
@@ -1671,6 +1836,11 @@ function ParkedBrowserStreamItem({
           commitNativeTargetAdmission(verified.scope, rawSessionId, () => {
             pendingCredsRef.current = creds;
             currentAttachedCredsRef.current = creds;
+            const currentLivePref = getQualityPreference(latestTupleRef.current);
+            lastSentPrefRef.current = currentLivePref;
+            streamControllerRef.current?.setQualityPreference(currentLivePref);
+            const liveMute = computeLiveMuteState();
+            streamControllerRef.current?.setAudioMuted(liveMute);
             streamControllerRef.current?.attach(creds);
             streamControllerRef.current?.setVisibility(true);
             syncDialogFromSnapshot(snapshot, creds);
@@ -1787,6 +1957,12 @@ function ParkedBrowserStreamItem({
       dispatchedTabCreates.delete(slotKey);
       currentAttachedCredsRef.current = null;
       setBrowserAudioBlocked(win.id, tab.tabId, false);
+      if (lastPublishedTupleRef.current) {
+        clearStreamQuality(lastPublishedTupleRef.current);
+        releaseTab(lastPublishedTupleRef.current);
+      }
+      clearStreamQuality(latestTupleRef.current);
+      releaseTab(latestTupleRef.current);
       pcmPlayerRef.current?.dispose();
       pcmPlayerRef.current = null;
       streamControllerRef.current?.dispose();

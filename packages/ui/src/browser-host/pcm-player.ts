@@ -29,16 +29,12 @@ export class PcmPlayer {
   private pendingChunks: PendingChunk[] = [];
   private pendingBytes = 0;
   private resumePromise: Promise<void> | null = null;
-  private gestureResumeInFlight = false;
-  private resumeRejected = false;
-  private playbackEpoch = 0;
-  private autoplayBlocked = false;
-  private disposed = false;
+  private gestureResumeInFlight = false; private resumeRejected = false;
+  private playbackEpoch = 0; private autoplayBlocked = false; private disposed = false;
   private readonly canPlay?: () => boolean;
   private readonly onAutoplayBlockedChange?: (blocked: boolean) => void;
 
   public constructor(options?: PcmPlayerOptions) { this.canPlay = options?.canPlay; this.onAutoplayBlockedChange = options?.onAutoplayBlockedChange; }
-
   public prime(): void {
     if (this.disposed || (this.canPlay && !this.canPlay())) return;
     this.resumeRejected = false;
@@ -58,15 +54,13 @@ export class PcmPlayer {
 
     if (ctx.state !== "running") {
       this.setAutoplayBlocked(true);
-      const byteLength = samples.byteLength;
-      if (byteLength > MAX_PENDING_PCM_BYTES) return;
-      const now = Date.now();
-      this.evictAgedPending(now);
-      while (this.pendingBytes + byteLength > MAX_PENDING_PCM_BYTES && this.pendingChunks.length > 0) {
+      if (samples.byteLength > MAX_PENDING_PCM_BYTES) return;
+      const now = Date.now(); this.evictAgedPending(now);
+      while (this.pendingBytes + samples.byteLength > MAX_PENDING_PCM_BYTES && this.pendingChunks.length > 0) {
         this.pendingBytes -= this.pendingChunks.shift()!.samples.byteLength;
       }
       this.pendingChunks.push({ samples, enqueuedAt: now });
-      this.pendingBytes += byteLength;
+      this.pendingBytes += samples.byteLength;
       this.requestResume(ctx, false);
       return;
     }
@@ -160,6 +154,7 @@ export class PcmPlayer {
   }
 
   private drainPending(ctx: AudioContext): void {
+    if (this.canPlay && !this.canPlay()) { this.flush(); return; }
     this.evictAgedPending(Date.now());
     if (this.pendingChunks.length === 0) return;
     const chunks = this.pendingChunks.splice(0, this.pendingChunks.length);
@@ -177,8 +172,7 @@ export class PcmPlayer {
     const src = ctx.createBufferSource();
     src.buffer = buffer; src.connect(gain);
     const startAt = Math.max(ctx.currentTime + INITIAL_SCHEDULE_LEAD_SECONDS, this.nextStartTime);
-    src.start(startAt);
-    this.nextStartTime = startAt + buffer.duration;
+    src.start(startAt); this.nextStartTime = startAt + buffer.duration;
     this.sources.add(src);
     src.onended = () => { this.sources.delete(src); try { src.disconnect(); } catch { /* ignore */ } };
   }

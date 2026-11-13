@@ -11,21 +11,18 @@
  */
 
 import {
-  AUDIO_CHANNELS,
-  AUDIO_ENCODING_PCM16LE,
-  AUDIO_SAMPLE_RATE,
   serializeMediaClientControl,
-  MAX_AUDIO_BASE64_BYTES,
   MAX_AUDIO_MESSAGE_BYTES,
-  MAX_AUDIO_PCM_BYTES,
   MAX_CLIENT_DECODE_MS,
   MAX_HEARTBEAT_FRAME_COUNT,
   MAX_HEARTBEAT_SAMPLE_MS,
-  MAX_MEDIA_CONTROL_BYTES,
+  parseMediaServerText,
   type BrowserAudioChunk,
   type HeartbeatTelemetry,
   type MediaClientControl,
+  type QualityPreference,
   type ServerControlEvent,
+  type StreamQualityEvent,
   type TargetFrameHeader,
   type TargetGeometry,
 } from "../api/browser-host-types.js";
@@ -33,34 +30,14 @@ import type { ViewerAttachmentCredentials } from "../api/browser-host-client.js"
 import { isSecureOrLoopbackOrigin } from "../api/auth-client.js";
 import { unpackBhjfFrame } from "./frame-protocol.js";
 const DECIMAL_SEQ_PATTERN = /^[1-9][0-9]{0,19}$/;
-const CANONICAL_UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const textEncoder = new TextEncoder();
-const BASE64_CHUNK_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 const MAX_U64 = 18446744073709551615n;
+type TimeoutHandle = ReturnType<typeof setTimeout>;
 
 function parsePositiveU64(value: unknown): bigint | null {
   if (typeof value !== "string" || !DECIMAL_SEQ_PATTERN.test(value)) return null;
   const parsed = BigInt(value);
   return parsed > 0n && parsed <= MAX_U64 ? parsed : null;
-}
-
-function isValidPcmBase64(b64: string): boolean {
-  if (
-    !b64 ||
-    b64.length > MAX_AUDIO_BASE64_BYTES ||
-    b64.length % 4 !== 0 ||
-    !BASE64_CHUNK_PATTERN.test(b64)
-  ) {
-    return false;
-  }
-  const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
-  const decodedBytes = (b64.length * 3) / 4 - pad;
-  return (
-    decodedBytes > 0 &&
-    decodedBytes % 2 === 0 &&
-    decodedBytes <= MAX_AUDIO_PCM_BYTES
-  );
 }
 
 export interface DrawnRect {
@@ -98,6 +75,11 @@ export interface StreamControllerOptions {
   onControlEvent?: (event: ServerControlEvent, credentials: ViewerAttachmentCredentials) => void;
   onAudioChunk?: (chunk: BrowserAudioChunk, credentials: ViewerAttachmentCredentials) => void;
   onAudioReset?: () => void;
+  onStreamQuality?: (
+    event: StreamQualityEvent,
+    credentials: ViewerAttachmentCredentials,
+  ) => void;
+  onStreamQualityReset?: () => void;
   onStatusChange?: (status: StreamStatus) => void;
   onError?: (err: Error) => void;
   onPresentFrame?: (metrics: FramePresentMetrics) => void;
@@ -131,6 +113,8 @@ export class BrowserStreamController {
   private readonly onControlEvent?: StreamControllerOptions["onControlEvent"];
   private readonly onAudioChunk?: StreamControllerOptions["onAudioChunk"];
   private readonly onAudioReset?: StreamControllerOptions["onAudioReset"];
+  private readonly onStreamQuality?: StreamControllerOptions["onStreamQuality"];
+  private readonly onStreamQualityReset?: StreamControllerOptions["onStreamQualityReset"];
   private readonly onStatusChange?: (status: StreamStatus) => void;
   private readonly onError?: (err: Error) => void;
   private readonly onPresentFrame?: (metrics: FramePresentMetrics) => void;
@@ -159,7 +143,19 @@ export class BrowserStreamController {
   private seenAudioInCurrentDoc = false;
   private audioAttachmentRetired = false;
   private readonly retiredProducerRuns = new Set<string>();
-
+  private currentAudioRun: string | null = null;
+  private readonly retiredAudioRuns = new Set<string>();
+  private currentQualityPreference: QualityPreference = "auto";
+  private currentAudioMuted = true;
+  private lastQualityPrefSentAt = 0;
+  private lastMuteSentAt = 0;
+  private pendingQualityPreference: QualityPreference | null = null;
+  private pendingQualityTimer: TimeoutHandle | null = null;
+  private pendingMuteState: boolean | null = null;
+  private pendingMuteTimer: TimeoutHandle | null = null;
+  private lastStreamQualityEvent: StreamQualityEvent | null = null;
+  private readonly appliedCaptureVersionsByRun = new Map<string, bigint>();
+  private streamQualityActive = false;
   private telemetryWindowStartMonoMs = 0;
   private windowDecodedFrames = 0;
   private windowReplacedFrames = 0;
@@ -174,6 +170,8 @@ export class BrowserStreamController {
     this.onControlEvent = options.onControlEvent;
     this.onAudioChunk = options.onAudioChunk;
     this.onAudioReset = options.onAudioReset;
+    this.onStreamQuality = options.onStreamQuality;
+    this.onStreamQualityReset = options.onStreamQualityReset;
     this.onStatusChange = options.onStatusChange;
     this.onError = options.onError;
     this.onPresentFrame = options.onPresentFrame;
@@ -193,6 +191,10 @@ export class BrowserStreamController {
 
   public getCurrentSubscriptionEpoch(): string | null {
     return this.currentCredentials?.subscriptionEpoch ?? null;
+  }
+
+  public getQualityPreference(): QualityPreference {
+    return this.currentQualityPreference;
   }
 
   public getTelemetrySnapshot(): StreamTelemetrySnapshot {
@@ -249,10 +251,15 @@ export class BrowserStreamController {
     this.audioAttachmentRetired = false;
     this.retiredProducerRuns.clear();
     this.lastKnownProducerRun = null;
+    this.currentAudioRun = null;
+    this.retiredAudioRuns.clear();
     this.lastAudioSeq = 0n;
     this.lastAudioDocEpoch = 1n;
     this.retiredAudioDocEpoch = 0n;
     this.seenAudioInCurrentDoc = false;
+    this.lastStreamQualityEvent = null;
+    this.appliedCaptureVersionsByRun.clear();
+    this.clearRateLimitTimers();
     this.resetAudioState();
     this.resetTelemetryAggregates();
     if (this.pending) {
@@ -288,6 +295,7 @@ export class BrowserStreamController {
 
     this.currentCredentials = credentials;
     this.setStatus("connecting");
+    this.streamQualityActive = true;
     try {
       const media = new WebSocket(
         credentials.mediaWsUrl,
@@ -306,6 +314,9 @@ export class BrowserStreamController {
 
       media.onopen = () => {
         if (this.isDisposed || this.mediaWs !== media) return;
+        this.streamQualityActive = true;
+        this.sendQualityPreferenceNow(this.currentQualityPreference);
+        this.sendMuteStateNow(this.currentAudioMuted);
         this.setStatus("streaming");
         this.startHeartbeat(media, subEpoch);
       };
@@ -334,7 +345,8 @@ export class BrowserStreamController {
           this.mediaWs = null;
           this.audioAttachmentRetired = true;
           this.resetAudioState();
-          if (this.status === "streaming") {
+          this.notifyStreamQualityReset();
+          if (this.status === "streaming" || this.status === "connecting") {
             this.setStatus("disconnected");
           }
         }
@@ -342,6 +354,7 @@ export class BrowserStreamController {
 
       media.onerror = (err) => {
         if (this.isDisposed || this.mediaWs !== media) return;
+        this.notifyStreamQualityReset();
         this.onError?.(
           new Error(`Media WebSocket error: ${String(err)}`),
         );
@@ -365,10 +378,12 @@ export class BrowserStreamController {
           this.controlWs = null;
           this.audioAttachmentRetired = true;
           this.resetAudioState();
+          this.notifyStreamQualityReset();
         }
       };
     } catch (err) {
       this.setStatus("error");
+      this.notifyStreamQualityReset();
       this.onError?.(err instanceof Error ? err : new Error(String(err)));
     }
   }
@@ -452,8 +467,7 @@ export class BrowserStreamController {
         const alreadyResetForTarget =
           !this.seenAudioInCurrentDoc &&
           this.retiredAudioDocEpoch >= retireBelow &&
-          this.lastAudioDocEpoch >= targetEpoch &&
-          this.currentProducerRun === null;
+          this.lastAudioDocEpoch >= targetEpoch;
         if (retireBelow > this.retiredAudioDocEpoch) {
           this.retiredAudioDocEpoch = retireBelow;
         }
@@ -485,9 +499,35 @@ export class BrowserStreamController {
     this.retiredProducerRuns.add(run);
   }
 
+  private recordAppliedCaptureVersion(run: string, version: bigint): void {
+    const current = this.appliedCaptureVersionsByRun.get(run) ?? 0n;
+    if (version > current) {
+      if (
+        !this.appliedCaptureVersionsByRun.has(run) &&
+        this.appliedCaptureVersionsByRun.size >= 16
+      ) {
+        const oldest = this.appliedCaptureVersionsByRun.keys().next().value;
+        if (oldest !== undefined) {
+          this.appliedCaptureVersionsByRun.delete(oldest);
+        }
+      }
+      this.appliedCaptureVersionsByRun.delete(run);
+      this.appliedCaptureVersionsByRun.set(run, version);
+    }
+  }
+
   private resetAudioState(): void {
-    this.currentProducerRun = null;
     this.onAudioReset?.();
+  }
+
+  private retireAudioRun(run: string): void {
+    if (this.retiredAudioRuns.size >= 16) {
+      const oldest = this.retiredAudioRuns.values().next().value;
+      if (oldest !== undefined) {
+        this.retiredAudioRuns.delete(oldest);
+      }
+    }
+    this.retiredAudioRuns.add(run);
   }
 
   private handleIncomingMediaText(
@@ -509,77 +549,138 @@ export class BrowserStreamController {
     ) {
       return;
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
+    const message = parseMediaServerText(raw);
+    if (!message) return;
+
+    if (message.kind === "streamQuality") {
+      this.handleStreamQualityEvent(message, credentials);
       return;
     }
-    if (!parsed || typeof parsed !== "object") return;
-    const rec = parsed as Record<string, unknown>;
+
+    if (message.kind === "audioChunk") {
+      this.handleAudioChunk(message, credentials);
+      return;
+    }
+  }
+
+  private handleStreamQualityEvent(
+    event: StreamQualityEvent,
+    credentials: ViewerAttachmentCredentials,
+  ): void {
     if (
-      rec.kind !== "audioChunk" ||
-      rec.browserSessionId !== credentials.browserSessionId ||
-      rec.browserIncarnation !== credentials.browserIncarnation ||
-      rec.profileEpoch !== String(credentials.profileEpoch) ||
-      rec.subscriptionEpoch !== credentials.subscriptionEpoch ||
-      typeof rec.producerRun !== "string" ||
-      !CANONICAL_UUID_PATTERN.test(rec.producerRun) ||
-      this.currentProducerRun === null ||
-      rec.producerRun !== this.currentProducerRun ||
-      this.retiredProducerRuns.has(rec.producerRun) ||
-      rec.sampleRate !== AUDIO_SAMPLE_RATE ||
-      rec.channels !== AUDIO_CHANNELS ||
-      rec.encoding !== AUDIO_ENCODING_PCM16LE ||
-      typeof rec.data !== "string" ||
-      !isValidPcmBase64(rec.data)
+      this.isDisposed ||
+      this.isPrivacyActive ||
+      !this.isVisible ||
+      this.audioAttachmentRetired ||
+      this.currentCredentials !== credentials ||
+      event.subscriptionEpoch !== credentials.subscriptionEpoch
     ) {
       return;
     }
-    const profileEpochVal = parsePositiveU64(rec.profileEpoch);
-    const docEpochVal = parsePositiveU64(rec.docEpoch);
-    const seqVal = parsePositiveU64(rec.audioSeq);
+    if (this.retiredProducerRuns.has(event.producerRun)) {
+      return;
+    }
+
+    const isAppliedFenceStatus =
+      event.status === "effective" || event.status === "switching";
+
+    if (isAppliedFenceStatus) {
+      const v = BigInt(event.captureVersion);
+      const lastApplied =
+        this.appliedCaptureVersionsByRun.get(event.producerRun) ?? 0n;
+      if (v < lastApplied) {
+        return;
+      }
+    }
+
+    if (this.lastStreamQualityEvent !== null) {
+      const prev = this.lastStreamQualityEvent;
+      if (
+        prev.subscriptionEpoch === event.subscriptionEpoch &&
+        prev.preference === event.preference &&
+        prev.producerRun === event.producerRun &&
+        prev.captureVersion === event.captureVersion &&
+        prev.sharedTier === event.sharedTier &&
+        prev.viewerTier === event.viewerTier &&
+        prev.fps === event.fps &&
+        prev.jpegQuality === event.jpegQuality &&
+        prev.scale === event.scale &&
+        prev.imageWidth === event.imageWidth &&
+        prev.imageHeight === event.imageHeight &&
+        prev.audioSuppressed === event.audioSuppressed &&
+        prev.audioReason === event.audioReason &&
+        prev.status === event.status
+      ) {
+        return;
+      }
+    }
+
+    if (isAppliedFenceStatus) {
+      const v = BigInt(event.captureVersion);
+      this.recordAppliedCaptureVersion(event.producerRun, v);
+    }
+
+    this.lastStreamQualityEvent = event;
+    this.onStreamQuality?.(event, credentials);
+  }
+
+  private handleAudioChunk(
+    chunk: BrowserAudioChunk,
+    credentials: ViewerAttachmentCredentials,
+  ): void {
     if (
-      typeof rec.docEpoch !== "string" ||
-      profileEpochVal === null ||
+      chunk.browserSessionId !== credentials.browserSessionId ||
+      chunk.browserIncarnation !== credentials.browserIncarnation ||
+      chunk.profileEpoch !== String(credentials.profileEpoch) ||
+      chunk.subscriptionEpoch !== credentials.subscriptionEpoch
+    ) {
+      return;
+    }
+    if (this.retiredAudioRuns.has(chunk.audioRun)) {
+      return;
+    }
+    const docEpochVal = parsePositiveU64(chunk.docEpoch);
+    const seqVal = parsePositiveU64(chunk.audioSeq);
+    if (
       docEpochVal === null ||
       docEpochVal <= this.retiredAudioDocEpoch ||
       docEpochVal < this.lastAudioDocEpoch ||
-      seqVal === null ||
-      seqVal <= this.lastAudioSeq
+      seqVal === null
     ) {
       return;
     }
+
+    if (this.currentAudioRun !== chunk.audioRun) {
+      if (this.currentAudioRun !== null) {
+        this.retireAudioRun(this.currentAudioRun);
+        this.lastAudioSeq = 0n;
+        this.seenAudioInCurrentDoc = false;
+        this.onAudioReset?.();
+      }
+      this.currentAudioRun = chunk.audioRun;
+    }
+
+    if (seqVal <= this.lastAudioSeq) {
+      return;
+    }
+
     if (docEpochVal > this.lastAudioDocEpoch) {
       if (docEpochVal - 1n > this.retiredAudioDocEpoch) {
         this.retiredAudioDocEpoch = docEpochVal - 1n;
       }
       this.onAudioReset?.();
-    } else if (this.seenAudioInCurrentDoc && this.lastAudioSeq > 0n && seqVal > this.lastAudioSeq + 1n) {
+    } else if (
+      this.seenAudioInCurrentDoc &&
+      this.lastAudioSeq > 0n &&
+      seqVal > this.lastAudioSeq + 1n
+    ) {
       this.onAudioReset?.();
     }
     this.lastAudioDocEpoch = docEpochVal;
     this.seenAudioInCurrentDoc = true;
     this.lastAudioSeq = seqVal;
-    this.onAudioChunk?.(
-      {
-        kind: "audioChunk",
-        browserSessionId: rec.browserSessionId,
-        browserIncarnation: rec.browserIncarnation,
-        profileEpoch: rec.profileEpoch,
-        producerRun: rec.producerRun,
-        subscriptionEpoch: rec.subscriptionEpoch,
-        docEpoch: rec.docEpoch,
-        audioSeq: rec.audioSeq as string,
-        sampleRate: AUDIO_SAMPLE_RATE,
-        channels: AUDIO_CHANNELS,
-        encoding: AUDIO_ENCODING_PCM16LE,
-        data: rec.data,
-      },
-      credentials,
-    );
+    this.onAudioChunk?.(chunk, credentials);
   }
-
   /**
    * Dispatches incoming raw BHJF frame with 1-active-decode + 1-pending-frame boundedness.
    */
@@ -628,36 +729,29 @@ export class BrowserStreamController {
       return;
     }
 
-    if (!this.audioAttachmentRetired) {
-      if (this.lastKnownProducerRun !== header.producerRun) {
-        if (this.lastKnownProducerRun !== null) {
-          this.retireProducerRun(this.lastKnownProducerRun);
-          this.onAudioReset?.();
-          this.resetTelemetryAggregates();
-          if (
-            this.pending &&
-            this.pending.header.producerRun !== header.producerRun
-          ) {
-            const stalePending = this.pending;
-            this.pending = null;
-            this.sendMediaControl(stalePending.socket, {
-              kind: "frameDiscarded",
-              subscriptionEpoch: stalePending.subscriptionEpoch,
-              producerRun: stalePending.header.producerRun,
-              viewportEpoch: stalePending.header.viewportEpoch,
-              frameSeq: stalePending.header.frameSeq,
-              reason: "obsolete",
-            });
-          }
+    if (this.lastKnownProducerRun !== header.producerRun) {
+      if (this.lastKnownProducerRun !== null) {
+        this.retireProducerRun(this.lastKnownProducerRun);
+        this.resetTelemetryAggregates();
+        if (
+          this.pending &&
+          this.pending.header.producerRun !== header.producerRun
+        ) {
+          const stalePending = this.pending;
+          this.pending = null;
+          this.sendMediaControl(stalePending.socket, {
+            kind: "frameDiscarded",
+            subscriptionEpoch: stalePending.subscriptionEpoch,
+            producerRun: stalePending.header.producerRun,
+            viewportEpoch: stalePending.header.viewportEpoch,
+            frameSeq: stalePending.header.frameSeq,
+            reason: "obsolete",
+          });
         }
-        this.lastKnownProducerRun = header.producerRun;
-        this.lastAudioSeq = 0n;
-        this.lastAudioDocEpoch = 1n;
-        this.retiredAudioDocEpoch = 0n;
-        this.seenAudioInCurrentDoc = false;
       }
-      this.currentProducerRun = header.producerRun;
+      this.lastKnownProducerRun = header.producerRun;
     }
+    this.currentProducerRun = header.producerRun;
     // Geometry callback
     this.onGeometryChange?.(header.geometry, header.inputTrusted);
     if (this.isDecoding) {
@@ -1104,7 +1198,9 @@ export class BrowserStreamController {
 
   private detachSockets(): void {
     this.stopHeartbeat();
+    this.clearRateLimitTimers();
     this.resetAudioState();
+    this.notifyStreamQualityReset();
 
     const media = this.mediaWs;
     const control = this.controlWs;
@@ -1136,8 +1232,9 @@ export class BrowserStreamController {
     this.decodeEpoch++;
     this.resetTelemetryAggregates();
 
+    this.clearRateLimitTimers();
+    this.notifyStreamQualityReset();
     this.detachSockets();
-
     if (this.pending) {
       const p = this.pending;
       this.pending = null;
@@ -1166,5 +1263,155 @@ export class BrowserStreamController {
     }
 
     this.setStatus("disconnected");
+  }
+  public setQualityPreference(pref: QualityPreference): void {
+    this.currentQualityPreference = pref;
+    if (
+      !this.mediaWs ||
+      this.mediaWs.readyState !== WebSocket.OPEN ||
+      !this.currentCredentials
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const elapsed = now - this.lastQualityPrefSentAt;
+    if (elapsed >= 250) {
+      if (this.pendingQualityTimer !== null) {
+        clearTimeout(this.pendingQualityTimer);
+        this.pendingQualityTimer = null;
+      }
+      this.pendingQualityPreference = null;
+      this.sendQualityPreferenceNow(pref);
+    } else {
+      this.pendingQualityPreference = pref;
+      if (this.pendingQualityTimer === null) {
+        this.pendingQualityTimer = setTimeout(() => {
+          this.pendingQualityTimer = null;
+          if (this.pendingQualityPreference !== null) {
+            const toSend = this.pendingQualityPreference;
+            this.pendingQualityPreference = null;
+            this.sendQualityPreferenceNow(toSend);
+          }
+        }, 250 - elapsed);
+      }
+    }
+  }
+
+  public setAudioMuted(muted: boolean): void {
+    this.currentAudioMuted = muted;
+    if (muted) {
+      if (this.pendingMuteTimer !== null) {
+        clearTimeout(this.pendingMuteTimer);
+        this.pendingMuteTimer = null;
+      }
+      this.pendingMuteState = null;
+      this.onAudioReset?.();
+      if (
+        this.mediaWs &&
+        this.mediaWs.readyState === WebSocket.OPEN &&
+        this.currentCredentials
+      ) {
+        this.sendMuteStateNow(true);
+      }
+      return;
+    }
+
+    if (
+      !this.mediaWs ||
+      this.mediaWs.readyState !== WebSocket.OPEN ||
+      !this.currentCredentials
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const elapsed = now - this.lastMuteSentAt;
+    if (elapsed >= 250) {
+      if (this.pendingMuteTimer !== null) {
+        clearTimeout(this.pendingMuteTimer);
+        this.pendingMuteTimer = null;
+      }
+      this.pendingMuteState = null;
+      this.sendMuteStateNow(false);
+    } else {
+      this.pendingMuteState = false;
+      if (this.pendingMuteTimer === null) {
+        this.pendingMuteTimer = setTimeout(() => {
+          this.pendingMuteTimer = null;
+          if (this.pendingMuteState !== null) {
+            const toSend = this.pendingMuteState;
+            this.pendingMuteState = null;
+            this.sendMuteStateNow(toSend);
+          }
+        }, 250 - elapsed);
+      }
+    }
+  }
+
+  private sendQualityPreferenceNow(pref: QualityPreference): void {
+    if (
+      !this.mediaWs ||
+      this.mediaWs.readyState !== WebSocket.OPEN ||
+      !this.currentCredentials
+    ) {
+      return;
+    }
+    const control: MediaClientControl = {
+      kind: "qualityPreference",
+      subscriptionEpoch: this.currentCredentials.subscriptionEpoch,
+      preference: pref,
+    };
+    const serialized = serializeMediaClientControl(control);
+    if (serialized) {
+      try {
+        this.mediaWs.send(serialized);
+        this.lastQualityPrefSentAt = Date.now();
+      } catch {
+        // ignore send failure
+      }
+    }
+  }
+
+  private sendMuteStateNow(muted: boolean): void {
+    if (
+      !this.mediaWs ||
+      this.mediaWs.readyState !== WebSocket.OPEN ||
+      !this.currentCredentials
+    ) {
+      return;
+    }
+    const control: MediaClientControl = {
+      kind: "muteState",
+      subscriptionEpoch: this.currentCredentials.subscriptionEpoch,
+      muted,
+    };
+    const serialized = serializeMediaClientControl(control);
+    if (serialized) {
+      try {
+        this.mediaWs.send(serialized);
+        this.lastMuteSentAt = Date.now();
+      } catch {
+        // ignore send failure
+      }
+    }
+  }
+
+  private clearRateLimitTimers(): void {
+    if (this.pendingQualityTimer !== null) {
+      clearTimeout(this.pendingQualityTimer);
+      this.pendingQualityTimer = null;
+    }
+    this.pendingQualityPreference = null;
+    if (this.pendingMuteTimer !== null) {
+      clearTimeout(this.pendingMuteTimer);
+      this.pendingMuteTimer = null;
+    }
+    this.pendingMuteState = null;
+  }
+
+  private notifyStreamQualityReset(): void {
+    if (this.streamQualityActive) {
+      this.streamQualityActive = false;
+      this.onStreamQualityReset?.();
+    }
   }
 }

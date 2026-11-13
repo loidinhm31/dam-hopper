@@ -5,7 +5,7 @@ import {
   releaseBrowserControl,
   renewBrowserControl,
 } from "@/api/browser-host-client.js";
-import type { BrowserSessionDto } from "@/api/browser-host-types.js";
+import type { BrowserSessionDto, QualityPreference } from "@/api/browser-host-types.js";
 import { getApi, isCurrentConnection, useConnectionSnapshot } from "@/api/connections.js";
 import type { SessionInfo } from "@/api/client.js";
 import type { ConnectionRef } from "@/api/ownership.js";
@@ -63,6 +63,13 @@ import { BrowserTabStrip, getBrowserTabIds } from "../browser/browser-tab-strip.
 import type { BrowserTabRuntime, BrowserWindowState } from "../browser/browser-tab-types.js";
 import { BrowserTools } from "../browser/browser-tools.js";
 import { normalizeBrowserCommittedUrl } from "../browser/browser-url-normalization.js";
+import {
+  getStreamQuality,
+  releaseTab,
+  releaseWindow,
+  setQualityPreference,
+  subscribeStreamQuality,
+} from "../browser/browser-stream-quality.js";
 import {
   clearBrowserViewFenceForProfile,
   isBrowserAudioBlocked,
@@ -141,6 +148,32 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
     () => isBrowserAudioBlocked(window.id, activeTabId),
     () => false,
   );
+
+  const qualityTuple = useMemo(
+    () => ({
+      profileId: owner.profileId,
+      generation: owner.generation,
+      windowId: window.id,
+      tabId: activeTabId,
+    }),
+    [owner.profileId, owner.generation, window.id, activeTabId],
+  );
+  const qualityState = useSyncExternalStore(
+    useCallback((notify) => subscribeStreamQuality(qualityTuple, notify), [qualityTuple]),
+    useCallback(() => getStreamQuality(qualityTuple), [qualityTuple]),
+  );
+  const handleQualityPreferenceChange = useCallback(
+    (pref: QualityPreference) => {
+      setQualityPreference(qualityTuple, pref);
+    },
+    [qualityTuple],
+  );
+
+  useEffect(() => {
+    if (canonicalState.closing) {
+      releaseWindow(window.id);
+    }
+  }, [canonicalState.closing, window.id]);
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
@@ -383,6 +416,12 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
     }
     updateBrowserStreamSlot(window.id, tabId, null, false, true);
     retireTabNavigation(window.id, tabId);
+    releaseTab({
+      profileId: owner.profileId,
+      generation: owner.generation,
+      windowId: window.id,
+      tabId,
+    });
 
     if (target.phase === "create-unknown") {
       try {
@@ -877,6 +916,10 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
           onAttachSession={handleAttachInventorySession}
           onWindowStateUpdated={() => setRecoveryTick((n) => n + 1)}
           onCloseUnknownWindowAllowed={() => useWindowStore.getState().closeWindow(window.id)}
+          qualityPreference={qualityState.preference}
+          qualityStatus={qualityState.status}
+          qualityPending={qualityState.pending}
+          onQualityPreferenceChange={handleQualityPreferenceChange}
         />
       )}
 

@@ -646,26 +646,28 @@ Upgrades an authenticated WebSocket connection for binary BHJF screencast delive
 - **Capacity:** Capped at 2 concurrent active viewers globally (`MAX_GLOBAL_VIEWERS = 2`); returns HTTP 429 `browserBusy` on saturation.
 - **Message & Frame Limits:** Max 1024 bytes per message and frame (`MAX_MEDIA_CONTROL_BYTES = 1024`).
 
-### Downstream Binary Frames (Server -> Client)
+### Downstream Media Messages (Server -> Client)
 
-Frames arrive as binary WebSocket messages (`AxumWsMessage::Binary(Bytes)`) formatted using the atomic BHJF v1 envelope:
-- **Prefix (16 bytes):** ASCII `BHJF`, `version: 1`, `flags: 0`, `header_len` (u16 BE), `payload_len` (u32 BE), `reserved: 0` (u32 BE).
-- **JSON Target Frame Header:** Target-scoped metadata (`browserSessionId`, `browserIncarnation`, `profileEpoch`, `producerRun`, `viewportEpoch`, `frameSeq`, `width`, `height`, `captureTimeUnixMs`, `geometry`, `inputTrusted`).
-- **Payload:** Raw JPEG binary stream validated against SOF marker dimensions.
+The media WebSocket delivers binary video frames and interleaved UTF-8 JSON text messages:
+
+- **Binary Screencast Frames (`BHJF` v1):** 16-byte atomic prefix (`BHJF`, `version: 1`), JSON target frame header (`browserSessionId`, `browserIncarnation`, `profileEpoch`, video `producerRun`, `viewportEpoch`, `frameSeq`, `width`, `height`, `captureTimeUnixMs`, `geometry`, `inputTrusted`), and raw JPEG binary stream validated against SOF markers.
+- **Audio Text Frames (`audioChunk`):** 12-key JSON text (`<= 8192` B, 24 kHz mono `pcm16le` base64). Uses dedicated `audioRun` UUID (replaces `producerRun` for audio source continuity across video capture restarts), `subscriptionEpoch`, `profileEpoch`, `docEpoch`, monotonic `audioSeq`, `data`. Subscriptions default audio-suppressed until first explicit `muteState`.
+- **Stream Quality Frames (`streamQuality`):** Authoritative 15-key JSON status (`kind`, `subscriptionEpoch`, `preference`, `producerRun`, `captureVersion`, `sharedTier`, `viewerTier`, `fps`, `jpegQuality`, `scale`, `imageWidth`, `imageHeight`, `audioSuppressed`, `audioReason`, `status`). Emitted on attach and state changes; `preference` echoes server-acked client preference; `warming`/`unavailable` are non-applied placeholders; `effective`/`switching` reflects one proven snapshot; `captureVersion` is monotonic decimal u64 per run; `audioReason` distinguishes `muted`, `bandwidth`, `hidden`, `stalled`.
 
 ### Client Control Messages (Client -> Server)
 
-Client sends JSON text messages ($\le 1024$ bytes) to manage credit flow and visibility:
+Client sends JSON text messages ($\le 1024$ bytes) to manage credit flow, visibility, fidelity preference, and audio gating:
 
 | Kind | Required Fields | Semantics |
 | --- | --- | --- |
-| `frameAck` | `subscriptionEpoch`, `producerRun`, `viewportEpoch`, `frameSeq`, optional `reason` | Returns credit for admitted frame. Flushes pending buffer if rate governor permits. |
+| `frameAck` | `subscriptionEpoch`, `producerRun`, `viewportEpoch`, `frameSeq`, optional `decodeMs`, `reason` | Returns credit for admitted frame. Flushes pending buffer if rate governor permits. |
 | `frameDiscarded` | `subscriptionEpoch`, `producerRun`, `viewportEpoch`, `frameSeq`, optional `reason` (`replaced`, `obsolete`, `hidden`, `decodeFailed`, `ownerChanged`) | Discards frame and returns credit without display. |
 | `pause` | `subscriptionEpoch` | Pauses delivery and detaches demand. Resuming requires a fresh media socket and ticket. |
-| `heartbeat` | `subscriptionEpoch`, `visible: bool` | Renews viewer visibility demand (5s cadence; expires after 15s). |
+| `heartbeat` | `subscriptionEpoch`, `visible: bool`, optional `telemetry` | Renews viewer visibility demand (5s cadence; expires after 15s). |
+| `qualityPreference` | `subscriptionEpoch`, `preference: "auto"\|"high"\|"medium"\|"low"` | Sets requested fidelity ceiling (coalesced $\le 4$/s; view-only permitted without lease). |
+| `muteState` | `subscriptionEpoch`, `muted: bool` | Updates audio delivery gate (coalesced $\le 4$/s; `muted=true` applies immediate local silence). |
 
-*Invariant:* `subscriptionEpoch` must match the connected socket's admission subscription; foreign or stale ACKs are rejected without modifying credits.
-
+*Invariants & Deployment:* Controls bind strictly to socket `subscriptionEpoch`; foreign or stale controls are rejected. Phase 03+04 must deploy as a matched backend/UI pair (`audioRun` cutover). Thresholds, legibility, and downscale input trust are Phase 05 qualification gates, not measured results.
 ---
 
 ## 8. Control & Event Streaming WebSocket Protocol (`GET /api/browser/control`)
@@ -744,7 +746,9 @@ Frontend client API and stream controller exports (`packages/ui/src/api/browser-
 ### Frame Parser & Controllers
 
 - `unpackBhjfFrame(buffer)`: Validates 16-byte `BHJF` prefix, JSON header, and JPEG SOF0 dimensions ($\le 1920 \times 1080$).
-- `BrowserStreamController`: Persistent canvas controller governing 1-active-decode + 1-pending-frame, captured-socket ACKs, synchronous privacy blackening (`setPrivacyMode`), and visibility detachment (`setVisibility`).
+- `BrowserStreamController`: Persistent canvas controller governing 1-active-decode + 1-pending-frame, captured-socket ACKs, synchronous privacy blackening (`setPrivacyMode`), visibility detachment (`setVisibility`), `streamQualityActive` latch, and per-run monotonic `appliedCaptureVersionsByRun` map (rejecting same-run rollback across runs while ignoring placeholders).
+- `browser-stream-quality.ts`: Ephemeral in-memory preference and diagnostics store keyed by `(profileId, generation, windowId, tabId)`, default Auto; survives placement/reconnect, cleared on close/retire, zero web storage persistence.
+- `BrowserTools`: Accessible controlled selector (Auto/High/Medium/Low, `value={qualityPreference}`), shared effective tier, scale, quality, viewer FPS, and audio suppression reason (`Muted` vs `Bandwidth constrained`).
 - `BrowserInputController`: Letterbox coordinate mapping to $[0.0, 1.0]$, microtask move coalescing, and held-input auto-release.
 - `TextInputProxy`: Manages virtual keyboard focus and multi-stage IME composition deduplication.
 

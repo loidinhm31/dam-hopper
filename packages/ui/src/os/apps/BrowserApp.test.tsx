@@ -18,6 +18,11 @@ import { projectBrowserWindowState } from "../browser/browser-persistence.js";
 import { loadBrowserRecoveryDisk, saveBrowserRecoveryDisk } from "../browser/browser-recovery-store.js";
 import { clearInventoryAcksForTesting } from "../browser/browser-session-inventory.js";
 import { BROWSER_STATE_VERSION, type BrowserWindowState } from "../browser/browser-tab-types.js";
+import {
+  clearAllStreamQualityForTesting,
+  releaseGeneration,
+  setQualityPreference,
+} from "../browser/browser-stream-quality.js";
 
 const {
   owner,
@@ -199,6 +204,20 @@ beforeEach(async () => {
   clearCloseLifecycleForTesting();
   clearBrowserControlGateForTesting();
   clearPopupTabStateForTesting();
+  let mockStorageData: Record<string, string> = {};
+  const storageMock = {
+    getItem: (k: string) => mockStorageData[k] ?? null,
+    setItem: (k: string, v: string) => { mockStorageData[k] = String(v); },
+    removeItem: (k: string) => { delete mockStorageData[k]; },
+    clear: () => { mockStorageData = {}; },
+    get length() { return Object.keys(mockStorageData).length; },
+    key: (i: number) => Object.keys(mockStorageData)[i] ?? null,
+  };
+  Object.defineProperty(globalThis, "localStorage", {
+    value: storageMock,
+    configurable: true,
+    writable: true,
+  });
   localStorage.clear();
   Object.defineProperty(navigator, "locks", {
     configurable: true,
@@ -250,6 +269,7 @@ beforeEach(async () => {
   audioBlockedState.blocked = false;
   audioBlockedState.listeners.clear();
 
+  clearAllStreamQualityForTesting();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -260,6 +280,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
   vi.restoreAllMocks();
+  clearAllStreamQualityForTesting();
 });
 
 async function action(kind: string) {
@@ -786,5 +807,65 @@ describe("BrowserApp native chrome & tab continuity", () => {
     expect(container.querySelector('[data-testid="browser-app-window-1"]')).not.toBeNull();
     const addr = container.querySelector('[data-testid="browser-address-input"]') as HTMLInputElement;
     expect(addr.value).toBe("http://example.test/restored");
+  });
+  it("renders controlled quality selector reflecting store across non-Auto initial state, tab change, panel reopen, and generation reset", async () => {
+    const tupleTab1 = {
+      profileId: owner.profileId,
+      generation: owner.generation,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    // 1. Initial state is Auto
+    const toolsBtn = container.querySelector<HTMLButtonElement>('button[aria-label="Browser tools"]');
+    expect(toolsBtn).toBeTruthy();
+    await act(async () => toolsBtn!.click());
+    await rerender();
+
+    let selector = container.querySelector<HTMLSelectElement>('[data-testid="browser-quality-selector"]');
+    expect(selector).toBeTruthy();
+    expect(selector?.value).toBe("auto");
+
+    // 2. Non-Auto preference retained and reflected in rendered select
+    await act(async () => {
+      setQualityPreference(tupleTab1, "high");
+    });
+    await rerender();
+    selector = container.querySelector<HTMLSelectElement>('[data-testid="browser-quality-selector"]');
+    expect(selector?.value).toBe("high");
+
+    // 3. Panel reopen: close tools panel and reopen — retained High renders High, not Auto
+    await act(async () => toolsBtn!.click());
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-quality-selector"]')).toBeNull();
+
+    await act(async () => toolsBtn!.click());
+    await rerender();
+    selector = container.querySelector<HTMLSelectElement>('[data-testid="browser-quality-selector"]');
+    expect(selector?.value).toBe("high");
+
+    // 4. Tab change: create and switch to tab 2 (defaults to auto), then switch back to tab 1 (renders high)
+    const newTabBtn = container.querySelector<HTMLButtonElement>('[data-testid="browser-new-tab-btn"]');
+    await act(async () => newTabBtn!.click());
+    await rerender();
+
+    selector = container.querySelector<HTMLSelectElement>('[data-testid="browser-quality-selector"]');
+    expect(selector?.value).toBe("auto");
+
+    const tab1Btn = container.querySelector<HTMLButtonElement>('[data-testid="browser-tab-tab-1"]');
+    await act(async () => tab1Btn!.click());
+    await rerender();
+
+    selector = container.querySelector<HTMLSelectElement>('[data-testid="browser-quality-selector"]');
+    expect(selector?.value).toBe("high");
+
+    // 5. Generation reset: retiring generation resets quality preference to Auto
+    await act(async () => {
+      releaseGeneration(owner.profileId, owner.generation);
+    });
+    await rerender();
+
+    selector = container.querySelector<HTMLSelectElement>('[data-testid="browser-quality-selector"]');
+    expect(selector?.value).toBe("auto");
   });
 });

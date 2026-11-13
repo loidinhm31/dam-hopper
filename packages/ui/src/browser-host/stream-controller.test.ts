@@ -6,10 +6,15 @@ import { packBhjfFrame } from "./frame-protocol.js";
 import { createMockJpeg } from "./frame-protocol.test.js";
 import {
   isValidMediaClientControl,
+  parseMediaServerText,
+  serializeMediaClientControl,
   MAX_CLIENT_DECODE_MS,
   MAX_HEARTBEAT_FRAME_COUNT,
   MAX_HEARTBEAT_SAMPLE_MS,
+  MAX_IMAGE_HEIGHT,
+  MAX_IMAGE_WIDTH,
   MAX_MEDIA_CONTROL_BYTES,
+  type StreamQualityEvent,
   type TargetFrameHeader,
 } from "../api/browser-host-types.js";
 import type { ViewerAttachmentCredentials } from "../api/browser-host-client.js";
@@ -141,8 +146,20 @@ describe("stream-controller", () => {
 
     // Advance 5 seconds to trigger heartbeat
     vi.advanceTimersByTime(5000);
-    expect(mediaWs.sentMessages.length).toBeGreaterThanOrEqual(1);
-    const heartbeat = JSON.parse(mediaWs.sentMessages[0]);
+    expect(mediaWs.sentMessages.length).toBeGreaterThanOrEqual(3);
+    const prefMsg = JSON.parse(mediaWs.sentMessages[0]);
+    expect(prefMsg).toEqual({
+      kind: "qualityPreference",
+      subscriptionEpoch: "sub-epoch-uuid-1",
+      preference: "auto",
+    });
+    const muteMsg = JSON.parse(mediaWs.sentMessages[1]);
+    expect(muteMsg).toEqual({
+      kind: "muteState",
+      subscriptionEpoch: "sub-epoch-uuid-1",
+      muted: true,
+    });
+    const heartbeat = JSON.parse(mediaWs.sentMessages[2]);
     expect(heartbeat).toEqual({
       kind: "heartbeat",
       subscriptionEpoch: "sub-epoch-uuid-1",
@@ -227,7 +244,7 @@ describe("stream-controller", () => {
     controller.attach(mockCreds);
     const mediaWs = MockWebSocket.instances[0];
     mediaWs.onopen?.();
-
+    mediaWs.sentMessages = [];
     const jpeg = createMockJpeg(640, 480);
     const frame1 = packBhjfFrame(makeHeader("1"), jpeg);
     const frame2 = packBhjfFrame(makeHeader("2"), jpeg);
@@ -351,6 +368,7 @@ describe("stream-controller", () => {
     controller.attach(mockCreds);
     const mediaWs = MockWebSocket.instances[0];
     mediaWs.onopen?.();
+    mediaWs.sentMessages = [];
 
     controller.setVisibility(false);
     expect(controller.getStatus()).toBe("paused");
@@ -510,7 +528,7 @@ describe("stream-controller", () => {
         browserSessionId: mockCreds.browserSessionId,
         browserIncarnation: mockCreds.browserIncarnation,
         profileEpoch: "1",
-        producerRun: "fedcba98-7654-4321-8901-abcdef012345",
+        audioRun: "fedcba98-7654-4321-8901-abcdef012345",
         subscriptionEpoch: mockCreds.subscriptionEpoch,
         docEpoch: "1",
         audioSeq: "1",
@@ -521,59 +539,56 @@ describe("stream-controller", () => {
         ...overrides,
       });
 
-    // 1. Audio arriving before validated BHJF frame establishes producerRun is ignored
-    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "1" }) }));
-    expect(onAudioChunk).not.toHaveBeenCalled();
-
-    // 2. Valid BHJF frame establishes currentProducerRun
-    const jpeg = createMockJpeg(640, 480);
-    const frame1 = packBhjfFrame(makeHeader("1"), jpeg);
-    mediaWs.onmessage?.(new MessageEvent("message", { data: frame1.buffer }));
-
-    // 3. Valid audioChunk for current run is delivered
+    // 1. Audio arriving without video frame match is accepted (audioRun decoupled from video producerRun)
     mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "1" }) }));
     expect(onAudioChunk).toHaveBeenCalledTimes(1);
     expect(onAudioChunk.mock.calls[0][0]).toMatchObject({
       kind: "audioChunk",
+      audioRun: "fedcba98-7654-4321-8901-abcdef012345",
       audioSeq: "1",
-      sampleRate: 24000,
-      channels: 1,
-      encoding: "pcm16le",
     });
 
-    // 4. Duplicate or out-of-order audioSeq is dropped without resetting
+    // 2. Duplicate audioSeq is dropped without resetting
     mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "1" }) }));
     expect(onAudioChunk).toHaveBeenCalledTimes(1);
     expect(onAudioReset).not.toHaveBeenCalled();
 
-    // 5. Sequence gap (1 -> 3) triggers synchronous onAudioReset before delivering fresh chunk
+    // 3. Sequence gap (1 -> 3) triggers synchronous onAudioReset before delivering fresh chunk
     mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "3" }) }));
     expect(onAudioReset).toHaveBeenCalledTimes(1);
     expect(onAudioChunk).toHaveBeenCalledTimes(2);
 
-    // 6. Foreign subscription, wrong session, malformed JSON, or odd-byte base64 are ignored and never affect video credits
+    // 4. Foreign subscription, wrong session, malformed JSON, or odd-byte base64 are ignored
     mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "4", subscriptionEpoch: "foreign" }) }));
     mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "4", sampleRate: 48000 }) }));
     mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "4", data: btoa("odd") }) }));
     mediaWs.onmessage?.(new MessageEvent("message", { data: "{malformed" }));
     expect(onAudioChunk).toHaveBeenCalledTimes(2);
 
-    // 7. Producer run change flushes audio and retires the old run
+    // 5. Video-only producerRun change (capture restart) does NOT reset audio or flush
     onAudioReset.mockClear();
-    const nextRun = "11111111-2222-4333-8444-555555555555";
-    const frameNextRun = packBhjfFrame({ ...makeHeader("2"), producerRun: nextRun }, jpeg);
+    const jpeg = createMockJpeg(640, 480);
+    const nextVideoRun = "11111111-2222-4333-8444-555555555555";
+    const frameNextRun = packBhjfFrame({ ...makeHeader("2"), producerRun: nextVideoRun }, jpeg);
     mediaWs.onmessage?.(new MessageEvent("message", { data: frameNextRun.buffer }));
-    expect(onAudioReset).toHaveBeenCalledTimes(1);
+    expect(onAudioReset).not.toHaveBeenCalled();
 
-    // Old run audio is rejected
+    // Audio continues on previous audioRun with monotonic seq
     mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "4" }) }));
-    expect(onAudioChunk).toHaveBeenCalledTimes(2);
-
-    // New run audio starting at seq 1 is accepted
-    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, audioSeq: "1" }) }));
     expect(onAudioChunk).toHaveBeenCalledTimes(3);
 
-    // 8. Privacy and visibility false synchronously reset audio without blacklisting live producerRun on reattach
+    // 6. Real audioRun change flushes audio and retires the old audioRun
+    onAudioReset.mockClear();
+    const nextAudioRun = "22222222-3333-4444-8555-666666666666";
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioRun: nextAudioRun, audioSeq: "1" }) }));
+    expect(onAudioReset).toHaveBeenCalledTimes(1);
+    expect(onAudioChunk).toHaveBeenCalledTimes(4);
+
+    // Old audioRun audio is rejected
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "5" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(4);
+
+    // 7. Privacy synchronously resets audio
     onAudioReset.mockClear();
     controller.setPrivacyMode(true);
     expect(onAudioReset).toHaveBeenCalled();
@@ -587,70 +602,45 @@ describe("stream-controller", () => {
     const mediaWs2 = MockWebSocket.instances[2];
     mediaWs2.onopen?.();
 
-    // Frame with wrong profileEpoch is rejected with ownerChanged and does not establish producerRun
-    const badEpochFrame = packBhjfFrame({ ...makeHeader("3"), producerRun: nextRun, profileEpoch: "99" }, jpeg);
+    // Frame with wrong profileEpoch is rejected
+    const badEpochFrame = packBhjfFrame({ ...makeHeader("3"), producerRun: nextVideoRun, profileEpoch: "99" }, jpeg);
     mediaWs2.onmessage?.(new MessageEvent("message", { data: badEpochFrame.buffer }));
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, audioSeq: "2" }) }));
-    expect(onAudioChunk).toHaveBeenCalledTimes(3);
 
-    // Frame with valid profileEpoch and SAME live producerRun (kept alive by another viewer) restores audio authority
-    const validReattachFrame = packBhjfFrame({ ...makeHeader("4"), producerRun: nextRun }, jpeg);
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: validReattachFrame.buffer }));
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, audioSeq: "2" }) }));
-    expect(onAudioChunk).toHaveBeenCalledTimes(4);
-
-    // 9. Navigation resetAudioAuthority(navRev) is idempotent across repeated calls (store listener + control callback + layout effect)
-    //    and fences queued old-document PCM even after a queued same-run BHJF frame arrives
-    onAudioReset.mockClear();
-    controller.resetAudioAuthority("2");
-    controller.resetAudioAuthority("2");
-    controller.resetAudioAuthority("2");
-    expect(onAudioReset).toHaveBeenCalledTimes(1);
-    // Queued pre-navigation BHJF frame arrives after resetAudioAuthority(): video continues and restores run authority
-    const queuedPreNavFrame = packBhjfFrame({ ...makeHeader("5"), producerRun: nextRun }, jpeg);
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: queuedPreNavFrame.buffer }));
-    // Missing docEpoch is rejected
-    const noDocEpoch = JSON.parse(makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, audioSeq: "3" })) as Record<string, unknown>;
-    delete noDocEpoch.docEpoch;
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: JSON.stringify(noDocEpoch) }));
-    expect(onAudioChunk).toHaveBeenCalledTimes(4);
-    // Previously unseen pre-navigation audioChunk (audioSeq: "3", docEpoch: "1") arriving AFTER the BHJF frame is still rejected!
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "1", audioSeq: "3" }) }));
-    expect(onAudioChunk).toHaveBeenCalledTimes(4);
-    // Post-navigation audioChunk with advanced docEpoch ("2") and monotonic audioSeq ("4") is accepted
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "2", audioSeq: "4" }) }));
+    // Reattached audio chunk with new subscription epoch is accepted
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioRun: nextAudioRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, audioSeq: "1" }) }));
     expect(onAudioChunk).toHaveBeenCalledTimes(5);
 
-    // 9b. Media-before-control ordering: new-document audio (docEpoch: "3") arrives BEFORE control resetAudioAuthority("3")
+    // 8. Navigation resetAudioAuthority(navRev) is idempotent
     onAudioReset.mockClear();
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "3", audioSeq: "5" }) }));
+    controller.resetAudioAuthority("2");
+    controller.resetAudioAuthority("2");
+    controller.resetAudioAuthority("2");
     expect(onAudioReset).toHaveBeenCalledTimes(1);
+
+    // Old doc audio rejected
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioRun: nextAudioRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "1", audioSeq: "2" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(5);
+
+    // New doc audio accepted
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioRun: nextAudioRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "2", audioSeq: "3" }) }));
     expect(onAudioChunk).toHaveBeenCalledTimes(6);
+
+    // 9. Media-before-control ordering: new-document audio (docEpoch: "3") arrives BEFORE control resetAudioAuthority("3")
+    onAudioReset.mockClear();
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioRun: nextAudioRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "3", audioSeq: "4" }) }));
+    expect(onAudioReset).toHaveBeenCalledTimes(1);
+    expect(onAudioChunk).toHaveBeenCalledTimes(7);
     onAudioReset.mockClear();
     controller.resetAudioAuthority("3");
     expect(onAudioReset).not.toHaveBeenCalled();
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "3", audioSeq: "6" }) }));
-    expect(onAudioChunk).toHaveBeenCalledTimes(7);
 
-    // 9c. Silent intermediate document (doc 3 -> doc 4 silent -> doc 5) retires doc 4 and admits doc 5
-    controller.resetAudioAuthority("4");
-    controller.resetAudioAuthority("5");
-    const postNavFrame5 = packBhjfFrame({ ...makeHeader("6"), producerRun: nextRun }, jpeg);
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: postNavFrame5.buffer }));
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "4", audioSeq: "7" }) }));
-    expect(onAudioChunk).toHaveBeenCalledTimes(7);
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "5", audioSeq: "8" }) }));
-    expect(onAudioChunk).toHaveBeenCalledTimes(8);
-
-    // 10. Control socket close permanently retires audio attachment authority even if media frames continue
+    // 10. Control socket close permanently retires audio attachment
     const controlWs2 = MockWebSocket.instances[3];
     onAudioReset.mockClear();
     controlWs2.onclose?.();
     expect(onAudioReset).toHaveBeenCalledTimes(1);
-    const frameAfterControlClose = packBhjfFrame({ ...makeHeader("7"), producerRun: nextRun }, jpeg);
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: frameAfterControlClose.buffer }));
-    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "5", audioSeq: "9" }) }));
-    expect(onAudioChunk).toHaveBeenCalledTimes(8);
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioRun: nextAudioRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "3", audioSeq: "5" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(7);
   });
 
   it("attaches bounded decodeMs to frameAck, aggregates heartbeat telemetry, and resets on identity changes", async () => {
@@ -1337,5 +1327,654 @@ describe("stream-controller", () => {
     expect(controller.getStatus()).toBe("error");
     expect(errors).toHaveLength(1);
     expect(errors[0].message).toContain("wss:// or loopback ws://");
+  });
+
+  describe("Phase 04 viewer quality and mute controls", () => {
+    const validStreamQuality = (): StreamQualityEvent => ({
+      kind: "streamQuality",
+      subscriptionEpoch: mockCreds.subscriptionEpoch,
+      preference: "auto",
+      producerRun: "12345678-1234-4234-8234-123456789abc",
+      captureVersion: "100",
+      sharedTier: "high",
+      viewerTier: "high",
+      fps: 30,
+      jpegQuality: 85,
+      scale: 1.0,
+      imageWidth: 1280,
+      imageHeight: 720,
+      audioSuppressed: false,
+      audioReason: null,
+      status: "effective",
+    });
+
+    it("strictly validates client controls (exact keys, enums, <=1024 bytes)", () => {
+      // Valid qualityPreference
+      for (const pref of ["auto", "high", "medium", "low"] as const) {
+        const serialized = serializeMediaClientControl({
+          kind: "qualityPreference",
+          subscriptionEpoch: "sub-1",
+          preference: pref,
+        });
+        expect(serialized).not.toBeNull();
+        expect(serialized!.length).toBeLessThanOrEqual(1024);
+      }
+
+      // Valid muteState
+      for (const muted of [true, false]) {
+        const serialized = serializeMediaClientControl({
+          kind: "muteState",
+          subscriptionEpoch: "sub-1",
+          muted,
+        });
+        expect(serialized).not.toBeNull();
+        expect(serialized!.length).toBeLessThanOrEqual(1024);
+      }
+
+      // Rejects invalid preference enum
+      expect(
+        serializeMediaClientControl({
+          kind: "qualityPreference",
+          subscriptionEpoch: "sub-1",
+          preference: "ultra",
+        }),
+      ).toBeNull();
+
+      // Rejects extra keys in controls
+      expect(
+        serializeMediaClientControl({
+          kind: "qualityPreference",
+          subscriptionEpoch: "sub-1",
+          preference: "high",
+          extra: "bad",
+        }),
+      ).toBeNull();
+      expect(
+        serializeMediaClientControl({
+          kind: "muteState",
+          subscriptionEpoch: "sub-1",
+          muted: true,
+          extra: "bad",
+        }),
+      ).toBeNull();
+
+      // Rejects non-boolean muted
+      expect(
+        serializeMediaClientControl({
+          kind: "muteState",
+          subscriptionEpoch: "sub-1",
+          muted: "true",
+        }),
+      ).toBeNull();
+      expect(
+        serializeMediaClientControl({
+          kind: "muteState",
+          subscriptionEpoch: "sub-1",
+          muted: 1,
+        }),
+      ).toBeNull();
+
+      // Rejects empty or oversized subscriptionEpoch
+      expect(
+        serializeMediaClientControl({
+          kind: "qualityPreference",
+          subscriptionEpoch: "",
+          preference: "auto",
+        }),
+      ).toBeNull();
+      expect(
+        serializeMediaClientControl({
+          kind: "qualityPreference",
+          subscriptionEpoch: "x".repeat(129),
+          preference: "auto",
+        }),
+      ).toBeNull();
+    });
+
+    it("strictly validates server streamQuality events and parses tagged envelopes", () => {
+      const base = validStreamQuality();
+      const baseRaw = JSON.stringify(base);
+
+      // Valid streamQuality parses successfully
+      const parsed = parseMediaServerText(baseRaw);
+      expect(parsed).toEqual(base);
+      expect(parsed?.kind).toBe("streamQuality");
+
+      // Unknown kind rejected
+      expect(parseMediaServerText(JSON.stringify({ kind: "unknownEvent" }))).toBeNull();
+
+      // Extra keys in streamQuality rejected
+      expect(parseMediaServerText(JSON.stringify({ ...base, extra: "disallowed" }))).toBeNull();
+
+      // Non-canonical UUID rejected
+      expect(parseMediaServerText(JSON.stringify({ ...base, producerRun: "NOT-A-UUID" }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, producerRun: base.producerRun.toUpperCase() }))).toBeNull();
+
+      // Non-canonical captureVersion rejected
+      for (const badVer of ["0", "-1", "01", "100a", "", "18446744073709551616"]) {
+        expect(parseMediaServerText(JSON.stringify({ ...base, captureVersion: badVer }))).toBeNull();
+      }
+
+      // Dimension bounds
+      expect(parseMediaServerText(JSON.stringify({ ...base, imageWidth: 0 }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, imageWidth: MAX_IMAGE_WIDTH + 1 }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, imageHeight: 0 }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, imageHeight: MAX_IMAGE_HEIGHT + 1 }))).toBeNull();
+
+      // FPS bounds [1, 30]
+      expect(parseMediaServerText(JSON.stringify({ ...base, fps: 0 }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, fps: 31 }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, fps: 20.5 }))).toBeNull();
+
+      // jpegQuality bounds [1, 100]
+      expect(parseMediaServerText(JSON.stringify({ ...base, jpegQuality: 0 }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, jpegQuality: 101 }))).toBeNull();
+
+      // scale bounds (0, 1]
+      expect(parseMediaServerText(JSON.stringify({ ...base, scale: 0 }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, scale: -0.5 }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, scale: 1.1 }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, scale: NaN }))).toBeNull();
+
+      // audioSuppressed must match audioReason !== null
+      expect(parseMediaServerText(JSON.stringify({ ...base, audioSuppressed: false, audioReason: "muted" }))).toBeNull();
+      expect(parseMediaServerText(JSON.stringify({ ...base, audioSuppressed: true, audioReason: null }))).toBeNull();
+
+      // audioReason enums: muted, bandwidth, hidden, stalled
+      for (const reason of ["muted", "bandwidth", "hidden", "stalled"] as const) {
+        const validAudioSupp = { ...base, audioSuppressed: true, audioReason: reason };
+        expect(parseMediaServerText(JSON.stringify(validAudioSupp))).toEqual(validAudioSupp);
+      }
+      expect(parseMediaServerText(JSON.stringify({ ...base, audioSuppressed: true, audioReason: "unsupported" }))).toBeNull();
+
+      // status enums: warming, switching, effective, unavailable
+      for (const status of ["warming", "switching", "effective", "unavailable"] as const) {
+        const validStatus = { ...base, status };
+        expect(parseMediaServerText(JSON.stringify(validStatus))).toEqual(validStatus);
+      }
+      expect(parseMediaServerText(JSON.stringify({ ...base, status: "pending" }))).toBeNull();
+
+      // Missing audioReason key on streamQuality is rejected
+      const noReason = { ...base };
+      delete (noReason as Record<string, unknown>).audioReason;
+      expect(parseMediaServerText(JSON.stringify(noReason))).toBeNull();
+
+      // Oversize streamQuality message is rejected
+      const oversize = JSON.stringify({ ...base, extraLong: "x".repeat(8192) });
+      expect(parseMediaServerText(oversize)).toBeNull();
+
+      // audioChunk with old producerRun field is rejected (must have audioRun)
+      const oldAudioChunk = {
+        kind: "audioChunk",
+        browserSessionId: mockCreds.browserSessionId,
+        browserIncarnation: mockCreds.browserIncarnation,
+        profileEpoch: "1",
+        producerRun: "12345678-1234-4234-8234-123456789abc",
+        subscriptionEpoch: mockCreds.subscriptionEpoch,
+        docEpoch: "1",
+        audioSeq: "1",
+        sampleRate: 24000,
+        channels: 1,
+        encoding: "pcm16le",
+        data: btoa(String.fromCharCode(0x10, 0x20, 0x30, 0x40)),
+      };
+      expect(parseMediaServerText(JSON.stringify(oldAudioChunk))).toBeNull();
+
+      // audioChunk with noncanonical base64 padding is rejected
+      const noncanonicalPaddingChunk = {
+        kind: "audioChunk",
+        browserSessionId: mockCreds.browserSessionId,
+        browserIncarnation: mockCreds.browserIncarnation,
+        profileEpoch: "1",
+        audioRun: "12345678-1234-4234-8234-123456789abc",
+        subscriptionEpoch: mockCreds.subscriptionEpoch,
+        docEpoch: "1",
+        audioSeq: "1",
+        sampleRate: 24000,
+        channels: 1,
+        encoding: "pcm16le",
+        data: "AAAAAB==",
+      };
+      expect(parseMediaServerText(JSON.stringify(noncanonicalPaddingChunk))).toBeNull();
+    });
+
+    it("delivers streamQuality to onStreamQuality, never to onAudioChunk, and rejects stale/duplicate events", () => {
+      const onStreamQuality = vi.fn();
+      const onAudioChunk = vi.fn();
+      controller.dispose();
+      controller = new BrowserStreamController({
+        canvas,
+        onStreamQuality,
+        onAudioChunk,
+      });
+      controller.attach(mockCreds);
+      const mediaWs = MockWebSocket.instances[0];
+      mediaWs.onopen?.();
+
+      const evt1 = validStreamQuality();
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(evt1) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(1);
+      expect(onStreamQuality).toHaveBeenCalledWith(evt1, mockCreds);
+      expect(onAudioChunk).not.toHaveBeenCalled();
+
+      // Duplicate consecutive event is dropped
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(evt1) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(1);
+
+      // Stale captureVersion (lower than 100) is rejected
+      const staleVer = { ...evt1, captureVersion: "99", status: "switching" as const };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(staleVer) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(1);
+
+      // Advanced captureVersion is accepted
+      const advVer = { ...evt1, captureVersion: "101", fps: 20 };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(advVer) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(2);
+      expect(onStreamQuality).toHaveBeenLastCalledWith(advVer, mockCreds);
+
+      // Foreign subscriptionEpoch is rejected
+      const foreignSub = { ...evt1, captureVersion: "102", subscriptionEpoch: "foreign-sub" };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(foreignSub) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(2);
+
+      // Event with retired video producerRun is rejected
+      const jpeg = createMockJpeg(640, 480);
+      const frame1 = packBhjfFrame({ ...makeHeader("1"), producerRun: evt1.producerRun }, jpeg);
+      mediaWs.onmessage?.(new MessageEvent("message", { data: frame1.buffer }));
+      // Advance to next video run to retire evt1.producerRun
+      const nextVideoRun = "99999999-8888-4777-8666-555555555555";
+      const frame2 = packBhjfFrame({ ...makeHeader("2"), producerRun: nextVideoRun }, jpeg);
+      mediaWs.onmessage?.(new MessageEvent("message", { data: frame2.buffer }));
+
+      const retiredRunEvt = { ...evt1, captureVersion: "103" };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(retiredRunEvt) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(2);
+
+      // Suppressed under privacy mode
+      controller.setPrivacyMode(true);
+      const privacyEvt = { ...evt1, producerRun: nextVideoRun, captureVersion: "104" };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(privacyEvt) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(2);
+    });
+
+    it("applies captureVersion fence only to effective/switching events, never warming placeholders (C2-W4 regression)", () => {
+      const onStreamQuality = vi.fn();
+      controller.dispose();
+      controller = new BrowserStreamController({
+        canvas,
+        onStreamQuality,
+      });
+      controller.attach(mockCreds);
+      const mediaWs = MockWebSocket.instances[0];
+      mediaWs.onopen?.();
+
+      const base = validStreamQuality();
+
+      // 1. Warming v3 (placeholder) arrives
+      const warmingV3 = { ...base, status: "warming" as const, captureVersion: "3" };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(warmingV3) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(1);
+      expect(onStreamQuality).toHaveBeenLastCalledWith(warmingV3, mockCreds);
+
+      // 2. Coherent proven effective v2 (lower than warming v3 placeholder) must still be accepted!
+      const effectiveV2 = { ...base, status: "effective" as const, captureVersion: "2" };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(effectiveV2) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(2);
+      expect(onStreamQuality).toHaveBeenLastCalledWith(effectiveV2, mockCreds);
+
+      // 3. Effective v3 arrives (advances fence)
+      const effectiveV3 = { ...base, status: "effective" as const, captureVersion: "3", fps: 25 };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(effectiveV3) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(3);
+      expect(onStreamQuality).toHaveBeenLastCalledWith(effectiveV3, mockCreds);
+
+      // 4. Effective v2 for same run is rejected by the monotonic applied fence!
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(effectiveV2) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(3);
+    });
+
+    it("maintains independent monotonic fences per producerRun across placeholder events (C3-W2)", () => {
+      const onStreamQuality = vi.fn();
+      controller.dispose();
+      controller = new BrowserStreamController({
+        canvas,
+        onStreamQuality,
+      });
+      controller.attach(mockCreds);
+      const mediaWs = MockWebSocket.instances[0];
+      mediaWs.onopen?.();
+
+      const runA = "11111111-1111-1111-1111-111111111111";
+      const runB = "22222222-2222-2222-2222-222222222222";
+      const base = validStreamQuality();
+
+      // 1. effective A/v2 is accepted, setting run A applied fence to 2
+      const effectiveAv2 = {
+        ...base,
+        producerRun: runA,
+        captureVersion: "2",
+        status: "effective" as const,
+      };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(effectiveAv2) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(1);
+      expect(onStreamQuality).toHaveBeenLastCalledWith(effectiveAv2, mockCreds);
+
+      // 2. warming B/v3 (placeholder) is accepted without resetting or overwriting any run's applied fence
+      const warmingBv3 = {
+        ...base,
+        producerRun: runB,
+        captureVersion: "3",
+        status: "warming" as const,
+      };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(warmingBv3) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(2);
+      expect(onStreamQuality).toHaveBeenLastCalledWith(warmingBv3, mockCreds);
+
+      // 3. effective A/v1 REJECTED (same-run rollback against run A fence of 2)
+      const effectiveAv1 = {
+        ...base,
+        producerRun: runA,
+        captureVersion: "1",
+        status: "effective" as const,
+      };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(effectiveAv1) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(2);
+
+      // 4. effective B/v2 ACCEPTED (run B fence has not seen effective/switching yet)
+      const effectiveBv2 = {
+        ...base,
+        producerRun: runB,
+        captureVersion: "2",
+        status: "effective" as const,
+      };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(effectiveBv2) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(3);
+      expect(onStreamQuality).toHaveBeenLastCalledWith(effectiveBv2, mockCreds);
+
+      // 5. effective B/v1 REJECTED (same-run rollback against run B fence of 2)
+      const effectiveBv1 = {
+        ...base,
+        producerRun: runB,
+        captureVersion: "1",
+        status: "effective" as const,
+      };
+      mediaWs.onmessage?.(new MessageEvent("message", { data: JSON.stringify(effectiveBv1) }));
+      expect(onStreamQuality).toHaveBeenCalledTimes(3);
+    });
+
+    it("notifies onStreamQualityReset once on media socket close, error, or detachment (C2-W5)", () => {
+      const onStreamQualityReset = vi.fn();
+      controller.dispose();
+      controller = new BrowserStreamController({
+        canvas,
+        onStreamQualityReset,
+      });
+      controller.attach(mockCreds);
+      const mediaWs = MockWebSocket.instances[0];
+
+      // Before open, reset has not fired
+      expect(onStreamQualityReset).not.toHaveBeenCalled();
+
+      // On open: active subscription established
+      mediaWs.onopen?.();
+      expect(onStreamQualityReset).not.toHaveBeenCalled();
+
+      // Privacy mode drops frame/event but does NOT fire onStreamQualityReset
+      controller.setPrivacyMode(true);
+      expect(onStreamQualityReset).toHaveBeenCalledTimes(1); // detachSockets was called by privacy mode
+      onStreamQualityReset.mockClear();
+      controller.setPrivacyMode(false);
+
+      // Reattach to test close/error transitions
+      controller.attach(mockCreds);
+      const mediaWs2 = MockWebSocket.instances[2];
+      mediaWs2.onopen?.();
+      expect(onStreamQualityReset).not.toHaveBeenCalled();
+
+      // Error fires onStreamQualityReset once
+      mediaWs2.onerror?.(new Event("error"));
+      expect(onStreamQualityReset).toHaveBeenCalledTimes(1);
+
+      // Subsequent close on the same errored socket does NOT fire a second reset (once per transition)
+      mediaWs2.onclose?.();
+      expect(onStreamQualityReset).toHaveBeenCalledTimes(1);
+    });
+
+    it("fires onStreamQualityReset once on close-before-open and remembers pending preference, triggers on control close, and avoids double-firing (C3-W5)", () => {
+      const onStreamQualityReset = vi.fn();
+      const onStatusChange = vi.fn();
+      controller.dispose();
+      controller = new BrowserStreamController({
+        canvas,
+        onStreamQualityReset,
+        onStatusChange,
+      });
+
+      // 1. attach -> connecting
+      controller.attach(mockCreds);
+      const mediaWs = MockWebSocket.instances[0];
+      const controlWs = MockWebSocket.instances[1];
+      expect(controller.getStatus()).toBe("connecting");
+      expect(onStreamQualityReset).not.toHaveBeenCalled();
+
+      // Pending preference set while connecting (before open) is remembered
+      controller.setQualityPreference("low");
+      expect(controller.getQualityPreference()).toBe("low");
+
+      // 2. Close media before open -> transitions to disconnected and fires onStreamQualityReset once
+      mediaWs.onclose?.();
+      expect(controller.getStatus()).toBe("disconnected");
+      expect(onStreamQualityReset).toHaveBeenCalledTimes(1);
+
+      // Subsequent error or close on same socket does not double-fire
+      mediaWs.onerror?.(new Event("error"));
+      mediaWs.onclose?.();
+      expect(onStreamQualityReset).toHaveBeenCalledTimes(1);
+
+      // 3. Re-attach re-arms latch and remembers pending preference ("low")
+      onStreamQualityReset.mockClear();
+      const creds2 = { ...mockCreds, subscriptionEpoch: "sub-epoch-2" };
+      controller.attach(creds2);
+      const mediaWs2 = MockWebSocket.instances[2];
+      const controlWs2 = MockWebSocket.instances[3];
+      expect(controller.getStatus()).toBe("connecting");
+      expect(onStreamQualityReset).not.toHaveBeenCalled();
+
+      // On open: sends remembered preference ("low")
+      mediaWs2.onopen?.();
+      expect(controller.getStatus()).toBe("streaming");
+      expect(mediaWs2.sentMessages.length).toBeGreaterThanOrEqual(1);
+      expect(JSON.parse(mediaWs2.sentMessages[0])).toMatchObject({
+        kind: "qualityPreference",
+        preference: "low",
+        subscriptionEpoch: "sub-epoch-2",
+      });
+
+      // 4. Control socket close retires audio authority and triggers onStreamQualityReset
+      controlWs2.onclose?.();
+      expect(onStreamQualityReset).toHaveBeenCalledTimes(1);
+
+      // Subsequent media close does not double-fire
+      mediaWs2.onclose?.();
+      expect(onStreamQualityReset).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves subscription-wide document floor across audio source changes (W1 regression)", () => {
+      const onAudioChunk = vi.fn();
+      const onAudioReset = vi.fn();
+      controller.dispose();
+      controller = new BrowserStreamController({
+        canvas,
+        onAudioChunk,
+        onAudioReset,
+      });
+      controller.attach(mockCreds);
+      const mediaWs = MockWebSocket.instances[0];
+      mediaWs.onopen?.();
+
+      const validPcmB64 = btoa(String.fromCharCode(0x10, 0x20, 0x30, 0x40));
+      const makeMsg = (audioRun: string, docEpoch: string, audioSeq: string) =>
+        JSON.stringify({
+          kind: "audioChunk",
+          browserSessionId: mockCreds.browserSessionId,
+          browserIncarnation: mockCreds.browserIncarnation,
+          profileEpoch: "1",
+          audioRun,
+          subscriptionEpoch: mockCreds.subscriptionEpoch,
+          docEpoch,
+          audioSeq,
+          sampleRate: 24000,
+          channels: 1,
+          encoding: "pcm16le",
+          data: validPcmB64,
+        });
+
+      const runA = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+      const runB = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
+
+      // 1. Accept run A on doc 1
+      mediaWs.onmessage?.(new MessageEvent("message", { data: makeMsg(runA, "1", "1") }));
+      expect(onAudioChunk).toHaveBeenCalledTimes(1);
+      expect(onAudioChunk).toHaveBeenLastCalledWith(
+        expect.objectContaining({ audioRun: runA, docEpoch: "1", audioSeq: "1" }),
+        mockCreds,
+      );
+
+      // 2. Navigation resets audio authority to doc 2
+      onAudioReset.mockClear();
+      controller.resetAudioAuthority("2");
+      expect(onAudioReset).toHaveBeenCalledTimes(1);
+
+      // 3. Previously-unseen run B arrives on doc 1 (stale cross-socket navigation race):
+      // Document floor must NOT be erased by the new source run!
+      // Must be REJECTED and must NOT trigger onAudioReset or change source run!
+      onAudioReset.mockClear();
+      mediaWs.onmessage?.(new MessageEvent("message", { data: makeMsg(runB, "1", "1") }));
+      expect(onAudioChunk).toHaveBeenCalledTimes(1); // Still 1, rejected!
+      expect(onAudioReset).not.toHaveBeenCalled();
+
+      // 4. Run B arrives on doc 2: accepted!
+      mediaWs.onmessage?.(new MessageEvent("message", { data: makeMsg(runB, "2", "1") }));
+      expect(onAudioChunk).toHaveBeenCalledTimes(2);
+      expect(onAudioChunk).toHaveBeenLastCalledWith(
+        expect.objectContaining({ audioRun: runB, docEpoch: "2", audioSeq: "1" }),
+        mockCreds,
+      );
+    });
+
+    it("coalesces rapid preference and mute updates <=4/s with latest-wins, while mute=true is immediate", () => {
+      vi.useFakeTimers();
+      const onAudioReset = vi.fn();
+      controller.dispose();
+      controller = new BrowserStreamController({
+        canvas,
+        onAudioReset,
+      });
+      controller.attach(mockCreds);
+      const mediaWs = MockWebSocket.instances[0];
+      mediaWs.onopen?.();
+
+      // On open: sends default auto + muted: true immediately
+      expect(mediaWs.sentMessages).toHaveLength(2);
+      expect(JSON.parse(mediaWs.sentMessages[0])).toMatchObject({
+        kind: "qualityPreference",
+        preference: "auto",
+      });
+      expect(JSON.parse(mediaWs.sentMessages[1])).toMatchObject({
+        kind: "muteState",
+        muted: true,
+      });
+      mediaWs.sentMessages = [];
+
+      // Rapid preference changes: "high", "medium", "low"
+      // Since onopen just sent, immediate send is rate-limited (lastQualityPrefSentAt was now)
+      controller.setQualityPreference("high");
+      controller.setQualityPreference("medium");
+      controller.setQualityPreference("low");
+      expect(mediaWs.sentMessages).toHaveLength(0); // Coalescing pending
+
+      // Advance 250ms: timer fires, latest ("low") is sent
+      vi.advanceTimersByTime(250);
+      expect(mediaWs.sentMessages).toHaveLength(1);
+      expect(JSON.parse(mediaWs.sentMessages[0])).toMatchObject({
+        kind: "qualityPreference",
+        preference: "low",
+      });
+      mediaWs.sentMessages = [];
+
+      // Next preference change after 250ms sends immediately
+      vi.advanceTimersByTime(250);
+      controller.setQualityPreference("high");
+      expect(mediaWs.sentMessages).toHaveLength(1);
+      expect(JSON.parse(mediaWs.sentMessages[0])).toMatchObject({
+        kind: "qualityPreference",
+        preference: "high",
+      });
+      mediaWs.sentMessages = [];
+
+      // Mute handling:
+      // First un-mute request after 500ms sends immediately
+      controller.setAudioMuted(false);
+      expect(mediaWs.sentMessages).toHaveLength(1);
+      expect(JSON.parse(mediaWs.sentMessages[0])).toMatchObject({
+        kind: "muteState",
+        muted: false,
+      });
+      mediaWs.sentMessages = [];
+
+      // Second un-mute immediately is rate-limited:
+      controller.setAudioMuted(false);
+      expect(mediaWs.sentMessages).toHaveLength(0);
+      vi.advanceTimersByTime(250);
+      expect(mediaWs.sentMessages).toHaveLength(1);
+      mediaWs.sentMessages = [];
+
+      // Calling setAudioMuted(true) takes effect IMMEDIATELY and synchronously flushes audio
+      onAudioReset.mockClear();
+      controller.setAudioMuted(true);
+      expect(onAudioReset).toHaveBeenCalledTimes(1);
+      expect(mediaWs.sentMessages).toHaveLength(1);
+      expect(JSON.parse(mediaWs.sentMessages[0])).toMatchObject({
+        kind: "muteState",
+        muted: true,
+      });
+      mediaWs.sentMessages = [];
+
+      // Rapid un-mute then immediate mute: mute cancels pending un-mute
+      controller.setAudioMuted(false);
+      expect(mediaWs.sentMessages).toHaveLength(0);
+      controller.setAudioMuted(true);
+      expect(mediaWs.sentMessages).toHaveLength(1);
+      expect(JSON.parse(mediaWs.sentMessages[0])).toMatchObject({
+        kind: "muteState",
+        muted: true,
+      });
+      mediaWs.sentMessages = [];
+      vi.advanceTimersByTime(500);
+      // No trailing un-mute message is sent!
+      expect(mediaWs.sentMessages).toHaveLength(0);
+
+      // Reconnect (attach again) re-sends the remembered preference ("high") and mute (true)
+      const reattachedCreds = {
+        ...mockCreds,
+        subscriptionEpoch: "sub-reattached-epoch",
+      };
+      controller.attach(reattachedCreds);
+      const mediaWs2 = MockWebSocket.instances[2];
+      mediaWs2.onopen?.();
+      expect(mediaWs2.sentMessages).toHaveLength(2);
+      expect(JSON.parse(mediaWs2.sentMessages[0])).toMatchObject({
+        kind: "qualityPreference",
+        preference: "high",
+        subscriptionEpoch: reattachedCreds.subscriptionEpoch,
+      });
+      expect(JSON.parse(mediaWs2.sentMessages[1])).toMatchObject({
+        kind: "muteState",
+        muted: true,
+        subscriptionEpoch: reattachedCreds.subscriptionEpoch,
+      });
+
+      vi.useRealTimers();
+    });
   });
 });

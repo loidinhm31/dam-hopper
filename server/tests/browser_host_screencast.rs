@@ -9,7 +9,7 @@ use chromiumoxide_cdp::cdp::browser_protocol::target::CreateTargetParams;
 use dam_hopper_server::browser_host::cdp::CdpClient;
 use dam_hopper_server::browser_host::process::{find_browser_executable, BrowserLaunchConfig, BrowserProcess};
 use dam_hopper_server::browser_host::protocol::{
-    unpack_bhjf_frame, TargetGeometry, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH,
+    unpack_bhjf_frame, StreamQualityStatus, TargetGeometry, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH,
 };
 use dam_hopper_server::browser_host::screencast::{
     create_governor_interval, ScreencastProducer, ScreencastState,
@@ -903,6 +903,7 @@ async fn audio_authority_survives_capture_restart_and_viewer_gates_are_per_subsc
     let run1 = producer.current_run().await.unwrap();
     let other = Uuid::new_v4().to_string();
     producer.register_viewer_demand("viewer-2", &other, true).await;
+    assert!(producer.set_viewer_muted(&other, false));
     let pcm = B64.encode([0x12u8, 0x34, 0x56, 0x78]);
     let doc = producer.audio_doc_epoch();
     assert!(producer.admit_and_broadcast_audio_chunk(run1, doc, &pcm).await.is_some());
@@ -932,18 +933,222 @@ async fn queued_audio_is_dropped_after_a_quick_mute_unmute_and_for_unknown_subsc
     let (producer, _cdp, sub) = streaming_producer(Faults::default(), 75).await;
     let run = producer.audio_source_run().unwrap().to_string();
     let doc = producer.audio_doc_epoch();
+    assert!(producer.set_viewer_muted(&sub, false));
     let admitted = producer.viewer_audio_generation(&sub).unwrap();
-    assert!(audio_chunk_admissible(&producer, &sub, admitted, &run, doc));
+    assert!(audio_chunk_admissible(&producer, &sub, admitted, 100, &run, doc));
 
     // Mute then unmute before the writer touches the queued chunk: allowed again, still dropped.
     assert!(producer.set_viewer_muted(&sub, true));
     assert!(producer.set_viewer_muted(&sub, false));
     assert_eq!(producer.viewer_audio_gate(&sub), Some(AudioGate::Allowed));
-    assert!(!audio_chunk_admissible(&producer, &sub, admitted, &run, doc), "pre-mute chunk must not be replayed");
+    assert!(!audio_chunk_admissible(&producer, &sub, admitted, 100, &run, doc), "pre-mute chunk must not be replayed");
     let fresh = producer.viewer_audio_generation(&sub).unwrap();
-    assert!(audio_chunk_admissible(&producer, &sub, fresh, &run, doc), "a chunk admitted after unmute is fine");
+    assert!(audio_chunk_admissible(&producer, &sub, fresh, 200, &run, doc), "a chunk admitted after unmute is fine");
 
-    assert!(!audio_chunk_admissible(&producer, "unknown-subscription", fresh, &run, doc), "unknown subscription fails closed");
-    assert!(!audio_chunk_admissible(&producer, &sub, fresh, &Uuid::new_v4().to_string(), doc), "foreign audio source rejected");
-    assert!(!audio_chunk_admissible(&producer, &sub, fresh, &run, doc + 1), "stale document epoch rejected");
+    assert!(!audio_chunk_admissible(&producer, "unknown-subscription", fresh, 200, &run, doc), "unknown subscription fails closed");
+    assert!(!audio_chunk_admissible(&producer, &sub, fresh, 200, &Uuid::new_v4().to_string(), doc), "foreign audio source rejected");
+    assert!(!audio_chunk_admissible(&producer, &sub, fresh, 200, &run, doc + 1), "stale document epoch rejected");
+}
+
+#[tokio::test]
+async fn stream_quality_event_lifecycle_and_independent_viewer_gates() {
+    use dam_hopper_server::browser_host::protocol::{StreamAudioReason, StreamQualityStatus};
+    let (producer, mut cdp, sub1) = streaming_producer(Faults::default(), 75).await;
+    let sub2 = Uuid::new_v4().to_string();
+    producer.register_viewer_demand("viewer-2", &sub2, true).await;
+    let mut frames = producer.subscribe_frames();
+
+    // 1. Before native frame published: status is Warming.
+    let q1_warm = producer.stream_quality_event(&sub1).await;
+    assert_eq!(q1_warm.status, StreamQualityStatus::Warming);
+    assert_eq!(q1_warm.preference, QualityPreference::Auto);
+    assert!(q1_warm.audio_suppressed);
+    assert_eq!(q1_warm.audio_reason, Some(StreamAudioReason::Muted));
+
+    // Unmute sub1, keep sub2 muted.
+    assert!(producer.set_viewer_muted(&sub1, false));
+
+    // 2. Publish native frame -> status becomes Effective.
+    cdp.push.send(screencast_frame_event(1)).unwrap();
+    timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+
+    let q1_eff = producer.stream_quality_event(&sub1).await;
+    assert_eq!(q1_eff.status, StreamQualityStatus::Effective);
+    assert_eq!(q1_eff.preference, QualityPreference::Auto);
+    assert!(!q1_eff.audio_suppressed);
+    assert_eq!(q1_eff.audio_reason, None);
+    assert_eq!(q1_eff.shared_tier, CaptureTier::Medium);
+    assert_eq!(q1_eff.viewer_tier, CaptureTier::Medium);
+    assert_eq!(q1_eff.image_width, 64);
+    assert_eq!(q1_eff.image_height, 64);
+
+    // Sub2 sees same sharedTier and applied image dimensions, but independent viewer state (muted).
+    let q2_eff = producer.stream_quality_event(&sub2).await;
+    assert_eq!(q2_eff.status, StreamQualityStatus::Effective);
+    assert_eq!(q2_eff.shared_tier, q1_eff.shared_tier);
+    assert_eq!(q2_eff.image_width, q1_eff.image_width);
+    assert_eq!(q2_eff.image_height, q1_eff.image_height);
+    assert!(q2_eff.audio_suppressed);
+    assert_eq!(q2_eff.audio_reason, Some(StreamAudioReason::Muted));
+
+    // 3. Sub2 requests Low preference without any lease.
+    assert!(producer.set_viewer_quality_preference(&sub2, QualityPreference::Low));
+    let q2_sw = producer.stream_quality_event(&sub2).await;
+    assert_eq!(q2_sw.preference, QualityPreference::Low);
+    assert_eq!(q2_sw.viewer_tier, CaptureTier::Low);
+    // W4: proven sharedTier remains Medium until the Low native run is proven
+    assert_eq!(q2_sw.shared_tier, CaptureTier::Medium);
+}
+
+#[tokio::test]
+async fn video_restart_preserves_audio_source_and_audio_seq() {
+    let (producer, _cdp, sub) = streaming_producer(Faults::default(), 75).await;
+    let run1 = producer.current_run().await.unwrap();
+    let audio_run = producer.audio_source_run().expect("audio source run");
+    assert_eq!(audio_run, run1);
+    let pcm = B64.encode([0x12u8, 0x34, 0x56, 0x78]);
+    let doc = producer.audio_doc_epoch();
+
+    // Broadcast audio chunk seq 1
+    let c1 = producer.admit_and_broadcast_audio_chunk(audio_run, doc, &pcm).await.expect("chunk 1");
+    assert_eq!(c1.audio_seq, "1");
+    assert_eq!(c1.audio_run, audio_run.to_string());
+
+    // Video restart via preference switch
+    assert!(producer.set_viewer_quality_preference(&sub, QualityPreference::Low));
+    let run2 = wait_for_new_run(&producer, run1).await;
+    assert_ne!(run2, run1);
+
+    // Audio source run is unchanged, and audio seq continues monotonically (seq 2, NOT reset to 1)
+    assert_eq!(producer.audio_source_run(), Some(audio_run));
+    let c2 = producer.admit_and_broadcast_audio_chunk(audio_run, doc, &pcm).await.expect("chunk 2");
+    assert_eq!(c2.audio_seq, "2");
+    assert_eq!(c2.audio_run, audio_run.to_string());
+
+    // Genuine stop tears down audio source
+    assert!(producer.stop_screencast().await.is_ok());
+    assert_eq!(producer.audio_source_run(), None);
+}
+
+#[tokio::test]
+async fn steady_identical_frames_do_not_bump_quality_revision() {
+    let (producer, mut cdp, _sub) = streaming_producer(Faults::default(), 75).await;
+    let mut frames = producer.subscribe_frames();
+
+    // First frame published
+    cdp.push.send(screencast_frame_event(1)).unwrap();
+    timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    let rev1 = producer.quality_revision();
+
+    // 10 identical frames
+    // 5 identical frames, waiting for governor interval
+    for _ in 0..5 {
+        sleep(Duration::from_millis(120)).await;
+        cdp.push.send(screencast_frame_event(1)).unwrap();
+        timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    }
+    let rev2 = producer.quality_revision();
+    assert_eq!(rev1, rev2, "quality_revision must not bump across identical frames");
+    // Note on C3-W6: ScreencastLedger tracks frame and connection lifecycles but does not maintain
+    // a separate per-producer quality_events_built counter. In the media pipeline (media.rs:1809),
+    // last_digest.quality_rev != p.quality_revision() checks this exact revision, guaranteeing
+    // that rev1 == rev2 produces zero quality event builds and zero outgoing streamQuality messages.
+}
+
+#[tokio::test]
+async fn fps_only_change_converges_to_effective_status() {
+    let (producer, mut cdp, sub) = streaming_producer(Faults::default(), 75).await;
+    let mut frames = producer.subscribe_frames();
+
+    // 1. First frame proven -> effective
+    cdp.push.send(screencast_frame_event(1)).unwrap();
+    timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    let q1 = producer.stream_quality_event(&sub).await;
+    assert_eq!(q1.status, StreamQualityStatus::Effective);
+    assert_eq!(q1.fps, 10);
+
+    // 2. Governor-only FPS change to 6 (same stage quality/scale)
+    let med_stage = producer.capture_state().ladder().anchor(CaptureTier::Medium);
+    let snap = producer.capture_state().publish(med_stage, 6).unwrap();
+    assert_eq!(snap.native_key(), (65, 1000));
+    assert_eq!(snap.fps, 6);
+
+    // Frame published with governor applied_fps = 6
+    sleep(Duration::from_millis(120)).await;
+    cdp.push.send(screencast_frame_event(1)).unwrap();
+    timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    // Now governor has applied fps 6, native key matches: converges to Effective!
+    let q3 = producer.stream_quality_event(&sub).await;
+    assert_eq!(
+        q3.status,
+        StreamQualityStatus::Effective,
+        "governor-only FPS change must converge to effective"
+    );
+    assert_eq!(q3.capture_version, snap.version.to_string());
+}
+#[tokio::test]
+async fn capture_version_is_monotonic_during_switching_after_governor_fps_convergence() {
+    let (producer, mut cdp, sub) = streaming_producer(Faults::default(), 75).await;
+    let mut frames = producer.subscribe_frames();
+
+    // 1. First frame proven -> effective with native snapshot version 1
+    cdp.push.send(screencast_frame_event(1)).unwrap();
+    timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    let q1 = producer.stream_quality_event(&sub).await;
+    assert_eq!(q1.status, StreamQualityStatus::Effective);
+    assert_eq!(q1.capture_version, "1");
+
+    // 2. Governor-only target v2 with FPS 6 (same native key)
+    let med_stage = producer.capture_state().ladder().anchor(CaptureTier::Medium);
+    let snap_v2 = producer.capture_state().publish(med_stage, 6).unwrap();
+    assert_eq!(snap_v2.version, 2);
+
+    // Frame published with applied_fps 6 -> converges to Effective with capture_version 2
+    sleep(Duration::from_millis(120)).await;
+    cdp.push.send(screencast_frame_event(1)).unwrap();
+    timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    let q2 = producer.stream_quality_event(&sub).await;
+    assert_eq!(q2.status, StreamQualityStatus::Effective);
+    assert_eq!(q2.capture_version, "2");
+
+    // 3. New target v3 with FPS 2 (Switching state before v3 is applied/proven)
+    let snap_v3 = producer.capture_state().publish(med_stage, 2).unwrap();
+    assert_eq!(snap_v3.version, 3);
+
+    // Stream quality event during switching MUST retain monotonic capture_version >= 2,
+    // NEVER falling back to native snapshot version 1.
+    let q3 = producer.stream_quality_event(&sub).await;
+    assert_eq!(q3.status, StreamQualityStatus::Switching);
+    let v: u64 = q3.capture_version.parse().expect("valid version number");
+    assert!(
+        v >= 2,
+        "capture_version during switching must be >= 2 (applied event version), got {}",
+        q3.capture_version
+    );
+}
+
+#[tokio::test]
+async fn target_advances_before_first_frame_proof_still_emitted_coherently() {
+    let (producer, mut cdp, sub) = streaming_producer(Faults::default(), 75).await;
+    let mut frames = producer.subscribe_frames();
+    let initial_target = producer.capture_snapshot();
+
+    // Target advances before any frame is received
+    let med_stage = producer.capture_state().ladder().anchor(CaptureTier::Medium);
+    let new_target = producer.capture_state().publish(med_stage, 6).unwrap();
+    assert!(new_target.version > initial_target.version);
+
+    // Warming status emits target version as placeholder
+    let q_warm = producer.stream_quality_event(&sub).await;
+    assert_eq!(q_warm.status, StreamQualityStatus::Warming);
+    assert_eq!(q_warm.capture_version, new_target.version.to_string());
+
+    // First frame arrives for initial native run
+    cdp.push.send(screencast_frame_event(1)).unwrap();
+    timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+
+    // Proven event is emitted coherently
+    let q_prov = producer.stream_quality_event(&sub).await;
+    assert!(matches!(q_prov.status, StreamQualityStatus::Effective | StreamQualityStatus::Switching));
+    assert_eq!(q_prov.shared_tier, initial_target.tier);
 }

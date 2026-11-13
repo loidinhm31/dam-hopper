@@ -10,7 +10,8 @@ pub const BHJF_PREFIX_LEN: usize = 16;
 
 pub const MAX_JSON_HEADER_BYTES: usize = 1024;
 pub const MAX_JPEG_PAYLOAD_BYTES: usize = 2_097_152; // 2 MiB
-pub const MAX_FRAME_MESSAGE_BYTES: usize = BHJF_PREFIX_LEN + MAX_JSON_HEADER_BYTES + MAX_JPEG_PAYLOAD_BYTES; // 2,098,192
+pub const MAX_FRAME_MESSAGE_BYTES: usize =
+    BHJF_PREFIX_LEN + MAX_JSON_HEADER_BYTES + MAX_JPEG_PAYLOAD_BYTES; // 2,098,192
 
 pub const MAX_PENDING_COMMANDS: usize = 64;
 pub const COMMAND_TIMEOUT_SECS: u64 = 10;
@@ -162,7 +163,9 @@ impl TargetGeometry {
             || !is_valid_float(self.visual_offset_y)
             || !is_valid_float(self.dpr)
         {
-            return Err(ProtocolError::InvalidGeometry("non-finite float detected".to_string()));
+            return Err(ProtocolError::InvalidGeometry(
+                "non-finite float detected".to_string(),
+            ));
         }
         if self.css_width <= 0.0
             || self.css_width > MAX_VIEWPORT_CSS_WIDTH
@@ -193,7 +196,9 @@ impl TargetGeometry {
             || self.visual_offset_x.abs() > MAX_OFFSET
             || self.visual_offset_y.abs() > MAX_OFFSET
         {
-            return Err(ProtocolError::InvalidGeometry("offset exceeds 10,000,000 CSS px".to_string()));
+            return Err(ProtocolError::InvalidGeometry(
+                "offset exceeds 10,000,000 CSS px".to_string(),
+            ));
         }
         Ok(())
     }
@@ -227,7 +232,9 @@ impl TargetFrameHeader {
         validate_decimal_sequence("profileEpoch", &self.profile_epoch)?;
         validate_decimal_sequence("viewportEpoch", &self.viewport_epoch)?;
         validate_decimal_sequence("frameSeq", &self.frame_seq)?;
-        let validate_canonical_uuid = |field: &'static str, val: &str| -> Result<(), ProtocolError> {
+        let validate_canonical_uuid = |field: &'static str,
+                                       val: &str|
+         -> Result<(), ProtocolError> {
             let parsed = uuid::Uuid::parse_str(val)
                 .map_err(|e| ProtocolError::InvalidJson(format!("invalid {field} UUID: {e}")))?;
             if val != parsed.to_string() {
@@ -252,7 +259,11 @@ impl TargetFrameHeader {
 
         self.geometry.validate()?;
 
-        if self.width == 0 || self.width > MAX_IMAGE_WIDTH || self.height == 0 || self.height > MAX_IMAGE_HEIGHT {
+        if self.width == 0
+            || self.width > MAX_IMAGE_WIDTH
+            || self.height == 0
+            || self.height > MAX_IMAGE_HEIGHT
+        {
             return Err(ProtocolError::DimensionOutOfBounds {
                 width: self.width,
                 height: self.height,
@@ -273,7 +284,9 @@ impl TargetFrameHeader {
 /// Parse JPEG SOF marker to inspect actual image dimensions without a full decode.
 pub fn parse_jpeg_dimensions(data: &[u8]) -> Result<(u32, u32), ProtocolError> {
     if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
-        return Err(ProtocolError::InvalidJpeg("not a valid JPEG stream (missing SOI)".to_string()));
+        return Err(ProtocolError::InvalidJpeg(
+            "not a valid JPEG stream (missing SOI)".to_string(),
+        ));
     }
     let mut idx = 2;
     while idx + 4 <= data.len() {
@@ -296,13 +309,17 @@ pub fn parse_jpeg_dimensions(data: &[u8]) -> Result<(u32, u32), ProtocolError> {
         }
         let seg_len = u16::from_be_bytes([data[idx], data[idx + 1]]) as usize;
         if seg_len < 2 || idx + seg_len > data.len() {
-            return Err(ProtocolError::InvalidJpeg("malformed JPEG segment length".to_string()));
+            return Err(ProtocolError::InvalidJpeg(
+                "malformed JPEG segment length".to_string(),
+            ));
         }
 
         // SOF0 (Baseline), SOF1 (Extended), SOF2 (Progressive)
         if marker == 0xC0 || marker == 0xC1 || marker == 0xC2 {
             if seg_len < 7 {
-                return Err(ProtocolError::InvalidJpeg("SOF segment too short".to_string()));
+                return Err(ProtocolError::InvalidJpeg(
+                    "SOF segment too short".to_string(),
+                ));
             }
             // SOF layout: [len:2] [precision:1] [height:2] [width:2]
             let height = u16::from_be_bytes([data[idx + 3], data[idx + 4]]) as u32;
@@ -312,7 +329,9 @@ pub fn parse_jpeg_dimensions(data: &[u8]) -> Result<(u32, u32), ProtocolError> {
 
         idx += seg_len;
     }
-    Err(ProtocolError::InvalidJpeg("SOF marker not found".to_string()))
+    Err(ProtocolError::InvalidJpeg(
+        "SOF marker not found".to_string(),
+    ))
 }
 
 /// Immutable validated BHJF frame carrying pre-validated header and packed bytes.
@@ -346,8 +365,8 @@ fn pack_bhjf_frame_bytes_checked(
     header: &TargetFrameHeader,
     jpeg_payload: &[u8],
 ) -> Result<Bytes, ProtocolError> {
-    let header_json = serde_json::to_string(header)
-        .map_err(|e| ProtocolError::InvalidJson(e.to_string()))?;
+    let header_json =
+        serde_json::to_string(header).map_err(|e| ProtocolError::InvalidJson(e.to_string()))?;
     let header_bytes = header_json.as_bytes();
     if header_bytes.is_empty() || header_bytes.len() > MAX_JSON_HEADER_BYTES {
         return Err(ProtocolError::InvalidHeaderLength(header_bytes.len()));
@@ -390,7 +409,10 @@ fn pack_bhjf_frame_bytes_checked(
 }
 
 /// Pack a complete target BHJF frame into an immutable contiguous Bytes buffer.
-pub fn pack_bhjf_frame(header: &TargetFrameHeader, jpeg_payload: &[u8]) -> Result<Bytes, ProtocolError> {
+pub fn pack_bhjf_frame(
+    header: &TargetFrameHeader,
+    jpeg_payload: &[u8],
+) -> Result<Bytes, ProtocolError> {
     Ok(pack_validated_bhjf_frame(header.clone(), jpeg_payload)?.data)
 }
 
@@ -628,6 +650,14 @@ pub enum MediaClientControlWire {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         telemetry: Option<HeartbeatTelemetry>,
     },
+    QualityPreference {
+        subscription_epoch: String,
+        preference: super::capture_tier::QualityPreference,
+    },
+    MuteState {
+        subscription_epoch: String,
+        muted: bool,
+    },
 }
 
 impl MediaClientControlWire {
@@ -654,8 +684,9 @@ impl MediaClientControlWire {
             Ok(())
         };
         let check_run = |run: &str| -> Result<(), ProtocolError> {
-            let parsed = uuid::Uuid::parse_str(run)
-                .map_err(|e| ProtocolError::InvalidJson(format!("invalid producerRun UUID: {e}")))?;
+            let parsed = uuid::Uuid::parse_str(run).map_err(|e| {
+                ProtocolError::InvalidJson(format!("invalid producerRun UUID: {e}"))
+            })?;
             if run != parsed.to_string() {
                 return Err(ProtocolError::InvalidJson(format!(
                     "producerRun UUID '{run}' is not canonical lowercase hyphenated"
@@ -717,6 +748,12 @@ impl MediaClientControlWire {
                 }
                 Ok(())
             }
+            Self::QualityPreference {
+                subscription_epoch, ..
+            } => check_sub(subscription_epoch),
+            Self::MuteState {
+                subscription_epoch, ..
+            } => check_sub(subscription_epoch),
         }
     }
 }
@@ -754,6 +791,14 @@ pub enum MediaClientControl {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         telemetry: Option<HeartbeatTelemetry>,
     },
+    QualityPreference {
+        subscription_epoch: String,
+        preference: super::capture_tier::QualityPreference,
+    },
+    MuteState {
+        subscription_epoch: String,
+        muted: bool,
+    },
 }
 
 impl TryFrom<MediaClientControlWire> for MediaClientControl {
@@ -789,9 +834,9 @@ impl TryFrom<MediaClientControlWire> for MediaClientControl {
                 frame_seq,
                 reason,
             },
-            MediaClientControlWire::Pause { subscription_epoch } => Self::Pause {
-                subscription_epoch,
-            },
+            MediaClientControlWire::Pause { subscription_epoch } => {
+                Self::Pause { subscription_epoch }
+            }
             MediaClientControlWire::Heartbeat {
                 subscription_epoch,
                 visible,
@@ -800,6 +845,20 @@ impl TryFrom<MediaClientControlWire> for MediaClientControl {
                 subscription_epoch,
                 visible,
                 telemetry,
+            },
+            MediaClientControlWire::QualityPreference {
+                subscription_epoch,
+                preference,
+            } => Self::QualityPreference {
+                subscription_epoch,
+                preference,
+            },
+            MediaClientControlWire::MuteState {
+                subscription_epoch,
+                muted,
+            } => Self::MuteState {
+                subscription_epoch,
+                muted,
             },
         })
     }
@@ -851,6 +910,22 @@ impl MediaClientControl {
                 telemetry: *telemetry,
             }
             .validate(),
+            Self::QualityPreference {
+                subscription_epoch,
+                preference,
+            } => MediaClientControlWire::QualityPreference {
+                subscription_epoch: subscription_epoch.clone(),
+                preference: *preference,
+            }
+            .validate(),
+            Self::MuteState {
+                subscription_epoch,
+                muted,
+            } => MediaClientControlWire::MuteState {
+                subscription_epoch: subscription_epoch.clone(),
+                muted: *muted,
+            }
+            .validate(),
         }
     }
 }
@@ -864,7 +939,6 @@ pub enum DiscardReason {
     DecodeFailed,
     OwnerChanged,
 }
-
 
 fn serialize_arc_str<S>(val: &std::sync::Arc<str>, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -887,7 +961,7 @@ pub struct ProducerAudioChunk {
     pub browser_session_id: String,
     pub browser_incarnation: String,
     pub profile_epoch: String,
-    pub producer_run: String,
+    pub audio_run: String,
     pub doc_epoch: u64,
     pub audio_seq: String,
     pub sample_rate: u32,
@@ -902,7 +976,7 @@ impl PartialEq for ProducerAudioChunk {
         self.browser_session_id == other.browser_session_id
             && self.browser_incarnation == other.browser_incarnation
             && self.profile_epoch == other.profile_epoch
-            && self.producer_run == other.producer_run
+            && self.audio_run == other.audio_run
             && self.doc_epoch == other.doc_epoch
             && self.audio_seq == other.audio_seq
             && self.sample_rate == other.sample_rate
@@ -920,7 +994,7 @@ impl ProducerAudioChunk {
             browser_session_id: self.browser_session_id.clone(),
             browser_incarnation: self.browser_incarnation.clone(),
             profile_epoch: self.profile_epoch.clone(),
-            producer_run: self.producer_run.clone(),
+            audio_run: self.audio_run.clone(),
             subscription_epoch: subscription_epoch.to_string(),
             doc_epoch: self.doc_epoch.to_string(),
             audio_seq: self.audio_seq.clone(),
@@ -933,13 +1007,13 @@ impl ProducerAudioChunk {
 }
 /// Server -> Client JSON text envelope sent over `/api/browser/media` alongside binary BHJF frames.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserAudioChunk {
     pub kind: String,
     pub browser_session_id: String,
     pub browser_incarnation: String,
     pub profile_epoch: String,
-    pub producer_run: String,
+    pub audio_run: String,
     pub subscription_epoch: String,
     pub doc_epoch: String,
     pub audio_seq: String,
@@ -966,7 +1040,7 @@ impl BrowserAudioChunk {
         for (field, val) in [
             ("browserSessionId", &self.browser_session_id),
             ("browserIncarnation", &self.browser_incarnation),
-            ("producerRun", &self.producer_run),
+            ("audioRun", &self.audio_run),
         ] {
             let parsed = uuid::Uuid::parse_str(val)
                 .map_err(|e| ProtocolError::InvalidJson(format!("invalid {field} UUID: {e}")))?;
@@ -1016,7 +1090,11 @@ impl BrowserAudioChunk {
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ServerControlEvent {
     SessionUpdated {
         session: Box<super::session::BrowserSessionDto>,
@@ -1097,4 +1175,454 @@ pub struct EngineQualificationSummary {
     pub engine_version: String,
     pub cdp_revision: String,
     pub tested_platform: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StreamAudioReason {
+    Muted,
+    Bandwidth,
+    Hidden,
+    Stalled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StreamQualityStatus {
+    Warming,
+    Switching,
+    Effective,
+    Unavailable,
+}
+fn deserialize_required_audio_reason<'de, D>(
+    deserializer: D,
+) -> Result<Option<StreamAudioReason>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<StreamAudioReason>::deserialize(deserializer)
+}
+
+/// Maximum wire size for any server->client media text message (audioChunk or streamQuality): 8,192 bytes.
+/// Identical cap enforced on both Rust server and TS client decoders.
+pub const MAX_SERVER_MEDIA_TEXT_BYTES: usize = MAX_AUDIO_MESSAGE_BYTES; // 8,192 bytes
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserStreamQuality {
+    pub kind: String,
+    pub subscription_epoch: String,
+    pub preference: super::capture_tier::QualityPreference,
+    pub producer_run: String,
+    pub capture_version: String,
+    pub shared_tier: super::capture_tier::CaptureTier,
+    pub viewer_tier: super::capture_tier::CaptureTier,
+    pub fps: u32,
+    pub jpeg_quality: u8,
+    pub scale: f64,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub audio_suppressed: bool,
+    #[serde(deserialize_with = "deserialize_required_audio_reason")]
+    pub audio_reason: Option<StreamAudioReason>,
+    pub status: StreamQualityStatus,
+}
+
+impl BrowserStreamQuality {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.kind != "streamQuality" {
+            return Err(ProtocolError::InvalidJson(format!(
+                "invalid streamQuality kind '{}'",
+                self.kind
+            )));
+        }
+        if self.subscription_epoch.is_empty()
+            || self.subscription_epoch.len() > MAX_SUBSCRIPTION_EPOCH_BYTES
+        {
+            return Err(ProtocolError::InvalidJson(
+                "invalid subscriptionEpoch".to_string(),
+            ));
+        }
+        let parsed_run = uuid::Uuid::parse_str(&self.producer_run)
+            .map_err(|e| ProtocolError::InvalidJson(format!("invalid producerRun UUID: {e}")))?;
+        if self.producer_run != parsed_run.to_string() {
+            return Err(ProtocolError::InvalidJson(format!(
+                "producerRun UUID '{}' is not canonical lowercase hyphenated",
+                self.producer_run
+            )));
+        }
+        validate_decimal_sequence("captureVersion", &self.capture_version)?;
+        if self.fps < 1 || self.fps > 30 {
+            return Err(ProtocolError::InvalidJson(format!(
+                "streamQuality fps out of bounds: {}",
+                self.fps
+            )));
+        }
+        if self.jpeg_quality < 1 || self.jpeg_quality > 100 {
+            return Err(ProtocolError::InvalidJson(format!(
+                "streamQuality jpegQuality out of bounds: {}",
+                self.jpeg_quality
+            )));
+        }
+        if !self.scale.is_finite() || self.scale <= 0.0 || self.scale > 1.0 {
+            return Err(ProtocolError::InvalidJson(format!(
+                "streamQuality scale out of bounds: {}",
+                self.scale
+            )));
+        }
+        if self.image_width < 1 || self.image_width > MAX_IMAGE_WIDTH {
+            return Err(ProtocolError::DimensionOutOfBounds {
+                width: self.image_width,
+                height: self.image_height,
+            });
+        }
+        if self.image_height < 1 || self.image_height > MAX_IMAGE_HEIGHT {
+            return Err(ProtocolError::DimensionOutOfBounds {
+                width: self.image_width,
+                height: self.image_height,
+            });
+        }
+        if self.audio_suppressed != self.audio_reason.is_some() {
+            return Err(ProtocolError::InvalidJson(format!(
+                "audioSuppressed ({}) does not match audioReason presence ({:?})",
+                self.audio_suppressed, self.audio_reason
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ServerMediaEvent {
+    Audio(BrowserAudioChunk),
+    Quality(BrowserStreamQuality),
+}
+
+impl ServerMediaEvent {
+    pub fn parse_and_validate(text: &str) -> Result<Self, ProtocolError> {
+        if text.is_empty() {
+            return Err(ProtocolError::MessageTooShort { got: 0, min: 1 });
+        }
+        if text.len() > MAX_SERVER_MEDIA_TEXT_BYTES {
+            return Err(ProtocolError::MessageTooLarge {
+                got: text.len(),
+                max: MAX_SERVER_MEDIA_TEXT_BYTES,
+            });
+        }
+        let v: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| ProtocolError::InvalidJson(e.to_string()))?;
+        let kind = v.get("kind").and_then(|k| k.as_str()).ok_or_else(|| {
+            ProtocolError::InvalidJson("missing or invalid kind field".to_string())
+        })?;
+        match kind {
+            "audioChunk" => {
+                let chunk: BrowserAudioChunk = serde_json::from_value(v)
+                    .map_err(|e| ProtocolError::InvalidJson(e.to_string()))?;
+                chunk.validate()?;
+                Ok(Self::Audio(chunk))
+            }
+            "streamQuality" => {
+                let quality: BrowserStreamQuality = serde_json::from_value(v)
+                    .map_err(|e| ProtocolError::InvalidJson(e.to_string()))?;
+                quality.validate()?;
+                Ok(Self::Quality(quality))
+            }
+            other => Err(ProtocolError::InvalidJson(format!(
+                "unknown server media event kind '{other}'"
+            ))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::browser_host::capture_tier::{CaptureTier, QualityPreference};
+
+    #[test]
+    fn largest_valid_client_control_serialized_is_under_1024_bytes() {
+        let max_sub = "s".repeat(MAX_SUBSCRIPTION_EPOCH_BYTES);
+        let max_run = uuid::Uuid::new_v4().to_string();
+        let max_dec = u64::MAX.to_string();
+        let max_reason = "r".repeat(MAX_MEDIA_CONTROL_REASON_BYTES);
+
+        let ack = MediaClientControlWire::FrameAck {
+            subscription_epoch: max_sub.clone(),
+            producer_run: max_run.clone(),
+            viewport_epoch: max_dec.clone(),
+            frame_seq: max_dec.clone(),
+            reason: Some(max_reason),
+            decode_ms: Some(MAX_CLIENT_DECODE_MS),
+        };
+        assert!(ack.validate().is_ok());
+        let ack_json = serde_json::to_string(&ack).expect("serialize ack");
+        assert!(
+            ack_json.len() <= 1024,
+            "ack exceeded 1024 bytes: {}",
+            ack_json.len()
+        );
+
+        let discarded = MediaClientControlWire::FrameDiscarded {
+            subscription_epoch: max_sub.clone(),
+            producer_run: max_run.clone(),
+            viewport_epoch: max_dec.clone(),
+            frame_seq: max_dec,
+            reason: Some(DiscardReason::DecodeFailed),
+        };
+        assert!(discarded.validate().is_ok());
+        let discarded_json = serde_json::to_string(&discarded).expect("serialize discarded");
+        assert!(
+            discarded_json.len() <= 1024,
+            "discarded exceeded 1024 bytes: {}",
+            discarded_json.len()
+        );
+
+        let pause = MediaClientControlWire::Pause {
+            subscription_epoch: max_sub.clone(),
+        };
+        assert!(pause.validate().is_ok());
+        let pause_json = serde_json::to_string(&pause).expect("serialize pause");
+        assert!(
+            pause_json.len() <= 1024,
+            "pause exceeded 1024 bytes: {}",
+            pause_json.len()
+        );
+
+        let heartbeat = MediaClientControlWire::Heartbeat {
+            subscription_epoch: max_sub.clone(),
+            visible: true,
+            telemetry: Some(HeartbeatTelemetry {
+                sample_ms: MAX_HEARTBEAT_SAMPLE_MS,
+                decoded_frames: MAX_HEARTBEAT_FRAME_COUNT,
+                replaced_frames: MAX_HEARTBEAT_FRAME_COUNT,
+                decode_ms_ewma: Some(MAX_CLIENT_DECODE_MS),
+            }),
+        };
+        assert!(heartbeat.validate().is_ok());
+        let heartbeat_json = serde_json::to_string(&heartbeat).expect("serialize heartbeat");
+        assert!(
+            heartbeat_json.len() <= 1024,
+            "heartbeat exceeded 1024 bytes: {}",
+            heartbeat_json.len()
+        );
+
+        let pref = MediaClientControlWire::QualityPreference {
+            subscription_epoch: max_sub.clone(),
+            preference: QualityPreference::Medium,
+        };
+        assert!(pref.validate().is_ok());
+        let pref_json = serde_json::to_string(&pref).expect("serialize qualityPreference");
+        assert!(
+            pref_json.len() <= 1024,
+            "qualityPreference exceeded 1024 bytes: {}",
+            pref_json.len()
+        );
+
+        let mute = MediaClientControlWire::MuteState {
+            subscription_epoch: max_sub,
+            muted: true,
+        };
+        assert!(mute.validate().is_ok());
+        let mute_json = serde_json::to_string(&mute).expect("serialize muteState");
+        assert!(
+            mute_json.len() <= 1024,
+            "muteState exceeded 1024 bytes: {}",
+            mute_json.len()
+        );
+    }
+
+    #[test]
+    fn stream_quality_validation_and_bounds() {
+        let valid = BrowserStreamQuality {
+            kind: "streamQuality".to_string(),
+            subscription_epoch: "sub-123".to_string(),
+            preference: QualityPreference::Auto,
+            producer_run: uuid::Uuid::new_v4().to_string(),
+            capture_version: "42".to_string(),
+            shared_tier: CaptureTier::High,
+            viewer_tier: CaptureTier::Medium,
+            fps: 20,
+            jpeg_quality: 80,
+            scale: 0.75,
+            image_width: 1280,
+            image_height: 720,
+            audio_suppressed: false,
+            audio_reason: None,
+            status: StreamQualityStatus::Effective,
+        };
+        assert!(valid.validate().is_ok());
+
+        let json = serde_json::to_string(&valid).expect("serialize");
+        assert!(json.contains("\"audioReason\":null"));
+        assert!(json.contains("\"audioSuppressed\":false"));
+        assert!(json.contains("\"status\":\"effective\""));
+
+        let parsed: BrowserStreamQuality = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, valid);
+
+        // audioSuppressed mismatch
+        let mut bad_supp = valid.clone();
+        bad_supp.audio_suppressed = true;
+        assert!(bad_supp.validate().is_err());
+
+        // audioReason without audioSuppressed
+        let mut bad_reason = valid.clone();
+        bad_reason.audio_reason = Some(StreamAudioReason::Muted);
+        assert!(bad_reason.validate().is_err());
+
+        // scale out of bounds
+        let mut bad_scale = valid.clone();
+        bad_scale.scale = 0.0;
+        assert!(bad_scale.validate().is_err());
+        bad_scale.scale = 1.05;
+        assert!(bad_scale.validate().is_err());
+
+        // fps out of bounds
+        let mut bad_fps = valid.clone();
+        bad_fps.fps = 0;
+        assert!(bad_fps.validate().is_err());
+        bad_fps.fps = 31;
+        assert!(bad_fps.validate().is_err());
+
+        // dimensions out of bounds
+        let mut bad_dim = valid.clone();
+        bad_dim.image_width = MAX_IMAGE_WIDTH + 1;
+        assert!(bad_dim.validate().is_err());
+    }
+
+    #[test]
+    fn audio_chunk_uses_audio_run_and_no_producer_run() {
+        use base64::Engine as _;
+        let chunk = ProducerAudioChunk {
+            browser_session_id: uuid::Uuid::new_v4().to_string(),
+            browser_incarnation: uuid::Uuid::new_v4().to_string(),
+            profile_epoch: "1".to_string(),
+            audio_run: uuid::Uuid::new_v4().to_string(),
+            doc_epoch: 1,
+            audio_seq: "1".to_string(),
+            sample_rate: AUDIO_SAMPLE_RATE,
+            channels: AUDIO_CHANNELS,
+            encoding: AUDIO_ENCODING_PCM16LE.to_string(),
+            data: std::sync::Arc::<str>::from(
+                base64::engine::general_purpose::STANDARD.encode([0u8; 960]),
+            ),
+            reservation: None,
+        };
+        let env = chunk.to_viewer_envelope("sub-1");
+        let json = serde_json::to_string(&env).expect("serialize audioChunk");
+        assert!(
+            json.contains("\"audioRun\":"),
+            "must contain audioRun: {}",
+            json
+        );
+        assert!(
+            !json.contains("\"producerRun\":"),
+            "must NOT contain producerRun: {}",
+            json
+        );
+
+        let event = ServerMediaEvent::parse_and_validate(&json).expect("parse audio event");
+        assert!(matches!(event, ServerMediaEvent::Audio(_)));
+    }
+
+    #[test]
+    fn exhaustive_server_media_event_discrimination() {
+        let quality = BrowserStreamQuality {
+            kind: "streamQuality".to_string(),
+            subscription_epoch: "sub-1".to_string(),
+            preference: QualityPreference::Low,
+            producer_run: uuid::Uuid::new_v4().to_string(),
+            capture_version: "1".to_string(),
+            shared_tier: CaptureTier::Low,
+            viewer_tier: CaptureTier::Constrained,
+            fps: 6,
+            jpeg_quality: 60,
+            scale: 0.75,
+            image_width: 960,
+            image_height: 540,
+            audio_suppressed: true,
+            audio_reason: Some(StreamAudioReason::Bandwidth),
+            status: StreamQualityStatus::Switching,
+        };
+        let q_json = serde_json::to_string(&quality).expect("serialize quality");
+        let event = ServerMediaEvent::parse_and_validate(&q_json).expect("parse quality event");
+        assert!(matches!(event, ServerMediaEvent::Quality(_)));
+
+        // Unknown kind rejected
+        let err = ServerMediaEvent::parse_and_validate("{\"kind\":\"otherEvent\"}");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn client_controls_reject_malformed_oversized_unknown_enum_and_extra_fields() {
+        // Unknown preference enum variant
+        let bad_enum = "{\"kind\":\"qualityPreference\",\"subscriptionEpoch\":\"sub-1\",\"preference\":\"ultra\"}";
+        assert!(MediaClientControlWire::parse_and_validate(bad_enum).is_err());
+
+        // Extra field in qualityPreference
+        let extra_field_pref = "{\"kind\":\"qualityPreference\",\"subscriptionEpoch\":\"sub-1\",\"preference\":\"high\",\"extra\":123}";
+        assert!(MediaClientControlWire::parse_and_validate(extra_field_pref).is_err());
+
+        // Extra field in muteState
+        let extra_field_mute =
+            "{\"kind\":\"muteState\",\"subscriptionEpoch\":\"sub-1\",\"muted\":true,\"hack\":true}";
+        assert!(MediaClientControlWire::parse_and_validate(extra_field_mute).is_err());
+
+        // Oversized subscriptionEpoch (> 128 bytes)
+        let oversized_sub = format!(
+            "{{\"kind\":\"muteState\",\"subscriptionEpoch\":\"{}\",\"muted\":true}}",
+            "s".repeat(129)
+        );
+        assert!(MediaClientControlWire::parse_and_validate(&oversized_sub).is_err());
+
+        // Empty subscriptionEpoch
+        let empty_sub =
+            "{\"kind\":\"qualityPreference\",\"subscriptionEpoch\":\"\",\"preference\":\"auto\"}";
+        assert!(MediaClientControlWire::parse_and_validate(empty_sub).is_err());
+
+        // Valid preference variants roundtrip
+        for p in ["auto", "high", "medium", "low"] {
+            let json = format!("{{\"kind\":\"qualityPreference\",\"subscriptionEpoch\":\"sub-1\",\"preference\":\"{p}\"}}");
+            assert!(MediaClientControlWire::parse_and_validate(&json).is_ok());
+        }
+    }
+
+    #[test]
+    fn rust_ts_parity_negative_fixtures() {
+        let run = uuid::Uuid::new_v4().to_string();
+
+        // 1. FIXTURE_AUDIO_LEGACY_PRODUCER_RUN: rejected by deny_unknown_fields
+        let legacy_audio = format!(
+            "{{\"kind\":\"audioChunk\",\"browserSessionId\":\"{}\",\"browserIncarnation\":\"{}\",\"profileEpoch\":\"1\",\"audioRun\":\"{}\",\"producerRun\":\"{}\",\"subscriptionEpoch\":\"sub-1\",\"docEpoch\":\"1\",\"audioSeq\":\"1\",\"sampleRate\":24000,\"channels\":1,\"encoding\":\"pcm16le\",\"data\":\"AAAA\"}}",
+            run, run, run, run
+        );
+        assert!(serde_json::from_str::<BrowserAudioChunk>(&legacy_audio).is_err());
+
+        // 2. FIXTURE_AUDIO_NON_CANONICAL_PADDING: non-zero trailing bits rejected by standard base64 decode
+        let bad_padding_audio = format!(
+            "{{\"kind\":\"audioChunk\",\"browserSessionId\":\"{}\",\"browserIncarnation\":\"{}\",\"profileEpoch\":\"1\",\"audioRun\":\"{}\",\"subscriptionEpoch\":\"sub-1\",\"docEpoch\":\"1\",\"audioSeq\":\"1\",\"sampleRate\":24000,\"channels\":1,\"encoding\":\"pcm16le\",\"data\":\"AAAAAB==\"}}",
+            run, run, run
+        );
+        let chunk: Result<BrowserAudioChunk, _> = serde_json::from_str(&bad_padding_audio);
+        assert!(chunk.is_err() || chunk.unwrap().validate().is_err());
+
+        // 3. FIXTURE_STREAM_QUALITY_MISSING_AUDIO_REASON: audioReason is required, cannot be omitted
+        let missing_reason = format!(
+            "{{\"kind\":\"streamQuality\",\"subscriptionEpoch\":\"sub-1\",\"preference\":\"auto\",\"producerRun\":\"{}\",\"captureVersion\":\"1\",\"sharedTier\":\"high\",\"viewerTier\":\"high\",\"fps\":24,\"jpegQuality\":75,\"scale\":1.0,\"imageWidth\":1280,\"imageHeight\":720,\"audioSuppressed\":false,\"status\":\"effective\"}}",
+            run
+        );
+        assert!(serde_json::from_str::<BrowserStreamQuality>(&missing_reason).is_err());
+
+        // 4. FIXTURE_STREAM_QUALITY_UNKNOWN_PREF: invalid preference variant
+        let bad_pref = format!(
+            "{{\"kind\":\"streamQuality\",\"subscriptionEpoch\":\"sub-1\",\"preference\":\"ultra\",\"producerRun\":\"{}\",\"captureVersion\":\"1\",\"sharedTier\":\"high\",\"viewerTier\":\"high\",\"fps\":24,\"jpegQuality\":75,\"scale\":1.0,\"imageWidth\":1280,\"imageHeight\":720,\"audioSuppressed\":false,\"audioReason\":null,\"status\":\"effective\"}}",
+            run
+        );
+        assert!(serde_json::from_str::<BrowserStreamQuality>(&bad_pref).is_err());
+
+        // 5. FIXTURE_SERVER_MEDIA_OVERSIZED: text > 8192 bytes rejected by ServerMediaEvent parser
+        let oversized_text = "x".repeat(MAX_SERVER_MEDIA_TEXT_BYTES + 1);
+        let err = ServerMediaEvent::parse_and_validate(&oversized_text);
+        assert!(matches!(err, Err(ProtocolError::MessageTooLarge { .. })));
+    }
 }

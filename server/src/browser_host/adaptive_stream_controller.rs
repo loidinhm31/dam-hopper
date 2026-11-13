@@ -7,9 +7,10 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use uuid::Uuid;
+
 use super::capture_tier::{CaptureCeilings, CaptureTier, Ladder, QualityPreference};
 use super::viewer_delivery_estimator::{SampleProvenance, ViewerDeliverySnapshot};
-
 /// Capture-fidelity changes are at least this far apart.
 pub const CAPTURE_DWELL: Duration = Duration::from_secs(5);
 pub const PRESSURE_WINDOWS: u32 = 2;
@@ -46,6 +47,30 @@ impl AudioGate {
     }
 }
 
+/// Source-scoped watermark for audio chunk admission: chunks with sequence `<= seq`
+/// under the matching `source_run` were broadcast before the gate opened and are discarded.
+/// If `source_run` differs (audio source restarted), the old watermark does not suppress
+/// chunks from the new source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AudioWatermark {
+    pub source_run: Option<Uuid>,
+    pub seq: u64,
+}
+
+impl AudioWatermark {
+    pub fn new(source_run: Option<Uuid>, seq: u64) -> Self {
+        Self { source_run, seq }
+    }
+
+    pub fn suppresses(&self, chunk_run: Option<Uuid>, chunk_seq: u64) -> bool {
+        match (self.source_run, chunk_run) {
+            (Some(ws), Some(cs)) if ws == cs => chunk_seq <= self.seq,
+            (Some(_), _) => false, // Different source run: watermark does not suppress new source
+            (None, _) => chunk_seq <= self.seq, // Source-agnostic fallback (e.g. tests)
+        }
+    }
+}
+
 /// Per-viewer runtime directives consumed by the media session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewerDirectives {
@@ -55,6 +80,7 @@ pub struct ViewerDirectives {
     /// Bumped on every audio-suppression transition (including quick mute/unmute) so queued
     /// audio from before the transition can be invalidated.
     pub audio_gen: u64,
+    pub admission_watermark: AudioWatermark,
     pub stage: usize,
     pub tier: CaptureTier,
 }
@@ -133,6 +159,7 @@ struct ViewerState {
     fps_cap: Option<u32>,
     gate_gen: u64,
     gate_suppressed: bool,
+    admission_watermark: AudioWatermark,
 }
 
 fn stall_threshold(baseline_ms: Option<f64>) -> Duration {
@@ -171,11 +198,21 @@ impl ViewerState {
     }
 
     /// Bump the gate generation on each suppression transition.
-    fn sync_gate(&mut self, ladder: &Ladder, now: Instant) {
+    /// On closed->open transition, record the latest broadcast audio sequence number as the watermark.
+    fn sync_gate(
+        &mut self,
+        ladder: &Ladder,
+        now: Instant,
+        source_run: Option<Uuid>,
+        latest_audio_seq: u64,
+    ) {
         let suppressed = !self.audio_gate(ladder, now).is_allowed();
         if suppressed != self.gate_suppressed {
             self.gate_suppressed = suppressed;
             self.gate_gen = self.gate_gen.wrapping_add(1);
+            if !suppressed {
+                self.admission_watermark = AudioWatermark::new(source_run, latest_audio_seq);
+            }
         }
     }
 
@@ -377,12 +414,42 @@ impl AdaptiveStreamController {
     pub fn audio_generation(&self, sub: &str) -> Option<u64> {
         self.viewers.get(sub).map(|v| v.gate_gen)
     }
+    /// Quality preference accepted for this subscription; `None` if unknown.
+    pub fn viewer_preference(&self, sub: &str) -> Option<QualityPreference> {
+        self.viewers.get(sub).map(|v| v.pref)
+    }
 
-    /// Register a subscription (idempotent): Auto, unmuted, warming at Medium.
+    pub fn audio_gate_info(
+        &mut self,
+        sub: &str,
+        now: Instant,
+        source_run: Option<Uuid>,
+        latest_audio_seq: u64,
+    ) -> Option<(AudioGate, u64, AudioWatermark)> {
+        let ladder = &self.ladder;
+        let v = self.viewers.get_mut(sub)?;
+        v.sync_gate(ladder, now, source_run, latest_audio_seq);
+        Some((v.audio_gate(ladder, now), v.gate_gen, v.admission_watermark))
+    }
+
+    pub fn audio_gate_info_readonly(&self, sub: &str, now: Instant) -> Option<(AudioGate, u64, AudioWatermark)> {
+        let v = self.viewers.get(sub)?;
+        Some((v.audio_gate(&self.ladder, now), v.gate_gen, v.admission_watermark))
+    }
+
+    /// Register a subscription (idempotent): Auto, muted default, warming at Medium.
     pub fn register(&mut self, sub: &str, now: Instant) {
+        self.register_with_seq(sub, now, None, 0);
+    }
+
+    pub fn register_with_seq(
+        &mut self,
+        sub: &str,
+        now: Instant,
+        source_run: Option<Uuid>,
+        latest_audio_seq: u64,
+    ) {
         let stage = self.ladder.initial_stage(QualityPreference::Auto);
-        // A newcomer joining an established stream is unmeasured: it paces immediately but does
-        // not vote on shared fidelity until it has warmed up.
         let warmup_left = if self.viewers.values().any(|v| v.eligible(now)) {
             WARMUP_WINDOWS
         } else {
@@ -392,7 +459,7 @@ impl AdaptiveStreamController {
             .entry(sub.to_string())
             .or_insert_with(|| ViewerState {
                 pref: QualityPreference::Auto,
-                muted: false,
+                muted: true,
                 visible: true,
                 stage,
                 last_report: now,
@@ -411,7 +478,8 @@ impl AdaptiveStreamController {
                 last_motion_counter: 0,
                 fps_cap: None,
                 gate_gen: 0,
-                gate_suppressed: false,
+                gate_suppressed: true,
+                admission_watermark: AudioWatermark::new(source_run, latest_audio_seq),
             });
     }
 
@@ -421,6 +489,17 @@ impl AdaptiveStreamController {
 
     /// Manual preference caps requested fidelity only; congestion safety and admin caps remain.
     pub fn set_preference(&mut self, sub: &str, pref: QualityPreference, now: Instant) -> bool {
+        self.set_preference_with_seq(sub, pref, now, None, 0)
+    }
+
+    pub fn set_preference_with_seq(
+        &mut self,
+        sub: &str,
+        pref: QualityPreference,
+        now: Instant,
+        source_run: Option<Uuid>,
+        latest_audio_seq: u64,
+    ) -> bool {
         let floor = self.ladder.floor_stage(pref);
         let Some(v) = self.viewers.get_mut(sub) else {
             return false;
@@ -429,16 +508,28 @@ impl AdaptiveStreamController {
         if v.stage < floor {
             v.set_stage(floor, now);
         }
+        v.sync_gate(&self.ladder, now, source_run, latest_audio_seq);
         true
     }
 
     pub fn set_muted(&mut self, sub: &str, muted: bool, now: Instant) -> bool {
+        self.set_muted_with_seq(sub, muted, now, None, 0)
+    }
+
+    pub fn set_muted_with_seq(
+        &mut self,
+        sub: &str,
+        muted: bool,
+        now: Instant,
+        source_run: Option<Uuid>,
+        latest_audio_seq: u64,
+    ) -> bool {
         let ladder = &self.ladder;
         let Some(v) = self.viewers.get_mut(sub) else {
             return false;
         };
         v.muted = muted;
-        v.sync_gate(ladder, now);
+        v.sync_gate(ladder, now, source_run, latest_audio_seq);
         true
     }
 
@@ -450,13 +541,30 @@ impl AdaptiveStreamController {
         sample: ViewerSample,
         now: Instant,
     ) -> Option<ViewerDirectives> {
+        self.report_with_seq(sub, visible, sample, now, None, 0)
+    }
+
+    pub fn report_with_seq(
+        &mut self,
+        sub: &str,
+        visible: bool,
+        sample: ViewerSample,
+        now: Instant,
+        source_run: Option<Uuid>,
+        latest_audio_seq: u64,
+    ) -> Option<ViewerDirectives> {
         let v = self.viewers.get_mut(sub)?;
+        // Critical: Synchronize time-derived gate transitions (such as read-time expiry)
+        // BEFORE updating last_report so that expiry transitions to Suppressed first,
+        // and subsequent update to last_report transitions back to Allowed on recovery,
+        // bumping gate_gen and recording the watermark.
+        v.sync_gate(&self.ladder, now, source_run, latest_audio_seq);
         v.visible = visible;
         v.last_report = now;
         v.sample = Some(sample);
         v.sample_seq = v.sample_seq.wrapping_add(1);
         v.update_stall(now);
-        v.sync_gate(&self.ladder, now);
+        v.sync_gate(&self.ladder, now, source_run, latest_audio_seq);
         self.directives_for(sub, now)
     }
 
@@ -472,6 +580,7 @@ impl AdaptiveStreamController {
             send_suspended: v.stalled,
             audio: v.audio_gate(&self.ladder, now),
             audio_gen: v.gate_gen,
+            admission_watermark: v.admission_watermark,
             stage: v.stage,
             tier,
         })
@@ -480,11 +589,20 @@ impl AdaptiveStreamController {
     /// Advance every viewer's window and compute the shared decision. Fidelity moves at most one
     /// knob per `CAPTURE_DWELL` toward the slowest eligible viewer, in either direction.
     pub fn evaluate(&mut self, now: Instant) -> Option<TargetDecision> {
+        self.evaluate_with_seq(now, None, 0)
+    }
+
+    pub fn evaluate_with_seq(
+        &mut self,
+        now: Instant,
+        source_run: Option<Uuid>,
+        latest_audio_seq: u64,
+    ) -> Option<TargetDecision> {
         let ladder = &self.ladder;
         for v in self.viewers.values_mut() {
             v.update_stall(now);
             v.step(ladder, now);
-            v.sync_gate(ladder, now);
+            v.sync_gate(ladder, now, source_run, latest_audio_seq);
         }
         let (mut cand, mut fps, mut any) = (0usize, 0u32, false);
         for v in self.viewers.values().filter(|v| v.eligible(now)) {
@@ -594,6 +712,9 @@ mod tests {
         let d = sim.ctrl.directives("a", sim.now).unwrap();
         assert_eq!(d.tier, CaptureTier::Medium);
         assert_eq!(d.min_delivery_interval, Duration::from_millis(100));
+        assert_eq!(d.audio, AudioGate::Suppressed(AudioSuppression::Muted));
+        assert!(sim.ctrl.set_muted("a", false, sim.now));
+        let d = sim.ctrl.directives("a", sim.now).unwrap();
         assert!(d.audio.is_allowed());
     }
 
@@ -827,6 +948,7 @@ mod tests {
         let mut sim = Sim::new();
         sim.ctrl.register("a", sim.now);
         sim.ctrl.register("b", sim.now);
+        assert!(sim.ctrl.set_muted("b", false, sim.now));
         let frozen_progress: fn(u64) -> ViewerSample = |_| ViewerSample {
             progress_counter: 1,
             outstanding_frames: 2,
@@ -895,6 +1017,7 @@ mod tests {
     fn preferences_cap_requested_fidelity_but_congestion_still_applies() {
         let mut sim = Sim::new();
         sim.ctrl.register("a", sim.now);
+        assert!(sim.ctrl.set_muted("a", false, sim.now));
         let l = sim.ctrl.ladder().clone();
         assert!(sim
             .ctrl
@@ -923,7 +1046,6 @@ mod tests {
         let mut sim = Sim::new();
         sim.ctrl.register("a", sim.now);
         let stage = sim.ctrl.viewer_stage("a");
-        assert!(sim.ctrl.set_muted("a", true, sim.now));
         assert_eq!(
             sim.ctrl.directives("a", sim.now).unwrap().audio,
             AudioGate::Suppressed(AudioSuppression::Muted)
@@ -936,6 +1058,11 @@ mod tests {
             .unwrap()
             .audio
             .is_allowed());
+        assert!(sim.ctrl.set_muted("a", true, sim.now));
+        assert_eq!(
+            sim.ctrl.directives("a", sim.now).unwrap().audio,
+            AudioGate::Suppressed(AudioSuppression::Muted)
+        );
     }
 
     #[test]
@@ -1051,16 +1178,20 @@ mod tests {
         let mut sim = Sim::new();
         sim.ctrl.register("a", sim.now);
         let g0 = sim.ctrl.audio_generation("a").unwrap();
-        assert!(sim.ctrl.set_muted("a", true, sim.now));
         assert!(sim.ctrl.set_muted("a", false, sim.now));
+        assert!(sim.ctrl.set_muted("a", true, sim.now));
         let d = sim.ctrl.directives("a", sim.now).unwrap();
-        assert!(d.audio.is_allowed(), "back to allowed");
+        assert_eq!(
+            d.audio,
+            AudioGate::Suppressed(AudioSuppression::Muted),
+            "back to muted"
+        );
         assert_eq!(
             d.audio_gen,
             g0 + 2,
             "both transitions are visible to queued-audio invalidation"
         );
-        assert!(sim.ctrl.set_muted("a", false, sim.now));
+        assert!(sim.ctrl.set_muted("a", true, sim.now));
         assert_eq!(
             sim.ctrl.audio_generation("a"),
             Some(g0 + 2),
@@ -1125,5 +1256,96 @@ mod tests {
             sim.ctrl.ladder().same_fidelity(stage, medium),
             "decoder-caused completion gaps must not lower JPEG quality or resolution"
         );
+    }
+
+    #[test]
+    fn gate_transition_records_admission_watermark() {
+        let now = Instant::now();
+        let mut ctrl = AdaptiveStreamController::new_at(ceilings(), now);
+        ctrl.register_with_seq("a", now, None, 10);
+        let info0 = ctrl.audio_gate_info("a", now, None, 10).unwrap();
+        assert_eq!(info0.0, AudioGate::Suppressed(AudioSuppression::Muted));
+        assert_eq!(info0.1, 0); // gen 0
+        assert_eq!(info0.2.seq, 10); // initial watermark 10
+
+        // Unmute at audio sequence 42 -> closed->open transition: watermark set to 42, gen 1
+        assert!(ctrl.set_muted_with_seq("a", false, now, None, 42));
+        let info1 = ctrl.audio_gate_info("a", now, None, 42).unwrap();
+        assert_eq!(info1.0, AudioGate::Allowed);
+        assert_eq!(info1.1, 1);
+        assert_eq!(info1.2.seq, 42);
+
+        // Mute at audio sequence 50 -> open->closed transition: gen 2, watermark stays 42
+        assert!(ctrl.set_muted_with_seq("a", true, now, None, 50));
+        let info2 = ctrl.audio_gate_info("a", now, None, 50).unwrap();
+        assert_eq!(info2.0, AudioGate::Suppressed(AudioSuppression::Muted));
+        assert_eq!(info2.1, 2);
+        assert_eq!(info2.2.seq, 42);
+
+        // Reopen at audio sequence 99 -> closed->open transition: watermark updated to 99, gen 3
+        assert!(ctrl.set_muted_with_seq("a", false, now, None, 99));
+        let info3 = ctrl.audio_gate_info("a", now, None, 99).unwrap();
+        assert_eq!(info3.0, AudioGate::Allowed);
+        assert_eq!(info3.1, 3);
+        assert_eq!(info3.2.seq, 99);
+    }
+
+    #[test]
+    fn expiry_recovery_bumps_generation_and_records_watermark() {
+        let now = Instant::now();
+        let mut ctrl = AdaptiveStreamController::new_at(ceilings(), now);
+        ctrl.register_with_seq("a", now, None, 10);
+        // Step 1: Reach allowed gen 3 with watermark 99
+        assert!(ctrl.set_muted_with_seq("a", false, now, None, 42)); // gen 1
+        assert!(ctrl.set_muted_with_seq("a", true, now, None, 50));  // gen 2
+        assert!(ctrl.set_muted_with_seq("a", false, now, None, 99)); // gen 3, wm 99
+        let info = ctrl.audio_gate_info("a", now, None, 99).unwrap();
+        assert_eq!(info.0, AudioGate::Allowed);
+        assert_eq!(info.1, 3);
+        assert_eq!(info.2.seq, 99);
+
+        // Step 2: Time advances past REPORT_EXPIRY -> read-time expiry returns Hidden
+        let expired_time = now + REPORT_EXPIRY + Duration::from_secs(1);
+        let gate_expired = ctrl.audio_gate_info_readonly("a", expired_time).unwrap();
+        assert_eq!(gate_expired.0, AudioGate::Suppressed(AudioSuppression::Hidden));
+
+        // Step 3: Report with latest audio seq 200 recovering from expiry
+        let s = ok_sample(100);
+        let directives = ctrl
+            .report_with_seq("a", true, s, expired_time, None, 200)
+            .expect("report");
+        assert_eq!(directives.audio, AudioGate::Allowed);
+        // Expiry suppressed the gate (bumping gen to 4), and recovery reopened it (bumping gen to 5)
+        assert!(
+            directives.audio_gen > 3,
+            "gate_gen must bump past 3 on recovery from expiry, got {}",
+            directives.audio_gen
+        );
+        assert_eq!(
+            directives.admission_watermark.seq, 200,
+            "watermark must be updated to latest audio seq 200"
+        );
+    }
+
+    #[test]
+    fn source_scoped_watermark_ignores_different_source_run() {
+        let run_a = Uuid::new_v4();
+        let run_b = Uuid::new_v4();
+        let wm = AudioWatermark::new(Some(run_a), 500);
+
+        // Same run: chunks <= 500 are suppressed, > 500 are admitted
+        assert!(wm.suppresses(Some(run_a), 1));
+        assert!(wm.suppresses(Some(run_a), 500));
+        assert!(!wm.suppresses(Some(run_a), 501));
+
+        // Different run: source restarted, chunks <= 500 are NOT suppressed
+        assert!(!wm.suppresses(Some(run_b), 1));
+        assert!(!wm.suppresses(Some(run_b), 500));
+        assert!(!wm.suppresses(Some(run_b), 501));
+
+        // Source-agnostic watermark (source_run: None) suppresses any matching seq
+        let wm_none = AudioWatermark::new(None, 500);
+        assert!(wm_none.suppresses(Some(run_a), 100));
+        assert!(!wm_none.suppresses(Some(run_a), 501));
     }
 }

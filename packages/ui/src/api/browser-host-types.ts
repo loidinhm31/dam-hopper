@@ -280,7 +280,48 @@ export type MediaClientControl =
       subscriptionEpoch: string;
       visible: boolean;
       telemetry?: HeartbeatTelemetry;
+    }
+  | {
+      kind: "qualityPreference";
+      subscriptionEpoch: string;
+      preference: QualityPreference;
+    }
+  | {
+      kind: "muteState";
+      subscriptionEpoch: string;
+      muted: boolean;
     };
+
+export type QualityPreference = "auto" | "high" | "medium" | "low";
+export type StreamQualityTier = "high" | "medium" | "low" | "constrained";
+export type AudioSuppressionReason =
+  | "muted"
+  | "bandwidth"
+  | "hidden"
+  | "stalled";
+export type StreamQualityStatus =
+  | "warming"
+  | "switching"
+  | "effective"
+  | "unavailable";
+
+export interface StreamQualityEvent {
+  kind: "streamQuality";
+  subscriptionEpoch: string;
+  preference: QualityPreference;
+  producerRun: string;
+  captureVersion: string;
+  sharedTier: StreamQualityTier;
+  viewerTier: StreamQualityTier;
+  fps: number;
+  jpegQuality: number;
+  scale: number;
+  imageWidth: number;
+  imageHeight: number;
+  audioSuppressed: boolean;
+  audioReason: AudioSuppressionReason | null;
+  status: StreamQualityStatus;
+}
 
 const MEDIA_CONTROL_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -295,7 +336,7 @@ const VALID_DISCARD_REASONS: Record<string, true> = {
   ownerChanged: true,
 };
 
-function isValidPositiveDecimalU64(val: unknown): val is string {
+export function isValidPositiveDecimalU64(val: unknown): val is string {
   if (typeof val !== "string" || !MEDIA_CONTROL_SEQ_RE.test(val)) return false;
   try {
     const n = BigInt(val);
@@ -468,6 +509,27 @@ function validateMediaClientControlFields(val: unknown): val is MediaClientContr
       }
       return true;
     }
+    case "qualityPreference": {
+      for (const k of Object.keys(rec)) {
+        if (k !== "kind" && k !== "subscriptionEpoch" && k !== "preference") {
+          return false;
+        }
+      }
+      return (
+        rec.preference === "auto" ||
+        rec.preference === "high" ||
+        rec.preference === "medium" ||
+        rec.preference === "low"
+      );
+    }
+    case "muteState": {
+      for (const k of Object.keys(rec)) {
+        if (k !== "kind" && k !== "subscriptionEpoch" && k !== "muted") {
+          return false;
+        }
+      }
+      return typeof rec.muted === "boolean";
+    }
     default:
       return false;
   }
@@ -503,7 +565,7 @@ export interface BrowserAudioChunk {
   browserSessionId: string;
   browserIncarnation: string;
   profileEpoch: string;
-  producerRun: string;
+  audioRun: string;
   subscriptionEpoch: string;
   docEpoch: string;
   audioSeq: string;
@@ -541,6 +603,182 @@ export type ServerControlEvent =
       kind: "error";
       message: string;
     };
+
+export type MediaServerText = BrowserAudioChunk | StreamQualityEvent;
+
+const BASE64_CHUNK_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+export function isValidPcmBase64(b64: string): boolean {
+  if (
+    typeof b64 !== "string" ||
+    b64.length === 0 ||
+    b64.length > MAX_AUDIO_BASE64_BYTES ||
+    b64.length % 4 !== 0 ||
+    !BASE64_CHUNK_PATTERN.test(b64)
+  ) {
+    return false;
+  }
+  let bin: string;
+  try {
+    bin = atob(b64);
+  } catch {
+    return false;
+  }
+  const len = bin.length;
+  if (len === 0 || (len & 1) !== 0 || len > MAX_AUDIO_PCM_BYTES) return false;
+  try {
+    if (btoa(bin) !== b64) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+const AUDIO_CHUNK_KEYS: Record<string, true> = {
+  kind: true,
+  browserSessionId: true,
+  browserIncarnation: true,
+  profileEpoch: true,
+  audioRun: true,
+  subscriptionEpoch: true,
+  docEpoch: true,
+  audioSeq: true,
+  sampleRate: true,
+  channels: true,
+  encoding: true,
+  data: true,
+};
+
+const STREAM_QUALITY_KEYS: Record<string, true> = {
+  kind: true,
+  subscriptionEpoch: true,
+  preference: true,
+  producerRun: true,
+  captureVersion: true,
+  sharedTier: true,
+  viewerTier: true,
+  fps: true,
+  jpegQuality: true,
+  scale: true,
+  imageWidth: true,
+  imageHeight: true,
+  audioSuppressed: true,
+  audioReason: true,
+  status: true,
+};
+
+export function parseMediaServerText(raw: unknown): MediaServerText | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  if (
+    raw.length > MAX_AUDIO_MESSAGE_BYTES ||
+    mediaControlTextEncoder.encode(raw).byteLength > MAX_AUDIO_MESSAGE_BYTES
+  ) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const rec = parsed as Record<string, unknown>;
+
+  if (rec.kind === "audioChunk") {
+    const keys = Object.keys(rec);
+    if (keys.length !== 12) return null;
+    for (const k of keys) {
+      if (!AUDIO_CHUNK_KEYS[k]) return null;
+    }
+    if (
+      rec.sampleRate !== AUDIO_SAMPLE_RATE ||
+      rec.channels !== AUDIO_CHANNELS ||
+      rec.encoding !== AUDIO_ENCODING_PCM16LE ||
+      typeof rec.browserSessionId !== "string" ||
+      !MEDIA_CONTROL_UUID_RE.test(rec.browserSessionId) ||
+      typeof rec.browserIncarnation !== "string" ||
+      !MEDIA_CONTROL_UUID_RE.test(rec.browserIncarnation) ||
+      typeof rec.audioRun !== "string" ||
+      !MEDIA_CONTROL_UUID_RE.test(rec.audioRun) ||
+      typeof rec.subscriptionEpoch !== "string" ||
+      rec.subscriptionEpoch.length === 0 ||
+      mediaControlTextEncoder.encode(rec.subscriptionEpoch).byteLength >
+        MAX_SUBSCRIPTION_EPOCH_BYTES ||
+      !isValidPositiveDecimalU64(rec.profileEpoch) ||
+      !isValidPositiveDecimalU64(rec.docEpoch) ||
+      !isValidPositiveDecimalU64(rec.audioSeq) ||
+      typeof rec.data !== "string" ||
+      !isValidPcmBase64(rec.data)
+    ) {
+      return null;
+    }
+    return rec as unknown as BrowserAudioChunk;
+  }
+
+  if (rec.kind === "streamQuality") {
+    const keys = Object.keys(rec);
+    if (keys.length !== 15) return null;
+    for (const k of keys) {
+      if (!STREAM_QUALITY_KEYS[k]) return null;
+    }
+    if (
+      typeof rec.subscriptionEpoch !== "string" ||
+      rec.subscriptionEpoch.length === 0 ||
+      mediaControlTextEncoder.encode(rec.subscriptionEpoch).byteLength >
+        MAX_SUBSCRIPTION_EPOCH_BYTES ||
+      (rec.preference !== "auto" &&
+        rec.preference !== "high" &&
+        rec.preference !== "medium" &&
+        rec.preference !== "low") ||
+      typeof rec.producerRun !== "string" ||
+      !MEDIA_CONTROL_UUID_RE.test(rec.producerRun) ||
+      !isValidPositiveDecimalU64(rec.captureVersion) ||
+      (rec.sharedTier !== "high" &&
+        rec.sharedTier !== "medium" &&
+        rec.sharedTier !== "low" &&
+        rec.sharedTier !== "constrained") ||
+      (rec.viewerTier !== "high" &&
+        rec.viewerTier !== "medium" &&
+        rec.viewerTier !== "low" &&
+        rec.viewerTier !== "constrained") ||
+      typeof rec.fps !== "number" ||
+      !Number.isInteger(rec.fps) ||
+      rec.fps < 1 ||
+      rec.fps > 30 ||
+      typeof rec.jpegQuality !== "number" ||
+      !Number.isInteger(rec.jpegQuality) ||
+      rec.jpegQuality < 1 ||
+      rec.jpegQuality > 100 ||
+      typeof rec.scale !== "number" ||
+      !Number.isFinite(rec.scale) ||
+      rec.scale <= 0 ||
+      rec.scale > 1 ||
+      typeof rec.imageWidth !== "number" ||
+      !Number.isInteger(rec.imageWidth) ||
+      rec.imageWidth < 1 ||
+      rec.imageWidth > MAX_IMAGE_WIDTH ||
+      typeof rec.imageHeight !== "number" ||
+      !Number.isInteger(rec.imageHeight) ||
+      rec.imageHeight < 1 ||
+      rec.imageHeight > MAX_IMAGE_HEIGHT ||
+      !Object.hasOwn(rec, "audioReason") ||
+      (rec.audioReason !== null &&
+        rec.audioReason !== "muted" &&
+        rec.audioReason !== "bandwidth" &&
+        rec.audioReason !== "hidden" &&
+        rec.audioReason !== "stalled") ||
+      rec.audioSuppressed !== (rec.audioReason !== null) ||
+      (rec.status !== "warming" &&
+        rec.status !== "switching" &&
+        rec.status !== "effective" &&
+        rec.status !== "unavailable")
+    ) {
+      return null;
+    }
+    return rec as unknown as StreamQualityEvent;
+  }
+
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Input Protocol

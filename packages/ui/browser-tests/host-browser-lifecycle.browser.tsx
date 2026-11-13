@@ -1,6 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { userEvent } from "vitest/browser";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { OsShell } from "@/os/OsShell.js";
 import { useWindowStore } from "@/os/window-store.js";
@@ -29,6 +30,11 @@ import type {
   BrowserOwnerScope,
   BrowserWindowState,
 } from "@/os/browser/browser-tab-types.js";
+import {
+  getQualityPreference,
+  releaseGeneration,
+  setQualityPreference,
+} from "@/os/browser/browser-stream-quality.js";
 
 const defaultScope: BrowserOwnerScope = {
   profileId: "default",
@@ -581,5 +587,107 @@ describe("Host Browser Lifecycle & Window Policy Browser Tests", () => {
     ) as HTMLElement | null;
     expect(containerAfter).toBe(containerEl);
     expect(containerAfter?.dataset.testMarker).toBe("original-container");
+  });
+
+  it("exercises real quality selector, isolates unequal viewers, preserves preference across placement, and resets to Auto on connection generation replacement", async () => {
+    await renderOsShell();
+
+    // Open window 1 and window 2 for two unequal viewers/tabs
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-quality-1",
+        appId: "browser",
+        title: "Quality Browser 1",
+        ctx: { profileId: "default" },
+        mode: "float",
+        appState: createCanonicalBrowserState("tab-q1", "sess-q1", "http://localhost:5173/page1"),
+      });
+      useWindowStore.getState().openWindow({
+        id: "win-quality-2",
+        appId: "browser",
+        title: "Quality Browser 2",
+        ctx: { profileId: "default" },
+        mode: "float",
+        appState: createCanonicalBrowserState("tab-q2", "sess-q2", "http://localhost:5173/page2"),
+      });
+    });
+
+    const tuple1 = {
+      profileId: "default",
+      generation: 1,
+      windowId: "win-quality-1",
+      tabId: "tab-q1",
+    };
+    const tuple2 = {
+      profileId: "default",
+      generation: 1,
+      windowId: "win-quality-2",
+      tabId: "tab-q2",
+    };
+
+    // Both default to auto
+    expect(getQualityPreference(tuple1)).toBe("auto");
+    expect(getQualityPreference(tuple2)).toBe("auto");
+
+    // Focus window 1 and open tools
+    await act(async () => {
+      useWindowStore.getState().focusWindow("win-quality-1");
+    });
+    const toolsBtn = document.querySelector<HTMLButtonElement>(
+      '[data-os-window-frame="win-quality-1"] [data-testid="browser-tools-toggle-btn"]',
+    );
+    expect(toolsBtn).toBeTruthy();
+    await userEvent.click(toolsBtn!);
+
+    const panel = document.querySelector('[data-os-window-frame="win-quality-1"] [data-testid="browser-tools-panel"]');
+    expect(panel).toBeTruthy();
+
+    const selector = panel?.querySelector<HTMLSelectElement>(
+      '[data-testid="browser-quality-selector"]',
+    );
+    expect(selector?.value).toBe("auto");
+
+    await userEvent.selectOptions(selector!, "high");
+    expect(selector?.value).toBe("high");
+    expect(getQualityPreference(tuple1)).toBe("high");
+    expect(getQualityPreference(tuple2)).toBe("auto");
+    // Placement change (float -> tile) preserves in-memory preference
+    await act(async () => {
+      useWindowStore.getState().setWindowMode("win-quality-1", "tile");
+    });
+    expect(getQualityPreference(tuple1)).toBe("high");
+
+    // Real connection-generation replacement (generation 1 -> 2)
+    const transport = new WsTransport("http://127.0.0.1:4801", () => null);
+    const apiClient = createApiClient({ profileId: "default", generation: 2 }, transport);
+    await act(async () => {
+      __setConnectionSnapshotForTests(
+        "default",
+        {
+          profile: { id: "default", name: "Default Profile", url: "http://127.0.0.1:4801", authType: "none", createdAt: 0 },
+          serverUrl: "http://127.0.0.1:4801",
+          owner: { profileId: "default", generation: 2 },
+          status: "connected",
+          intent: true,
+          transport,
+          api: apiClient,
+          mfaState: "none",
+          sessionTtl: null,
+          verifiedBrowserIdentity: {
+            principal: "dev-user",
+            namespace: "dev",
+          },
+        },
+        transport,
+      );
+    });
+
+    // Old generation 1 was retired by keep-alive host; new generation defaults to Auto
+    await vi.waitFor(() => {
+      expect(getQualityPreference(tuple1)).toBe("auto");
+      expect(selector?.value).toBe("auto");
+    });
+    const tuple1Gen2 = { ...tuple1, generation: 2 };
+    expect(getQualityPreference(tuple1Gen2)).toBe("auto");
   });
 });

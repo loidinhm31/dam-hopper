@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
@@ -34,7 +34,7 @@ use crate::browser_host::manager::{
 };
 use crate::browser_host::adaptive_stream_controller::ViewerSample;
 use crate::browser_host::media_writer::{
-    spawn_media_writer, MediaPacketSink, MediaWriterEvent, OutboundMediaPacket,
+    spawn_media_writer, MediaPacketSink, MediaWriterEvent, MediaWriterHandle, OutboundMediaPacket,
 };
 use crate::browser_host::protocol::{
     unpack_bhjf_frame, DiscardReason, HeartbeatTelemetry, MediaClientControlWire,
@@ -1208,15 +1208,22 @@ pub fn audio_chunk_admissible(
     producer: &ScreencastProducer,
     subscription_epoch: &str,
     admitted_gen: u64,
-    chunk_run: &str,
+    audio_seq: u64,
+    chunk_audio_run: &str,
     doc_epoch: u64,
 ) -> bool {
+    let chunk_run = Uuid::parse_str(chunk_audio_run).ok();
     producer.audio_doc_authority().is_admissible(doc_epoch)
-        && Uuid::parse_str(chunk_run).is_ok_and(|r| producer.audio_source_run() == Some(r))
+        && chunk_run.is_some_and(|r| producer.audio_source_run() == Some(r))
         && producer
             .viewer_audio_gate(subscription_epoch)
             .is_some_and(|g| g.is_allowed())
         && producer.viewer_audio_generation(subscription_epoch) == Some(admitted_gen)
+        && producer
+            .viewer_audio_gate_info(subscription_epoch)
+            .is_some_and(|(_gate, gen, watermark)| {
+                gen == admitted_gen && !watermark.suppresses(chunk_run, audio_seq)
+            })
 }
 
 /// GET /api/browser/media WebSocket upgrade handler.
@@ -1407,6 +1414,128 @@ impl MediaPacketSink for AxumMediaSink {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ViewerQualityDigest {
+    quality_rev: u64,
+    target_version: u64,
+    preference: crate::browser_host::capture_tier::QualityPreference,
+    viewer_tier: crate::browser_host::capture_tier::CaptureTier,
+    fps: u32,
+    audio_suppressed: bool,
+    audio_reason: Option<crate::browser_host::protocol::StreamAudioReason>,
+    viewer_visible: bool,
+    has_producer: bool,
+}
+
+fn compute_viewer_quality_digest(
+    producer: Option<&Arc<ScreencastProducer>>,
+    subscription_epoch: &str,
+    viewer_visible: bool,
+) -> ViewerQualityDigest {
+    match producer {
+        Some(p) => {
+            let quality_rev = p.quality_revision();
+            let target = p.capture_snapshot();
+            let target_version = target.version;
+            let preference = p
+                .viewer_quality_preference(subscription_epoch)
+                .unwrap_or(crate::browser_host::capture_tier::QualityPreference::Auto);
+            let directives = p.viewer_directives(subscription_epoch);
+            let (viewer_tier, fps, audio_suppressed, audio_reason) = match directives {
+                Some(d) => {
+                    let fps = (1.0 / d.min_delivery_interval.as_secs_f64())
+                        .round()
+                        .clamp(1.0, 30.0) as u32;
+                    let (suppressed, reason) = match d.audio {
+                        crate::browser_host::adaptive_stream_controller::AudioGate::Allowed => {
+                            (false, None)
+                        }
+                        crate::browser_host::adaptive_stream_controller::AudioGate::Suppressed(
+                            crate::browser_host::adaptive_stream_controller::AudioSuppression::Muted,
+                        ) => (true, Some(crate::browser_host::protocol::StreamAudioReason::Muted)),
+                        crate::browser_host::adaptive_stream_controller::AudioGate::Suppressed(
+                            crate::browser_host::adaptive_stream_controller::AudioSuppression::Constrained,
+                        ) => (true, Some(crate::browser_host::protocol::StreamAudioReason::Bandwidth)),
+                        crate::browser_host::adaptive_stream_controller::AudioGate::Suppressed(
+                            crate::browser_host::adaptive_stream_controller::AudioSuppression::Hidden,
+                        ) => (true, Some(crate::browser_host::protocol::StreamAudioReason::Hidden)),
+                        crate::browser_host::adaptive_stream_controller::AudioGate::Suppressed(
+                            crate::browser_host::adaptive_stream_controller::AudioSuppression::Stalled,
+                        ) => (true, Some(crate::browser_host::protocol::StreamAudioReason::Stalled)),
+                    };
+                    (d.tier, fps, suppressed, reason)
+                }
+                None => (
+                    target.tier,
+                    target.fps.clamp(1, 30),
+                    true,
+                    Some(crate::browser_host::protocol::StreamAudioReason::Muted),
+                ),
+            };
+            ViewerQualityDigest {
+                quality_rev,
+                target_version,
+                preference,
+                viewer_tier,
+                fps,
+                audio_suppressed,
+                audio_reason,
+                viewer_visible,
+                has_producer: true,
+            }
+        }
+        None => ViewerQualityDigest {
+            quality_rev: 0,
+            target_version: 1,
+            preference: crate::browser_host::capture_tier::QualityPreference::Auto,
+            viewer_tier: crate::browser_host::capture_tier::CaptureTier::Constrained,
+            fps: 1,
+            audio_suppressed: true,
+            audio_reason: Some(crate::browser_host::protocol::StreamAudioReason::Muted),
+            viewer_visible,
+            has_producer: false,
+        },
+    }
+}
+
+async fn emit_stream_quality_if_changed(
+    producer: Option<&Arc<ScreencastProducer>>,
+    subscription_epoch: &str,
+    writer_handle: &MediaWriterHandle,
+    viewer_visible: bool,
+    last_digest: &mut Option<ViewerQualityDigest>,
+) {
+    let current_digest = compute_viewer_quality_digest(producer, subscription_epoch, viewer_visible);
+    if last_digest.as_ref() != Some(&current_digest) {
+        let quality = match producer {
+            Some(p) => p.stream_quality_event(subscription_epoch).await,
+            None => crate::browser_host::protocol::BrowserStreamQuality {
+                kind: "streamQuality".to_string(),
+                subscription_epoch: subscription_epoch.to_string(),
+                preference: crate::browser_host::capture_tier::QualityPreference::Auto,
+                producer_run: Uuid::nil().to_string(),
+                capture_version: "1".to_string(),
+                shared_tier: crate::browser_host::capture_tier::CaptureTier::Constrained,
+                viewer_tier: crate::browser_host::capture_tier::CaptureTier::Constrained,
+                fps: 1,
+                jpeg_quality: 10,
+                scale: 1.0,
+                image_width: 64,
+                image_height: 64,
+                audio_suppressed: true,
+                audio_reason: Some(crate::browser_host::protocol::StreamAudioReason::Muted),
+                status: crate::browser_host::protocol::StreamQualityStatus::Unavailable,
+            },
+        };
+
+        if let Ok(json) = serde_json::to_string(&quality) {
+            writer_handle.enqueue_control_text(json);
+            *last_digest = Some(current_digest);
+        }
+    }
+}
+
+
 #[allow(clippy::too_many_arguments)]
 async fn run_media_session(
     socket: WebSocket,
@@ -1438,21 +1567,19 @@ async fn run_media_session(
         .map(|prod| prod.subscribe_audio_doc_authority());
     let prod_for_writer = producer.clone();
     let sub_for_writer = subscription_epoch.clone();
-    // Gate generation observed when the queued audio chunk was admitted (single audio slot).
-    let queued_audio_gen = Arc::new(AtomicU64::new(u64::MAX));
-    let queued_for_writer = queued_audio_gen.clone();
     let (writer_handle, mut writer_events, writer_join) = spawn_media_writer(
         AxumMediaSink { sink: ws_sink },
         session_writer_cancel.clone(),
         doc_auth_rx,
-        // Evaluated right before each audio write.
-        move |run, doc_epoch| {
+        // Evaluated right before each audio write using the slot's OWN admitted generation & seq.
+        move |audio_run, doc_epoch, admitted_gen, audio_seq| {
             prod_for_writer.as_ref().is_none_or(|p| {
                 audio_chunk_admissible(
                     p,
                     &sub_for_writer,
-                    queued_for_writer.load(Ordering::Acquire),
-                    run,
+                    admitted_gen,
+                    audio_seq,
+                    audio_run,
                     doc_epoch,
                 )
             })
@@ -1491,9 +1618,18 @@ async fn run_media_session(
     let mut media_ctrl_count = 0usize;
     // Gate generation last observed; any suppression transition (even a quick mute/unmute)
     // drops audio queued before it, so pre-mute chunks are never replayed after unmute.
-    let mut last_audio_gen = 0u64;
+    let mut last_audio_gen = producer
+        .as_ref()
+        .and_then(|p| p.viewer_audio_generation(&subscription_epoch))
+        .unwrap_or(0);
+    let mut last_pref_apply =
+        Instant::now().checked_sub(Duration::from_secs(1)).unwrap_or_else(Instant::now);
+    let mut last_mute_apply =
+        Instant::now().checked_sub(Duration::from_secs(1)).unwrap_or_else(Instant::now);
+    let mut pending_pref: Option<crate::browser_host::capture_tier::QualityPreference> = None;
+    let mut pending_unmute: Option<bool> = None;
+    let mut last_digest: Option<ViewerQualityDigest> = None;
     let mut media_rate_window = Instant::now();
-    // Absolute auth deadline calculation
     let deadline_sleep = match effective_deadline {
         Some(dl) => {
             let duration = dl.signed_duration_since(Utc::now());
@@ -1510,6 +1646,15 @@ async fn run_media_session(
         None => None,
     };
     tokio::pin!(deadline_sleep);
+    emit_stream_quality_if_changed(
+        producer.as_ref(),
+        &subscription_epoch,
+        &writer_handle,
+        viewer_visible,
+        &mut last_digest,
+    )
+    .await;
+
 
     loop {
         tokio::select! {
@@ -1572,12 +1717,45 @@ async fn run_media_session(
                 if directives.is_some_and(|d| !d.audio.is_allowed()) {
                     writer_handle.clear_audio();
                 }
+                emit_stream_quality_if_changed(
+                    producer.as_ref(),
+                    &subscription_epoch,
+                    &writer_handle,
+                    viewer_visible,
+                    &mut last_digest,
+                )
+                .await;
                 if timed_out {
                     warn!(subscription_epoch = %subscription_epoch, "outstanding frame exceeded 30s timeout; tearing down stalled subscription");
                     break;
                 }
             }
             _ = flush_ticker.tick() => {
+                let now = Instant::now();
+                // Deferred (coalesced) preference/unmute applications; status is re-emitted only
+                // when one actually applied, not on every 15ms tick.
+                let mut applied_pending_control = false;
+                if let Some(pref) = pending_pref {
+                    if now.duration_since(last_pref_apply) >= Duration::from_millis(250) {
+                        last_pref_apply = now;
+                        pending_pref = None;
+                        applied_pending_control = true;
+                        if let Some(prod) = &producer {
+                            prod.set_viewer_quality_preference(&subscription_epoch, pref);
+                        }
+                    }
+                }
+                if let Some(m) = pending_unmute {
+                    if now.duration_since(last_mute_apply) >= Duration::from_millis(250) {
+                        last_mute_apply = now;
+                        pending_unmute = None;
+                        applied_pending_control = true;
+                        if let Some(prod) = &producer {
+                            prod.set_viewer_muted(&subscription_epoch, m);
+                        }
+                    }
+                }
+
                 if let Some(generation) = producer
                     .as_ref()
                     .and_then(|p| p.viewer_audio_generation(&subscription_epoch))
@@ -1596,6 +1774,16 @@ async fn run_media_session(
                 };
                 if let Some(flush_frame) = flush_frame {
                     let _ = writer_handle.enqueue_admitted_frame(flush_frame);
+                }
+                if applied_pending_control {
+                    emit_stream_quality_if_changed(
+                        producer.as_ref(),
+                        &subscription_epoch,
+                        &writer_handle,
+                        viewer_visible,
+                        &mut last_digest,
+                    )
+                    .await;
                 }
             }
             // Incoming broadcast frame from screencast producer
@@ -1621,6 +1809,19 @@ async fn run_media_session(
                         if let Some(to_send) = to_send {
                             let _ = writer_handle.enqueue_admitted_frame(to_send);
                         }
+                        // O(1) dirty comparison: avoid recomputing/allocating unless quality revision changed
+                        if producer.as_ref().is_some_and(|p| {
+                            last_digest.map_or(true, |d| d.quality_rev != p.quality_revision())
+                        }) {
+                            emit_stream_quality_if_changed(
+                                producer.as_ref(),
+                                &subscription_epoch,
+                                &writer_handle,
+                                viewer_visible,
+                                &mut last_digest,
+                            )
+                            .await;
+                        }
                     }
                     Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
                         let mut ctrl = controller.lock().await;
@@ -1634,6 +1835,14 @@ async fn run_media_session(
             }
             // Incoming broadcast audio chunk from screencast producer
             audio_res = async {
+                if let Some(prod) = &producer {
+                    if prod.test_audio_drain_held.load(Ordering::Acquire) {
+                        let notified = prod.test_audio_drain_notify.notified();
+                        if prod.test_audio_drain_held.load(Ordering::Acquire) {
+                            notified.await;
+                        }
+                    }
+                }
                 match audio_rx.as_mut() {
                     Some(rx) => Some(rx.recv().await),
                     None => {
@@ -1646,25 +1855,32 @@ async fn run_media_session(
                         if !viewer_visible {
                             continue;
                         }
-                        if let Some(prod) = &producer {
+                        let (admitted_gen, seq) = if let Some(prod) = &producer {
                             let audio_run = prod.audio_source_run().map(|u| u.to_string());
-                            if audio_run.as_deref() != Some(chunk.producer_run.as_str())
+                            if audio_run.as_deref() != Some(chunk.audio_run.as_str())
                                 || !prod.audio_doc_authority().is_admissible(chunk.doc_epoch)
                             {
                                 continue;
                             }
-                            // Per-viewer mute / lowest-tier / stalled gate: no new chunk is enqueued
-                            // and queued stale audio is dropped. Resumption starts with fresh chunks.
-                            // Unknown (removed/expired) subscriptions fail closed. Generation is read
-                            // before the gate: a transition in between only makes the chunk stale.
-                            let admitted_gen = prod.viewer_audio_generation(&subscription_epoch);
-                            if !prod.viewer_audio_gate(&subscription_epoch).is_some_and(|g| g.is_allowed()) {
+                            let Some((gate, admitted_gen, watermark)) =
+                                prod.viewer_audio_gate_info(&subscription_epoch)
+                            else {
+                                continue;
+                            };
+                            if !gate.is_allowed() {
                                 writer_handle.clear_audio();
                                 continue;
                             }
-                            queued_audio_gen.store(admitted_gen.unwrap_or(u64::MAX), Ordering::Release);
-                        }
-                        let _ = writer_handle.enqueue_latest_audio(&subscription_epoch, chunk);
+                            let seq: u64 = chunk.audio_seq.parse().unwrap_or(0);
+                            let chunk_run = Uuid::parse_str(&chunk.audio_run).ok();
+                            if watermark.suppresses(chunk_run, seq) {
+                                continue;
+                            }
+                            (admitted_gen, seq)
+                        } else {
+                            (0, 0)
+                        };
+                        let _ = writer_handle.enqueue_latest_audio(&subscription_epoch, chunk, admitted_gen, seq);
                     }
                     Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
                         let mut ctrl = controller.lock().await;
@@ -1781,6 +1997,91 @@ async fn run_media_session(
                                     }
                                     if let Some(prod) = &producer {
                                         prod.heartbeat(&subscription_epoch, *visible).await;
+                                    }
+                                    emit_stream_quality_if_changed(
+                                        producer.as_ref(),
+                                        &subscription_epoch,
+                                        &writer_handle,
+                                        viewer_visible,
+                                        &mut last_digest,
+                                    )
+                                    .await;
+                                }
+                            }
+                            MediaClientControlWire::QualityPreference {
+                                subscription_epoch: s_epoch,
+                                preference,
+                            } => {
+                                if s_epoch == &subscription_epoch {
+                                    let now = Instant::now();
+                                    if now.duration_since(last_pref_apply)
+                                        >= Duration::from_millis(250)
+                                    {
+                                        last_pref_apply = now;
+                                        pending_pref = None;
+                                        if let Some(prod) = &producer {
+                                            prod.set_viewer_quality_preference(
+                                                &subscription_epoch,
+                                                *preference,
+                                            );
+                                        }
+                                        emit_stream_quality_if_changed(
+                                            producer.as_ref(),
+                                            &subscription_epoch,
+                                            &writer_handle,
+                                            viewer_visible,
+                                            &mut last_digest,
+                                        )
+                                        .await;
+                                    } else {
+                                        pending_pref = Some(*preference);
+                                    }
+                                }
+                            }
+                            MediaClientControlWire::MuteState {
+                                subscription_epoch: s_epoch,
+                                muted,
+                            } => {
+                                if s_epoch == &subscription_epoch {
+                                    let now = Instant::now();
+                                    if *muted {
+                                        pending_unmute = None;
+                                        last_mute_apply = now;
+                                        if let Some(prod) = &producer {
+                                            prod.set_viewer_muted(&subscription_epoch, true);
+                                        }
+                                        writer_handle.clear_audio();
+                                        emit_stream_quality_if_changed(
+                                            producer.as_ref(),
+                                            &subscription_epoch,
+                                            &writer_handle,
+                                            viewer_visible,
+                                            &mut last_digest,
+                                        )
+                                        .await;
+                                    } else {
+                                        if now.duration_since(last_mute_apply)
+                                            >= Duration::from_millis(250)
+                                        {
+                                            last_mute_apply = now;
+                                            pending_unmute = None;
+                                            if let Some(prod) = &producer {
+                                                prod.set_viewer_muted(
+                                                    &subscription_epoch,
+                                                    false,
+                                                );
+                                            }
+                                            emit_stream_quality_if_changed(
+                                                producer.as_ref(),
+                                                &subscription_epoch,
+                                                &writer_handle,
+                                                viewer_visible,
+                                                &mut last_digest,
+                                            )
+                                            .await;
+                                        } else {
+                                            pending_unmute = Some(false);
+                                        }
                                     }
                                 }
                             }

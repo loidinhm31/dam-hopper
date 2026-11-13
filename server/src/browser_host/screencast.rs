@@ -19,14 +19,19 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use super::cdp::{CdpClient, CdpError, CdpNavigationListener, ScreencastFrameData};
-use super::adaptive_stream_controller::{AdaptiveStreamController, AudioGate, ViewerDirectives, ViewerSample};
-use super::capture_tier::{build_start_params, CaptureCeilings, CaptureTierSnapshot, CaptureTierState, QualityPreference};
+use super::adaptive_stream_controller::{
+    AdaptiveStreamController, AudioGate, AudioSuppression, AudioWatermark, ViewerDirectives,
+    ViewerSample,
+};
+use super::capture_tier::{
+    build_start_params, CaptureCeilings, CaptureTierSnapshot, CaptureTierState, QualityPreference,
+};
 use super::diagnostics::{global_memory_controller, global_stream_diagnostics, TrackedBhjfFrame};
 use super::protocol::{
-    pack_validated_bhjf_frame_with_dims, validate_jpeg_sof,
-    ProducerAudioChunk, TargetFrameHeader, TargetGeometry, AUDIO_CHANNELS, AUDIO_ENCODING_PCM16LE,
-    AUDIO_SAMPLE_RATE, MAX_AUDIO_BASE64_BYTES, MAX_AUDIO_PCM_BYTES, MAX_IMAGE_HEIGHT,
-    MAX_IMAGE_WIDTH, MAX_JPEG_PAYLOAD_BYTES, MAX_PIXELS,
+    pack_validated_bhjf_frame_with_dims, validate_jpeg_sof, BrowserStreamQuality,
+    ProducerAudioChunk, StreamAudioReason, StreamQualityStatus, TargetFrameHeader, TargetGeometry,
+    AUDIO_CHANNELS, AUDIO_ENCODING_PCM16LE, AUDIO_SAMPLE_RATE, MAX_AUDIO_BASE64_BYTES,
+    MAX_AUDIO_PCM_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH, MAX_JPEG_PAYLOAD_BYTES, MAX_PIXELS,
 };
 
 pub const DEFAULT_JPEG_QUALITY_LEGACY: u8 = 65;
@@ -608,8 +613,22 @@ pub struct ScreencastProducer {
     frame_broadcast: broadcast::Sender<TrackedBhjfFrame>,
     active_run_cancel: Arc<Mutex<Option<CancellationToken>>>,
     geometry: Arc<RwLock<TargetGeometry>>,
+    current_run_proven: Arc<SyncMutex<Option<ProvenFrameState>>>,
+    applied_event_version: Arc<SyncMutex<(Option<Uuid>, u64)>>,
+    quality_revision: Arc<AtomicU64>,
+    #[doc(hidden)]
+    pub test_audio_drain_held: Arc<std::sync::atomic::AtomicBool>,
+    #[doc(hidden)]
+    pub test_audio_drain_notify: Arc<tokio::sync::Notify>,
     /// Serializes Page-session setup so exactly one session exists.
     page_setup: Arc<Mutex<()>>,
+}
+#[derive(Debug, Clone)]
+pub struct ProvenFrameState {
+    pub producer_run: Uuid,
+    pub snapshot: Arc<CaptureTierSnapshot>,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl ScreencastProducer {
@@ -686,6 +705,11 @@ impl ScreencastProducer {
             audio_broadcast,
             active_run_cancel: Arc::new(Mutex::new(None)),
             geometry: Arc::new(RwLock::new(initial_geometry)),
+            current_run_proven: Arc::new(SyncMutex::new(None)),
+            applied_event_version: Arc::new(SyncMutex::new((None, 0))),
+            quality_revision: Arc::new(AtomicU64::new(1)),
+            test_audio_drain_held: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            test_audio_drain_notify: Arc::new(tokio::sync::Notify::new()),
             page_setup: Arc::new(Mutex::new(())),
         }
     }
@@ -710,6 +734,8 @@ impl ScreencastProducer {
         self.capture = Arc::new(CaptureTierState::new(ceilings));
         self.adaptive = Arc::new(SyncMutex::new(AdaptiveStreamController::new(ceilings)));
         *self.run_snapshot.lock() = self.capture.current();
+        *self.current_run_proven.lock() = None;
+        self.bump_quality_revision();
     }
 
     pub fn max_image_bounds(&self) -> (u32, u32) {
@@ -757,7 +783,13 @@ impl ScreencastProducer {
 
     /// One feedback sample from an admitted viewer subscription. `None` for unknown/stale subscriptions.
     pub fn adaptive_report(&self, subscription_epoch: &str, visible: bool, sample: ViewerSample) -> Option<ViewerDirectives> {
-        self.adaptive.lock().report(subscription_epoch, visible, sample, Instant::now())
+        let mut adaptive = self.adaptive.lock();
+        // Ordering argument: reading latest_audio_seq inside the adaptive lock ensures that
+        // any audio chunk broadcast before this gate transition must have committed its sequence
+        // number via SeqCst fetch_update prior to send(), so chunk.seq <= watermark.seq.
+        let seq = self.latest_audio_seq();
+        let source_run = self.audio_source_run();
+        adaptive.report_with_seq(subscription_epoch, visible, sample, Instant::now(), source_run, seq)
     }
 
     pub fn viewer_directives(&self, subscription_epoch: &str) -> Option<ViewerDirectives> {
@@ -768,28 +800,259 @@ impl ScreencastProducer {
         self.viewer_directives(subscription_epoch).map(|d| d.audio)
     }
 
-    /// Audio gate generation: changes on every suppression transition (even a quick mute/unmute).
-    /// `None` for unknown, removed or expired subscriptions.
     pub fn viewer_audio_generation(&self, subscription_epoch: &str) -> Option<u64> {
         self.adaptive.lock().audio_generation(subscription_epoch)
     }
 
-    /// Subscription-owned manual quality cap (no control lease needed; never exceeds admin ceilings).
     pub fn set_viewer_quality_preference(&self, subscription_epoch: &str, pref: QualityPreference) -> bool {
-        self.adaptive.lock().set_preference(subscription_epoch, pref, Instant::now())
+        let mut adaptive = self.adaptive.lock();
+        let seq = self.latest_audio_seq();
+        let source_run = self.audio_source_run();
+        adaptive.set_preference_with_seq(subscription_epoch, pref, Instant::now(), source_run, seq)
     }
 
-    /// Subscription-owned mute: withholds new audio chunks for that viewer only.
     pub fn set_viewer_muted(&self, subscription_epoch: &str, muted: bool) -> bool {
-        self.adaptive.lock().set_muted(subscription_epoch, muted, Instant::now())
+        let mut adaptive = self.adaptive.lock();
+        let seq = self.latest_audio_seq();
+        let source_run = self.audio_source_run();
+        adaptive.set_muted_with_seq(subscription_epoch, muted, Instant::now(), source_run, seq)
+    }
+
+    pub fn viewer_audio_gate_info(&self, subscription_epoch: &str) -> Option<(AudioGate, u64, AudioWatermark)> {
+        let mut adaptive = self.adaptive.lock();
+        let seq = self.latest_audio_seq();
+        let source_run = self.audio_source_run();
+        adaptive.audio_gate_info(subscription_epoch, Instant::now(), source_run, seq)
+    }
+
+    /// Quality preference accepted for this subscription; `None` if unknown.
+    pub fn viewer_quality_preference(&self, subscription_epoch: &str) -> Option<QualityPreference> {
+        self.adaptive.lock().viewer_preference(subscription_epoch)
+    }
+
+    pub fn quality_revision(&self) -> u64 {
+        self.quality_revision.load(Ordering::Acquire)
+    }
+
+    pub fn latest_audio_seq(&self) -> u64 {
+        self.audio_seq.load(Ordering::Acquire)
+    }
+
+    fn bump_quality_revision(&self) {
+        self.quality_revision.fetch_add(1, Ordering::Release);
+    }
+    #[doc(hidden)]
+    pub fn hold_audio_drain(&self) {
+        self.test_audio_drain_held.store(true, Ordering::SeqCst);
+    }
+
+    #[doc(hidden)]
+    pub fn release_audio_drain(&self) {
+        self.test_audio_drain_held.store(false, Ordering::SeqCst);
+        self.test_audio_drain_notify.notify_waiters();
+    }
+
+
+    pub async fn stream_quality_event(&self, subscription_epoch: &str) -> BrowserStreamQuality {
+        // Bounded loop (up to 3 attempts) to sample a coherent state snapshot without mid-read mutations
+        for _ in 0..3 {
+            let rev_pre = self.quality_revision();
+            let cur_run = *self.current_run.read().await;
+            let target = self.capture.current();
+            let proven = self.current_run_proven.lock().clone();
+            let directives = self.viewer_directives(subscription_epoch);
+            let pref = self
+                .viewer_quality_preference(subscription_epoch)
+                .unwrap_or(QualityPreference::Auto);
+            let geom = self.geometry.read().await.clone();
+            let ceilings = *self.capture.ceilings();
+            let rev_post = self.quality_revision();
+
+            if rev_pre != rev_post {
+                continue;
+            }
+
+            return self.build_stream_quality_from_snapshot(
+                subscription_epoch,
+                cur_run,
+                target,
+                proven,
+                directives,
+                pref,
+                geom,
+                ceilings,
+            );
+        }
+
+        // Fall back to warming if producer state is rapidly changing during construction
+        let cur_run = *self.current_run.read().await;
+        let target = self.capture.current();
+        let directives = self.viewer_directives(subscription_epoch);
+        let pref = self
+            .viewer_quality_preference(subscription_epoch)
+            .unwrap_or(QualityPreference::Auto);
+        let geom = self.geometry.read().await.clone();
+        let ceilings = *self.capture.ceilings();
+        self.build_stream_quality_from_snapshot(
+            subscription_epoch,
+            cur_run,
+            target,
+            None,
+            directives,
+            pref,
+            geom,
+            ceilings,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_stream_quality_from_snapshot(
+        &self,
+        subscription_epoch: &str,
+        cur_run: Option<Uuid>,
+        target: Arc<CaptureTierSnapshot>,
+        proven: Option<ProvenFrameState>,
+        directives: Option<ViewerDirectives>,
+        pref: QualityPreference,
+        geom: TargetGeometry,
+        ceilings: CaptureCeilings,
+    ) -> BrowserStreamQuality {
+        let (viewer_tier, fps, audio_suppressed, audio_reason) = match directives {
+            Some(d) => {
+                let fps = (1.0 / d.min_delivery_interval.as_secs_f64())
+                    .round()
+                    .clamp(1.0, 30.0) as u32;
+                let (suppressed, reason) = match d.audio {
+                    AudioGate::Allowed => (false, None),
+                    AudioGate::Suppressed(AudioSuppression::Muted) => {
+                        (true, Some(StreamAudioReason::Muted))
+                    }
+                    AudioGate::Suppressed(AudioSuppression::Constrained) => {
+                        (true, Some(StreamAudioReason::Bandwidth))
+                    }
+                    AudioGate::Suppressed(AudioSuppression::Hidden) => {
+                        (true, Some(StreamAudioReason::Hidden))
+                    }
+                    AudioGate::Suppressed(AudioSuppression::Stalled) => {
+                        (true, Some(StreamAudioReason::Stalled))
+                    }
+                };
+                (d.tier, fps, suppressed, reason)
+            }
+            None => (
+                target.tier,
+                target.fps.clamp(1, 30),
+                true,
+                Some(StreamAudioReason::Muted),
+            ),
+        };
+
+        let (
+            shared_tier,
+            producer_run,
+            capture_version,
+            jpeg_quality,
+            scale,
+            image_width,
+            image_height,
+            status,
+        ) = match (cur_run, proven) {
+            (Some(run), Some(p)) if p.producer_run == run => {
+                // Effective when native snapshot matches or governor-only FPS change has applied.
+                let is_effective = p.snapshot.version == target.version
+                    || (p.snapshot.native_key() == target.native_key() && p.snapshot.fps == target.fps);
+                let status = if is_effective {
+                    StreamQualityStatus::Effective
+                } else {
+                    StreamQualityStatus::Switching
+                };
+                let mut applied_lock = self.applied_event_version.lock();
+                if applied_lock.0 != Some(run) {
+                    *applied_lock = (Some(run), p.snapshot.version);
+                }
+                if is_effective {
+                    applied_lock.1 = applied_lock.1.max(p.snapshot.version.max(target.version));
+                } else {
+                    applied_lock.1 = applied_lock.1.max(p.snapshot.version);
+                }
+                let capture_version = applied_lock.1.to_string();
+                drop(applied_lock);
+                let scale = (f64::from(p.snapshot.scale_permille) / 1000.0).clamp(0.001, 1.0);
+                (
+                    p.snapshot.tier,
+                    p.producer_run.to_string(),
+                    capture_version,
+                    p.snapshot.jpeg_quality.clamp(1, 100),
+                    scale,
+                    p.width.clamp(1, MAX_IMAGE_WIDTH),
+                    p.height.clamp(1, MAX_IMAGE_HEIGHT),
+                    status,
+                )
+            }
+            (Some(run), _) => {
+                // Status warming indicates no proven frame in the current run yet;
+                // numbers are non-applied target placeholders.
+                let (w, h) = target.image_bounds(&ceilings, geom.css_width, geom.css_height);
+                let scale = (f64::from(target.scale_permille) / 1000.0).clamp(0.001, 1.0);
+                (
+                    target.tier,
+                    run.to_string(),
+                    target.version.to_string(),
+                    target.jpeg_quality.clamp(1, 100),
+                    scale,
+                    w.clamp(1, MAX_IMAGE_WIDTH),
+                    h.clamp(1, MAX_IMAGE_HEIGHT),
+                    StreamQualityStatus::Warming,
+                )
+            }
+            (None, _) => {
+                // No active run yet: warming placeholder.
+                let (w, h) = target.image_bounds(&ceilings, geom.css_width, geom.css_height);
+                let scale = (f64::from(target.scale_permille) / 1000.0).clamp(0.001, 1.0);
+                (
+                    target.tier,
+                    Uuid::nil().to_string(),
+                    target.version.to_string(),
+                    target.jpeg_quality.clamp(1, 100),
+                    scale,
+                    w.clamp(1, MAX_IMAGE_WIDTH),
+                    h.clamp(1, MAX_IMAGE_HEIGHT),
+                    StreamQualityStatus::Warming,
+                )
+            }
+        };
+
+        BrowserStreamQuality {
+            kind: "streamQuality".to_string(),
+            subscription_epoch: subscription_epoch.to_string(),
+            preference: pref,
+            producer_run,
+            capture_version,
+            shared_tier,
+            viewer_tier,
+            fps,
+            jpeg_quality,
+            scale,
+            image_width,
+            image_height,
+            audio_suppressed,
+            audio_reason,
+            status,
+        }
     }
 
     fn run_adaptive_evaluation(&self) {
-        let decision = self.adaptive.lock().evaluate(Instant::now());
+        let mut adaptive = self.adaptive.lock();
+        let seq = self.latest_audio_seq();
+        let source_run = self.audio_source_run();
+        let decision = adaptive.evaluate_with_seq(Instant::now(), source_run, seq);
         if let Some(d) = decision {
-            self.capture.publish(d.fidelity_stage, d.fps);
+            if self.capture.publish(d.fidelity_stage, d.fps).is_some() {
+                self.bump_quality_revision();
+            }
         }
     }
+
 
     fn ensure_audio_source(&self, producer_run: Uuid) -> (Uuid, CancellationToken, bool) {
         let mut src = self.audio_source.lock();
@@ -856,6 +1119,8 @@ impl ScreencastProducer {
     async fn retire_locked(&self, state: &mut ScreencastState) {
         *state = ScreencastState::Stopped;
         *self.current_run.write().await = None;
+        *self.current_run_proven.lock() = None;
+        self.bump_quality_revision();
         let mut cancel_lock = self.active_run_cancel.lock().await;
         if let Some(token) = cancel_lock.take() {
             token.cancel();
@@ -1152,10 +1417,12 @@ impl ScreencastProducer {
             });
         entry.last_heartbeat = Instant::now();
         entry.visible = visible;
-        self.adaptive
-            .lock()
-            .register(subscription_epoch, Instant::now());
-
+        {
+            let mut adaptive = self.adaptive.lock();
+            let seq = self.latest_audio_seq();
+            let source_run = self.audio_source_run();
+            adaptive.register_with_seq(subscription_epoch, Instant::now(), source_run, seq);
+        }
         let visible_count = viewers.values().filter(|v| v.visible).count();
         drop(viewers);
 
@@ -1253,6 +1520,8 @@ impl ScreencastProducer {
         *state_lock = ScreencastState::Starting;
         let producer_run = Uuid::new_v4();
         *self.current_run.write().await = Some(producer_run);
+        *self.current_run_proven.lock() = None;
+        self.bump_quality_revision();
         *self.native_screencast_session_id.write().await = None;
 
         let page_session_id = match self.ensure_page_session().await {
@@ -1340,6 +1609,8 @@ impl ScreencastProducer {
 
         // Retire the run identity before cancelling so ending tasks see a planned stop.
         *self.current_run.write().await = None;
+        *self.current_run_proven.lock() = None;
+        self.bump_quality_revision();
         {
             let mut cancel_lock = self.active_run_cancel.lock().await;
             if let Some(token) = cancel_lock.take() {
@@ -1390,6 +1661,8 @@ impl ScreencastProducer {
             return Err(e);
         }
         *self.current_run.write().await = None;
+        *self.current_run_proven.lock() = None;
+        self.bump_quality_revision();
         if let Some(token) = self.active_run_cancel.lock().await.take() {
             token.cancel();
         }
@@ -1522,6 +1795,14 @@ impl ScreencastProducer {
                         // Rebuild the governor (Skip catch-up) on every policy notification.
                         governor_ticker = create_governor_interval(snap.governor_interval());
                         self.applied_fps.store(snap.fps, Ordering::Release);
+                        if snap.native_key() == self.run_snapshot.lock().native_key() {
+                            if let Some(run) = *self.current_run.read().await {
+                                let mut applied_lock = self.applied_event_version.lock();
+                                if applied_lock.0 == Some(run) {
+                                    applied_lock.1 = applied_lock.1.max(snap.version);
+                                }
+                            }
+                        }
                         if snap.native_key() != self.run_snapshot.lock().native_key() {
                             self.spawn_capture_restart();
                         }
@@ -1960,7 +2241,7 @@ impl ScreencastProducer {
     /// captured `(producer_run, expected_doc_epoch)` and publishes it to current-run subscribers.
     pub async fn admit_and_broadcast_audio_chunk(
         &self,
-        producer_run: Uuid,
+        audio_run: Uuid,
         expected_doc_epoch: u64,
         b64: &str,
     ) -> Option<ProducerAudioChunk> {
@@ -1968,7 +2249,7 @@ impl ScreencastProducer {
             return None;
         }
         if !self.audio_doc_authority().is_admissible(expected_doc_epoch)
-            || self.audio_source_run() != Some(producer_run)
+            || self.audio_source_run() != Some(audio_run)
             || self.visible_viewer_count().await == 0
         {
             return None;
@@ -1992,7 +2273,7 @@ impl ScreencastProducer {
             browser_session_id: self.browser_session_id.clone(),
             browser_incarnation: self.browser_incarnation.clone(),
             profile_epoch: self.profile_epoch.to_string(),
-            producer_run: producer_run.to_string(),
+            audio_run: audio_run.to_string(),
             doc_epoch: expected_doc_epoch,
             audio_seq: seq.to_string(),
             sample_rate: AUDIO_SAMPLE_RATE,
@@ -2300,7 +2581,7 @@ impl ScreencastProducer {
                 }
                 {
                     let mut hdr_cache = self.cached_header.write().await;
-                    *hdr_cache = Some(header);
+                    *hdr_cache = Some(header.clone());
                 }
 
                 // Broadcast
@@ -2309,6 +2590,42 @@ impl ScreencastProducer {
                 // actually applies (FPS-only updates never restart the run).
                 let applied_fps = self.applied_fps.load(Ordering::Acquire);
                 self.capture.mark_effective_applied(&run_snap, applied_fps);
+                let eff = self.capture.effective().unwrap_or_else(|| run_snap.clone());
+                let mut proven_lock = self.current_run_proven.lock();
+                let mut proven_changed = false;
+                match proven_lock.as_ref() {
+                    Some(old) => {
+                        if old.producer_run != producer_run
+                            || old.snapshot.version != eff.version
+                            || old.snapshot.fps != eff.fps
+                            || old.snapshot.jpeg_quality != eff.jpeg_quality
+                            || old.snapshot.scale_permille != eff.scale_permille
+                            || old.width != header.width
+                            || old.height != header.height
+                        {
+                            *proven_lock = Some(ProvenFrameState {
+                                producer_run,
+                                snapshot: eff,
+                                width: header.width,
+                                height: header.height,
+                            });
+                            proven_changed = true;
+                        }
+                    }
+                    None => {
+                        *proven_lock = Some(ProvenFrameState {
+                            producer_run,
+                            snapshot: eff,
+                            width: header.width,
+                            height: header.height,
+                        });
+                        proven_changed = true;
+                    }
+                }
+                drop(proven_lock);
+                if proven_changed {
+                    self.bump_quality_revision();
+                }
                 self.ledger.frames_published.fetch_add(1, Ordering::Relaxed);
                 drop(run_guard);
             }
@@ -2487,6 +2804,11 @@ impl ScreencastProducer {
             audio_broadcast: self.audio_broadcast.clone(),
             active_run_cancel: self.active_run_cancel.clone(),
             geometry: self.geometry.clone(),
+            current_run_proven: self.current_run_proven.clone(),
+            applied_event_version: self.applied_event_version.clone(),
+            quality_revision: self.quality_revision.clone(),
+            test_audio_drain_held: self.test_audio_drain_held.clone(),
+            test_audio_drain_notify: self.test_audio_drain_notify.clone(),
             page_setup: self.page_setup.clone(),
         })
     }

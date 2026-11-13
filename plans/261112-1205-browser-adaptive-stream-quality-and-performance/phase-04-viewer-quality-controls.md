@@ -4,7 +4,7 @@
 [Overview](plan.md) · [Server controller](phase-03-server-adaptive-capture-tiers.md) · [UI hooks/state](../reports/code-reviewer-261112-1205-browser-ui-client.md) · [Tools surface map](../reports/scout-261112-1205-browser-host-streaming-map.md) · [Audio baseline](../261111-0220-browser-video-audio-streaming/plan.md) · [Remediation OS prerequisites](../261109-2251-host-browser-review-remediation/phase-03-os-viewer-lifecycle.md).
 
 ## Overview
-Date: 2026-11-12 · Priority: P2 · Implementation status: pending (0/2) · Review status: coordinator review pending · Effort: 10h.
+Date: 2026-11-13 · Priority: P2 · Implementation status: completed 2/2 · Review status: 3 cycles 5/10 -> 6/10 -> 6/10, 0 critical, approved by user with fixes applied · Effort: 10h.
 Depends on Phase 03; external gates `repair-browser-portals`, `reconcile-browser-ownership`, `fence-client-input-decoding`, `wire-browser-interaction`. These remain prerequisites, not another lifecycle rewrite. Wire task precedes tools task; same integration owner serializes backend/UI shared files.
 
 ## Key Insights
@@ -27,7 +27,7 @@ Depends on Phase 03; external gates `repair-browser-portals`, `reconcile-browser
 Client controls, alongside existing bounded feedback/credits:
 - `qualityPreference`: `{kind, subscriptionEpoch, preference: 'auto'|'high'|'medium'|'low'}`.
 - `muteState`: `{kind, subscriptionEpoch, muted: boolean}`.
-Server text event `streamQuality`: `{kind, subscriptionEpoch, producerRun, captureVersion, sharedTier, viewerTier, fps, jpegQuality, scale, imageWidth, imageHeight, audioSuppressed, audioReason, status}`. `captureVersion` canonical positive decimal u64 string; tiers `high|medium|low|constrained`; `audioReason: null|'muted'|'bandwidth'|'hidden'|'stalled'`; status `warming|switching|effective|unavailable`. Dimensions/quality/FPS finite and config/protocol bounded. Switching event identifies current applied run/settings with status switching; proposed target is not advertised as applied. Attach response starts warming until current authoritative snapshot known.
+Server text event `streamQuality`: `{kind, subscriptionEpoch, producerRun, captureVersion, sharedTier, viewerTier, fps, jpegQuality, scale, imageWidth, imageHeight, audioSuppressed, audioReason, preference, status}`. `captureVersion` canonical positive decimal u64 string; tiers `high|medium|low|constrained`; `audioReason: null|'muted'|'bandwidth'|'hidden'|'stalled'`; `preference: 'auto'|'high'|'medium'|'low'`; status `warming|switching|effective|unavailable`. Dimensions/quality/FPS finite and config/protocol bounded. Numerical values under status `warming` or `unavailable` are non-applied placeholder ceilings; `effective` and `switching` reflect one proven native snapshot. Switching event identifies current applied run/settings with status switching; proposed target is not advertised as applied. Attach response starts warming until current authoritative snapshot known.
 Use exhaustive tagged parser for audioChunk vs streamQuality before specialized payload validation; a tier event cannot become audio or a frame credit. Quality/mute messages bind to socket subscription, not client-selected session/viewer ID, and do not require lease credentials. No REST quality endpoint or global session DTO field for viewer-specific state.
 Audio clean cutover: replace audio-only wire `producerRun` field with `audioRun` everywhere (Rust envelope/validation, TS DTO/parser, stream controller/tests); video BHJF/credit `producerRun` remains unchanged. `audioRun` rotates only when audio source truly restarts, not for JPEG tier switch. Player fencing uses owner/session/incarnation/profile/subscription/audioRun/docEpoch/subdocument identity; old queued chunks after mute/source change cannot revive playback. Preserve current privacy/reset/navigation behavior; do not treat mere source equality as permission after subscription retirement.
 Small in-memory `browser-stream-quality.ts` holds tuple-keyed preference/status and subscriptions; no new persistence store. BrowserApp passes props to BrowserTools and publishes preference/mute to existing keep-alive slot/controller bridge. Stream controller owns transport messages and sampled state callbacks; React sees coalesced changes only.
@@ -65,8 +65,8 @@ Exact task allowlists below. Create `packages/ui/src/os/browser/browser-stream-q
   }
 ]
 ```
-- [ ] <!-- evcrate-task:wire-viewer-quality-and-mute --> Wire typed quality/mute/status and stable audio identity
-- [ ] <!-- evcrate-task:expose-browser-quality-tools --> Expose session-only presets and effective diagnostics
+- [x] <!-- evcrate-task:wire-viewer-quality-and-mute --> Wire typed quality/mute/status and stable audio identity (done 2026-11-13)
+- [x] <!-- evcrate-task:expose-browser-quality-tools --> Expose session-only presets and effective diagnostics (done 2026-11-13)
 
 ## Success Criteria
 View-only viewer chooses all four options without lease; defaults Auto after reload/new generation, retains same-tuple in-memory choice across placement/reconnect. Two unequal viewers display same shared image tier but independent FPS/service-tier/audio state. At most one coalesced pending status, ≤4 preference/mute updates/s each; controls ≤1KiB. Mute suppresses server transmission, lowest service tier suppresses audio, and tier-only video switch does not flush unchanged audio source. All tests/commands are future verification, none run by planner.
@@ -77,5 +77,34 @@ New server text union may be misread as audio; exhaustive parser/type/bounds tes
 ## Security Considerations
 Client telemetry/preference/mute untrusted: validate enum/finite bounds, exact live subscription, existing cap/rate limit and per-setting coalescing; never raise admin resource ceilings or mutate page/control lease. No new unauthenticated surface, stored metrics/tickets or ambient target fallback. Server effective events are untrusted client-side until validated and owner/version fenced; masked views reveal no stale page/session diagnostics.
 
+## Approved with noted issues
+Phase 04 approved 2026-11-13 after 3 review cycles (score progression: Cycle 1: 5/10 -> Cycle 2: 6/10 -> Cycle 3: 6/10, 0 critical across all cycles; approved by user after cycle-3 fixes C3-W1/W2/W3/W5 were applied and re-verified) with noted open items recorded as non-blocking follow-ups for Phase 05 / coordinator:
+- **Task review scores**:
+  - Review scoring progressed 5/10 -> 6/10 -> 6/10 (0 critical every cycle). All 4 cycle-3 warning fixes (C3-W1 atomic fresh-audio authority/source-scoped watermark, C3-W2 monotonic applied_event_version & per-run captureVersion map, C3-W3 controlled `<select value={qualityPreference}>`, C3-W5 failed-open & disconnect reset lifecycle) were verified clean by tests prior to final approval.
+  - `wire-viewer-quality-and-mute`: 6/10 (*Cycle 3 aggregate score; approved with cycle-3 fixes applied and verified*)
+  - `expose-browser-quality-tools`: 6/10 (*Cycle 3 aggregate score; approved with cycle-3 fixes applied and verified*)
+- **Wire contract amendments & runtime semantics**:
+  1. **Server `streamQuality` 15-key union**: Schema includes server-acknowledged client `preference` (`'auto' | 'high' | 'medium' | 'low'`) alongside `kind`, `subscriptionEpoch`, `producerRun`, `captureVersion`, `sharedTier`, `viewerTier`, `fps`, `jpegQuality`, `scale`, `imageWidth`, `imageHeight`, `audioSuppressed`, `audioReason`, and `status`.
+  2. **Placeholder semantics**: Numerical tier/quality/scale/fps values emitted with status `warming` or `unavailable` are non-applied placeholder ceilings (unapplied config maxima), not applied engine parameters. Only events with `status: 'effective'` or `status: 'switching'` reflect a proven native capture snapshot.
+  3. **Capture version monotonicity**: `applied_event_version` is strictly monotonic per run on server, and client tracks per-run `appliedCaptureVersionsByRun` (bounded map <= 16); placeholder events do not touch version fences, preventing version rollbacks across runs or governor-only FPS convergence updates.
+  4. **Audio clean cutover**: Audio envelope field `producerRun` -> `audioRun` clean cutover (video `producerRun` unchanged). New subscriptions start audio-suppressed until first explicit `muteState`. Immediate UI silence on mute; unmute and preference updates coalesced <= 4/s. Source-scoped watermark rejects pre-reopen backlog.
+- **Open follow-ups & known gaps (carry to Phase 05)**:
+  1. **C3-W4: Revision dedupe & transaction boundaries**: `quality_revision` does not bump on geometry-only changes or failed-start run disappearance; retry counter in screencast ledger is not an atomic transaction across decoupled mutations.
+  2. **C3-W6 residual: Unequal two-viewer real-stream acceptance**: Acceptance with two unequal viewers on the same target stream cannot be exercised in offline headless test environment; requires deployed-Chromium and shaped WebSocket link evidence in Phase 05.
+  3. **Downscale input-trust oracle deferred**: Scaled (<1.0) frames stay input-untrusted until live-Chromium downscale oracle (DOM `innerWidth`/`innerHeight`/`devicePixelRatio`, CSS dimensions, JPEG SOF, normalized click marker at 1x/0.75x/0.5x) is qualified in Phase 05.
+  4. **Estimator baseline aging & deferred CDP options**: Phase 01 estimator min-service baseline aging calibration deferred to Phase 05. Optional `everyNthFrame` coarse divisor and `maxFramesInFlight`/`sendLastFrame` CDP parameters deferred.
+  5. **Upstream remediation gates unchecked**: External prerequisites (`unify-geometry-counters`, `enforce-paired-input-lifecycle`, `recover-screencast-runs`, `bound-browser-payloads`, `repair-browser-portals`, `reconcile-browser-ownership`, `fence-client-input-decoding`, `wire-browser-interaction`) remain unchecked upstream.
+  6. **Test hooks in production code**: `#[doc(hidden)] hold_audio_drain` and `release_audio_drain` test barriers on `ScreencastProducer` to be audited and cleaned up or gated behind cfg(test) during Phase 05 cleanup.
+- **Environment & test verification gates**:
+  - `cargo test --features vendored --lib browser_host`: 104/104 passed.
+  - 9 `browser_host_*` integration suites: 142+ tests passed (media, screencast, input, bounds, lifecycle, gateway, admission, selection, shutdown).
+  - TypeScript check (`pnpm --filter @dam-hopper/ui exec tsc --noEmit`): clean (0 errors).
+  - UI Phase 04 unit tests: 185/185 passed (`src/browser-host` 104/104, `src/os/browser` and related host tests 81/81).
+  - Chromium browser tests: 10/10 passed (`host-browser-lifecycle.browser.tsx` 6/6, `browser-tools-quality-keyboard.browser.tsx` 4/4).
+  - ESLint: 0 errors across touched files.
+  - Non-green repo-level baseline: 48 unrelated UI test files fail on Node 26 `localStorage` mock (pre-existing workspace issue); `clippy --lib` has pre-existing errors outside touched scope.
+- **Critical deployment warning**:
+  - **CRITICAL DEPLOYMENT WARNING: Phase 03 and Phase 04 MUST be deployed together as a single matched backend/UI cutover.** Because of the audio envelope wire rename (`producerRun` -> `audioRun`), mismatched server and UI deployments will fail audio decoding or drop audio chunks. Do not deploy Phase 03 backend with Phase 02 UI, or Phase 04 UI with Phase 03 backend.
+
 ## Next steps
-Phase 05 exercises complete UI/server path on shaped links and deployed Chromium, reconciles documentation and records measured thresholds/legibility before release. Coordinator owns independent plan challenge/final validation and implementation verification.
+Proceed to [Phase 05](phase-05-calibration-qualification-and-docs.md) ("Calibration, qualification and docs": 32-cell link shaping matrix, live Chromium downscale and legibility qualification, documentation reconciliation, and roadmap updates).

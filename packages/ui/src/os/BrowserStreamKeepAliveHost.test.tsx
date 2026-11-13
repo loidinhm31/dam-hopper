@@ -3,7 +3,12 @@ import { act, createElement, type ReactNode, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OsWindow } from "./types.js";
-import type { BrowserAudioChunk, BrowserSessionDto, ServerControlEvent } from "@/api/browser-host-types.js";
+import type { BrowserAudioChunk, BrowserSessionDto, QualityPreference, ServerControlEvent, StreamQualityEvent } from "@/api/browser-host-types.js";
+import {
+  getStreamQuality,
+  setQualityPreference,
+  type StreamQualityTuple,
+} from "./browser/browser-stream-quality.js";
 import type * as BrowserHostClientModule from "@/api/browser-host-client.js";
 import type { ViewerAttachmentCredentials } from "@/api/browser-host-client.js";
 import type { StreamControllerOptions } from "@/browser-host/stream-controller.js";
@@ -34,6 +39,13 @@ interface ControllerMockInstance {
   disposed: boolean;
   setVisibilityCalls: boolean[];
   resetAudioAuthority: (minDocEpoch?: string | number | bigint) => void;
+  qualityPreference?: string;
+  audioMuted?: boolean;
+  lastMuteBeforeAttach?: boolean | null;
+  mediaOpens: Array<{ subscriptionEpoch: string; audioMuted: boolean; qualityPreference: string }>;
+  simulateMediaOpen: () => { subscriptionEpoch: string; audioMuted: boolean; qualityPreference: string };
+  simulateSocketClose: () => void;
+  simulateCloseBeforeOpen: () => void;
 }
 
 const {
@@ -103,6 +115,11 @@ const {
       onAudioReset: undefined as StreamControllerOptions["onAudioReset"],
       resetAudioAuthority: vi.fn(),
       credentials: null as ViewerAttachmentCredentials | null,
+      onStreamQuality: undefined as StreamControllerOptions["onStreamQuality"],
+      onStreamQualityReset: undefined as StreamControllerOptions["onStreamQualityReset"],
+      onStatusChange: undefined as StreamControllerOptions["onStatusChange"],
+      setQualityPreference: vi.fn(),
+      setAudioMuted: vi.fn(),
     },
     acquireControl: vi.fn(),
     releaseControl: vi.fn(),
@@ -245,21 +262,58 @@ vi.mock("../browser-host/stream-controller.js", () => ({
         disposed: false,
         setVisibilityCalls: [],
         resetAudioAuthority: streamState.resetAudioAuthority,
+        lastMuteBeforeAttach: null,
+        mediaOpens: [],
+        simulateMediaOpen: () => this.simulateMediaOpen(),
+        simulateSocketClose: () => this.simulateSocketClose(),
+        simulateCloseBeforeOpen: () => this.simulateCloseBeforeOpen(),
       };
       controllers.push(this.instance);
       streamState.onControlEvent = options.onControlEvent;
       streamState.onAudioChunk = options.onAudioChunk;
       streamState.onAudioReset = options.onAudioReset;
+      streamState.onStreamQuality = options.onStreamQuality;
+      streamState.onStreamQualityReset = options.onStreamQualityReset;
+      streamState.onStatusChange = options.onStatusChange;
     }
     attach(credentials: ViewerAttachmentCredentials) {
       this.instance.credentials = credentials;
       this.instance.subscriptionEpoch = credentials.subscriptionEpoch;
+      this.instance.lastMuteBeforeAttach = this.instance.audioMuted ?? null;
       streamState.credentials = credentials;
       streamState.onControlEvent = this.instance.options.onControlEvent;
       streamState.onAudioChunk = this.instance.options.onAudioChunk;
       streamState.onAudioReset = this.instance.options.onAudioReset;
+      streamState.onStreamQuality = this.instance.options.onStreamQuality;
+      streamState.onStreamQualityReset = this.instance.options.onStreamQualityReset;
+      streamState.onStatusChange = this.instance.options.onStatusChange;
       callOrder.push(`attach:${credentials.browserSessionId}`);
       attach(credentials);
+    }
+    simulateMediaOpen() {
+      const payload = {
+        subscriptionEpoch: this.instance.credentials?.subscriptionEpoch ?? this.instance.subscriptionEpoch,
+        audioMuted: this.instance.audioMuted ?? false,
+        qualityPreference: this.instance.qualityPreference ?? "auto",
+      };
+      this.instance.mediaOpens.push(payload);
+      this.instance.status = "streaming";
+      this.instance.options.onStatusChange?.("streaming");
+      return payload;
+    }
+    simulateSocketClose() {
+      this.instance.credentials = null;
+      this.instance.options.onStreamQualityReset?.();
+      if (this.instance.status === "streaming") {
+        this.instance.status = "disconnected";
+        this.instance.options.onStatusChange?.("disconnected");
+      }
+    }
+    simulateCloseBeforeOpen() {
+      this.instance.credentials = null;
+      this.instance.status = "disconnected";
+      this.instance.options.onStreamQualityReset?.();
+      this.instance.options.onStatusChange?.("disconnected");
     }
     setPrivacyMode(active: boolean) {
       this.instance.privacy = active;
@@ -275,6 +329,14 @@ vi.mock("../browser-host/stream-controller.js", () => ({
     dispose() {
       this.instance.disposed = true;
     }
+    setQualityPreference(pref: QualityPreference) {
+      this.instance.qualityPreference = pref;
+      streamState.setQualityPreference(pref);
+    }
+    setAudioMuted(muted: boolean) {
+      this.instance.audioMuted = muted;
+      streamState.setAudioMuted(muted);
+    }
     resetAudioAuthority(minDocEpoch?: string | number | bigint) {
       this.instance.resetAudioAuthority(minDocEpoch);
     }
@@ -282,7 +344,7 @@ vi.mock("../browser-host/stream-controller.js", () => ({
       return streamState.status;
     }
     getCurrentSubscriptionEpoch() {
-      return this.instance.credentials?.subscriptionEpoch ?? streamState.subscriptionEpoch;
+      return this.instance.credentials?.subscriptionEpoch ?? null;
     }
     getControlSocket() {
       return controlSocket;
@@ -372,10 +434,29 @@ const push = async (
 ) => {
   await act(async () => streamState.onControlEvent?.(event, credentials));
 };
-
+const pushQuality = async (
+  event: StreamQualityEvent,
+  credentials = streamState.credentials!,
+) => {
+  await act(async () => streamState.onStreamQuality?.(event, credentials));
+};
 beforeEach(async () => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  let mockStorageData: Record<string, string> = {};
+  const storageMock = {
+    getItem: (k: string) => mockStorageData[k] ?? null,
+    setItem: (k: string, v: string) => { mockStorageData[k] = String(v); },
+    removeItem: (k: string) => { delete mockStorageData[k]; },
+    clear: () => { mockStorageData = {}; },
+    get length() { return Object.keys(mockStorageData).length; },
+    key: (i: number) => Object.keys(mockStorageData)[i] ?? null,
+  };
+  Object.defineProperty(globalThis, "localStorage", {
+    value: storageMock,
+    configurable: true,
+    writable: true,
+  });
   localStorage.clear();
   clearClosingGatesForTesting();
   clearPopupTabStateForTesting();
@@ -1234,7 +1315,7 @@ describe("browser first pointer gesture control handoff & popup tabs", () => {
       browserSessionId: "session-1",
       browserIncarnation: "live-runtime",
       profileEpoch: "2",
-      producerRun: "11111111-2222-4333-8444-555555555555",
+      audioRun: "11111111-2222-4333-8444-555555555555",
       subscriptionEpoch: "subscription-1",
       docEpoch: "1",
       audioSeq: "1",
@@ -1358,5 +1439,315 @@ describe("browser first pointer gesture control handoff & popup tabs", () => {
     });
     expect(controllers[0]?.visible).toBe(true);
     setDocumentVisibilityForTests(null);
+  });
+});
+
+describe("BrowserStreamKeepAliveHost quality & live mute lifecycle regressions", () => {
+  const sampleEvent: StreamQualityEvent = {
+    kind: "streamQuality",
+    subscriptionEpoch: "subscription-1",
+    preference: "auto",
+    producerRun: "run-1",
+    captureVersion: "100",
+    sharedTier: "high",
+    viewerTier: "high",
+    fps: 30,
+    jpegQuality: 85,
+    scale: 1,
+    imageWidth: 1920,
+    imageHeight: 1080,
+    audioSuppressed: false,
+    audioReason: null,
+    status: "effective",
+  };
+
+  it("(a) drops events from stale generation and publishes current generation into active tuple", async () => {
+    const tupleGen1: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+    const tupleGen2: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 2,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    await pushQuality(sampleEvent);
+    expect(getStreamQuality(tupleGen1).status).toEqual(sampleEvent);
+
+    owner.generation = 2;
+    snapshots.set("profile-1", {
+      ...snapshots.get("profile-1")!,
+      owner: { profileId: "profile-1", generation: 2 },
+    });
+    connListeners.forEach((fn) => fn());
+    await render();
+
+    const staleGen1Creds: ViewerAttachmentCredentials = {
+      ...streamState.credentials!,
+      owner: { profileId: "profile-1", generation: 1 },
+    };
+    await pushQuality({ ...sampleEvent, fps: 24 }, staleGen1Creds);
+    expect(getStreamQuality(tupleGen2).status).toBeNull();
+
+    const gen2Creds: ViewerAttachmentCredentials = {
+      ...streamState.credentials!,
+      owner: { profileId: "profile-1", generation: 2 },
+    };
+    await pushQuality({ ...sampleEvent, fps: 24 }, gen2Creds);
+    expect(getStreamQuality(tupleGen2).status?.fps).toBe(24);
+  });
+
+  it("(b) controller masked/parked at init publishes after reveal", async () => {
+    const tuple: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+
+    await pushQuality(sampleEvent);
+    expect(getStreamQuality(tuple).status).toBeNull();
+
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+
+    await pushQuality(sampleEvent);
+    expect(getStreamQuality(tuple).status).toEqual(sampleEvent);
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("(c) re-sends quality preference on reconnect but NOT on status-only notifications", async () => {
+    const tuple: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    setQualityPreference(tuple, "high");
+    expect(streamState.setQualityPreference).toHaveBeenCalledWith("high");
+    streamState.setQualityPreference.mockClear();
+
+    await pushQuality({ ...sampleEvent, preference: "high", fps: 15 });
+    expect(streamState.setQualityPreference).not.toHaveBeenCalled();
+    // Reconnect / re-demand via document visibility reconnects and re-sends preference
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+    expect(streamState.setQualityPreference).toHaveBeenCalledWith("high");
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("C2-W1: derives pre-attach mute as false for visible/unmuted/live tab with null subscription before attach", async () => {
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+
+    expect(controllers[0]?.credentials).toBeNull();
+
+    const freshEpoch = "unique-fresh-epoch-c2w1";
+    mintTickets.mockResolvedValueOnce({
+      owner,
+      browserSessionId: "session-1",
+      browserIncarnation: readTab("tab-1").snapshot?.browserIncarnation ?? "live-runtime",
+      profileEpoch: String(readTab("tab-1").snapshot?.profileEpoch ?? "2"),
+      viewerId: "viewer-c2w1",
+      subscriptionEpoch: freshEpoch,
+    });
+
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "live" });
+    streamState.setAudioMuted.mockClear();
+
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    expect(streamState.setAudioMuted).toHaveBeenLastCalledWith(false);
+    expect(controllers[0]?.lastMuteBeforeAttach).toBe(false);
+    const firstOpen = controllers[0]?.simulateMediaOpen();
+    expect(firstOpen?.audioMuted).toBe(false);
+    expect(controllers[0]?.audioMuted).toBe(false);
+    expect(controllers[0]?.credentials?.subscriptionEpoch).toBe(freshEpoch);
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("C2-W5: media-only subscription reset with live tab clears effective diagnostics and switching pending, and re-sends preference on reconnect", async () => {
+    const tuple: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    setQualityPreference(tuple, "high");
+    await pushQuality({ ...sampleEvent, preference: "high", status: "effective" });
+    expect(getStreamQuality(tuple).status?.status).toBe("effective");
+    expect(getStreamQuality(tuple).pending).toBe(false);
+
+    await act(async () => {
+      controllers[0]?.simulateSocketClose();
+    });
+
+    expect(getStreamQuality(tuple).status).toBeNull();
+    expect(getStreamQuality(tuple).pending).toBe(false);
+    expect(getStreamQuality(tuple).preference).toBe("high");
+
+    setQualityPreference(tuple, "medium");
+    expect(getStreamQuality(tuple).pending).toBe(true);
+
+    await act(async () => {
+      controllers[0]?.simulateSocketClose();
+    });
+    expect(getStreamQuality(tuple).pending).toBe(false);
+    expect(getStreamQuality(tuple).preference).toBe("medium");
+
+    streamState.setQualityPreference.mockClear();
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    expect(streamState.setQualityPreference).toHaveBeenCalledWith("medium");
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("C2-W6: ticket-race proves second mint started and mute changed during mint, asserting final controller mute", async () => {
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    await render();
+
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+
+    const { promise, resolve } = Promise.withResolvers<ViewerAttachmentCredentials>();
+    mintTickets.mockImplementationOnce(() => promise);
+
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+
+    expect(mintTickets).toHaveBeenCalled();
+
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, true);
+
+    const freshCreds: ViewerAttachmentCredentials = {
+      owner,
+      browserSessionId: "session-1",
+      browserIncarnation: readTab("tab-1").snapshot?.browserIncarnation ?? "live-runtime",
+      profileEpoch: String(readTab("tab-1").snapshot?.profileEpoch ?? "2"),
+      viewerId: "viewer-mint-race",
+      subscriptionEpoch: "sub-mint-race",
+    };
+    await act(async () => {
+      resolve(freshCreds);
+    });
+    await render();
+
+    expect(attach).toHaveBeenCalledWith(freshCreds);
+    expect(controllers[0]?.lastMuteBeforeAttach).toBe(true);
+    const firstOpen = controllers[0]?.simulateMediaOpen();
+    expect(firstOpen?.audioMuted).toBe(true);
+    expect(controllers[0]?.audioMuted).toBe(true);
+    expect(streamState.setAudioMuted).toHaveBeenLastCalledWith(true);
+    setDocumentVisibilityForTests(null);
+  });
+  it("C3-W5: close-before-open triggers onStreamQualityReset with pending preference and unchanged live tab: status/ack/pending cleared, preference retained and re-sent after reconnect", async () => {
+    const tuple: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    await render();
+
+    // Tab is live and unchanged
+    expect(readTab("tab-1").phase).toBe("live");
+    expect(controllers[0]).toBeDefined();
+
+    // Set pending preference before open
+    setQualityPreference(tuple, "high");
+    expect(getStreamQuality(tuple).preference).toBe("high");
+    expect(getStreamQuality(tuple).pending).toBe(true);
+    expect(getStreamQuality(tuple).ackedPreference).toBeNull();
+    expect(getStreamQuality(tuple).status).toBeNull();
+
+    // Controller double triggers onStreamQualityReset before open (simulating close-before-open)
+    await act(async () => {
+      controllers[0]?.simulateCloseBeforeOpen();
+    });
+
+    // Unchanged live tab: tuple status/ack/pending cleared, preference retained
+    expect(readTab("tab-1").phase).toBe("live");
+    expect(getStreamQuality(tuple).status).toBeNull();
+    expect(getStreamQuality(tuple).ackedPreference).toBeNull();
+    expect(getStreamQuality(tuple).pending).toBe(false);
+    expect(getStreamQuality(tuple).preference).toBe("high");
+
+    // After reconnect: preference retained and re-sent
+    streamState.setQualityPreference.mockClear();
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    expect(streamState.setQualityPreference).toHaveBeenCalledWith("high");
+    expect(getStreamQuality(tuple).preference).toBe("high");
+    setDocumentVisibilityForTests(null);
+  });
+  it("(e) final close releases quality tuple", async () => {
+    const tuple: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    setQualityPreference(tuple, "medium");
+    await pushQuality({ ...sampleEvent, preference: "medium" });
+    expect(getStreamQuality(tuple).preference).toBe("medium");
+    expect(getStreamQuality(tuple).status).not.toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+
+    expect(getStreamQuality(tuple).preference).toBe("auto");
+    expect(getStreamQuality(tuple).status).toBeNull();
   });
 });

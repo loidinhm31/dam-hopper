@@ -608,7 +608,7 @@ async fn test_custom_min_interval_and_audio_chunk_validation() {
         browser_session_id: Uuid::new_v4().to_string(),
         browser_incarnation: Uuid::new_v4().to_string(),
         profile_epoch: "1".to_string(),
-        producer_run: run.clone(),
+        audio_run: run.clone(),
         doc_epoch: 1,
         audio_seq: "1".to_string(),
         sample_rate: AUDIO_SAMPLE_RATE,
@@ -2262,7 +2262,7 @@ async fn test_decoupled_media_writer_blocked_sink_reservation_audio_drop_and_can
         },
         cancel.clone(),
         None,
-        |_, _| true,
+        |_, _, _, _| true,
     );
 
     let f1 = make_tracked("1");
@@ -2328,7 +2328,7 @@ async fn test_decoupled_media_writer_blocked_sink_reservation_audio_drop_and_can
             browser_session_id: Uuid::new_v4().to_string(),
             browser_incarnation: Uuid::new_v4().to_string(),
             profile_epoch: "1".to_string(),
-            producer_run: run.clone(),
+            audio_run: run.clone(),
             doc_epoch: 1,
             audio_seq: seq.to_string(),
             sample_rate: AUDIO_SAMPLE_RATE,
@@ -2337,7 +2337,7 @@ async fn test_decoupled_media_writer_blocked_sink_reservation_audio_drop_and_can
             data: valid_audio_b64.clone(),
             reservation: None,
         };
-        assert!(writer.enqueue_latest_audio(&sub, chunk));
+        assert!(writer.enqueue_latest_audio(&sub, chunk, 1, 1));
     }
 
     // Release blocked sink for f1
@@ -2430,7 +2430,7 @@ async fn test_media_writer_lifecycle_channel_saturation_lossless_flush() {
         },
         cancel.clone(),
         None,
-        |_, _| true,
+        |_, _, _, _| true,
     );
 
     // Consumer is STALLED: we do not read from `events` channel.
@@ -2523,7 +2523,7 @@ async fn test_media_writer_audio_cancellation_retires_sink_without_stale_leak() 
         },
         cancel.clone(),
         Some(doc_rx),
-        |_, _| true,
+        |_, _, _, _| true,
     );
 
     let valid_b64: Arc<str> = Arc::from(base64::engine::general_purpose::STANDARD.encode(&[0u8; 960]));
@@ -2531,7 +2531,7 @@ async fn test_media_writer_audio_cancellation_retires_sink_without_stale_leak() 
         browser_session_id: Uuid::new_v4().to_string(),
         browser_incarnation: Uuid::new_v4().to_string(),
         profile_epoch: "1".to_string(),
-        producer_run: Uuid::new_v4().to_string(),
+        audio_run: Uuid::new_v4().to_string(),
         doc_epoch: 1,
         audio_seq: "1".to_string(),
         sample_rate: AUDIO_SAMPLE_RATE,
@@ -2541,7 +2541,7 @@ async fn test_media_writer_audio_cancellation_retires_sink_without_stale_leak() 
         reservation: Some(Arc::new(reservation)),
     };
 
-    assert!(writer.enqueue_latest_audio("sub-1", chunk));
+    assert!(writer.enqueue_latest_audio("sub-1", chunk, 1, 1));
 
     // Wait until sink accepts payload and enters blocked flush
     started.notified().await;
@@ -2656,6 +2656,7 @@ async fn test_live_media_session_withholds_muted_viewer_audio_server_side_and_re
     use opaque_ke::ServerSetup;
     use rand::rngs::OsRng;
     use tempfile::tempdir;
+    use tokio::time::timeout;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -2812,19 +2813,88 @@ async fn test_live_media_session_withholds_muted_viewer_audio_server_side_and_re
     let run = producer.audio_source_run().expect("audio source");
     let doc = producer.audio_doc_epoch();
 
+    // A new subscription starts audio-suppressed (muted=true default) until explicit muteState.
+    assert_eq!(
+        producer.viewer_audio_gate(&sub_epoch),
+        Some(dam_hopper_server::browser_host::adaptive_stream_controller::AudioGate::Suppressed(
+            dam_hopper_server::browser_host::adaptive_stream_controller::AudioSuppression::Muted
+        ))
+    );
+    media_ws
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::json!({
+                "kind": "muteState",
+                "subscriptionEpoch": sub_epoch,
+                "muted": false,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send muteState unmute");
+    for _ in 0..40 {
+        if producer.viewer_audio_gate(&sub_epoch).is_some_and(|g| g.is_allowed()) {
+            break;
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        producer.viewer_audio_gate(&sub_epoch),
+        Some(dam_hopper_server::browser_host::adaptive_stream_controller::AudioGate::Allowed)
+    );
+
     // 1. Allowed viewer receives audio.
     producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 1");
     assert_eq!(collect_audio_seqs(&mut media_ws, Duration::from_millis(900)).await, vec!["1"]);
 
-    // 2. After the mute gate is acknowledged, zero new chunks are sent (server-side, not player gain).
-    assert!(producer.set_viewer_muted(&sub_epoch, true));
+    // 2. Consumed wire mute acknowledgement: client sends muteState over wire and waits
+    // until server acknowledges via streamQuality event (audioSuppressed: true, audioReason: "muted").
+    media_ws
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::json!({
+                "kind": "muteState",
+                "subscriptionEpoch": sub_epoch,
+                "muted": true,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send wire mute");
+    let mut mute_ack_seen = false;
+    for _ in 0..40 {
+        if let Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t)))) =
+            timeout(Duration::from_millis(50), media_ws.next()).await
+        {
+            if let Ok(dam_hopper_server::browser_host::protocol::ServerMediaEvent::Quality(q)) =
+                dam_hopper_server::browser_host::protocol::ServerMediaEvent::parse_and_validate(&t)
+            {
+                if q.audio_suppressed
+                    && q.audio_reason
+                        == Some(dam_hopper_server::browser_host::protocol::StreamAudioReason::Muted)
+                {
+                    mute_ack_seen = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        mute_ack_seen,
+        "consumed matching wire mute ack must be actually observed before no-audio window"
+    );
+    assert_eq!(
+        producer.viewer_audio_gate(&sub_epoch),
+        Some(dam_hopper_server::browser_host::adaptive_stream_controller::AudioGate::Suppressed(
+            dam_hopper_server::browser_host::adaptive_stream_controller::AudioSuppression::Muted
+        ))
+    );
     producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 2 admitted by producer");
     producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 3 admitted by producer");
     assert!(
         collect_audio_seqs(&mut media_ws, Duration::from_millis(700)).await.is_empty(),
         "muted viewer must receive zero newly sent audio chunks"
     );
-
     // 3. Unmute resumes with fresh chunks only; suppressed chunks are never replayed.
     assert!(producer.set_viewer_muted(&sub_epoch, false));
     producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 4");
@@ -2841,8 +2911,264 @@ async fn test_live_media_session_withholds_muted_viewer_audio_server_side_and_re
         collect_audio_seqs(&mut media_ws, Duration::from_millis(700)).await.is_empty(),
         "a subscription unknown to the controller receives no audio"
     );
+    // 4b. Admission watermark (C2-W3): deliberately held broadcast backlog is rejected on
+    // both asynchronous controller recovery (Allowed -> Suppressed -> Allowed) and wire unmute.
+    let sub_wm = Uuid::new_v4().to_string();
+    let ticket_wm = global_attachment_manager()
+        .issue_ticket(
+            &admission,
+            &IssueTicketRequest {
+                purpose: AttachmentPurpose::Media,
+                browser_session_id: Some(session_id.clone()),
+                viewer_id: Some("watermark-viewer".to_string()),
+                subscription_epoch: Some(sub_wm.clone()),
+                browser_incarnation: inc.clone(),
+                profile_epoch: 1,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let mut req_wm = format!("ws://{local_addr}/api/browser/media").into_client_request().unwrap();
+    req_wm.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        format!("damhopper.browser.media.v1, damhopper.ticket.{}", ticket_wm.ticket).parse().unwrap(),
+    );
+    let (mut wm_ws, _) = connect_async(req_wm).await.expect("wm ws connect");
+    for _ in 0..80 {
+        if producer.viewer_audio_gate(&sub_wm).is_some() {
+            break;
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
 
-    let _ = media_ws.close(None).await;
+    // Unmute sub_wm via wire control so gate becomes Allowed
+    wm_ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({
+            "kind": "muteState",
+            "subscriptionEpoch": sub_wm,
+            "muted": false,
+        }).to_string().into()
+    )).await.expect("send unmute");
+    for _ in 0..40 {
+        if producer.viewer_audio_gate(&sub_wm).is_some_and(|g| g.is_allowed()) {
+            break;
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+
+    // Asynchronous controller gate suppression (e.g. Hidden / Constrained)
+    let sample = dam_hopper_server::browser_host::adaptive_stream_controller::ViewerSample {
+        provenance: dam_hopper_server::browser_host::viewer_delivery_estimator::SampleProvenance::Idle,
+        ack_starved: false,
+        service_ewma_ms: Some(10.0),
+        baseline_ms: Some(10.0),
+        outstanding_frames: 0,
+        oldest_age_ms: 0,
+        has_pending: false,
+        decode_ms_ewma: None,
+        frame_bytes_ewma: Some(10_000.0),
+        audio_kbps_ewma: 0.0,
+        delivered_kbps_ewma: Some(10_000.0),
+        progress_counter: 100,
+        motion_counter: 100,
+    };
+    // Deterministic barrier: hold audio drain so broadcast chunks are queued unread
+    // in the receiver while the gate is suppressed.
+    producer.hold_audio_drain();
+
+    // 4b.1: Recovery via tier/stall (Hidden report)
+    let d_supp = producer.adaptive_report(&sub_wm, false, sample).expect("report hidden");
+    assert!(matches!(d_supp.audio, dam_hopper_server::browser_host::adaptive_stream_controller::AudioGate::Suppressed(_)));
+
+    // Broadcast chunks 6 & 7 into backlog while gate is suppressed; receiver is blocked from draining.
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 6");
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 7");
+
+    // Asynchronous controller gate recovery (visible=true -> Allowed); records watermark = 7.
+    let d_rec = producer.adaptive_report(&sub_wm, true, sample).expect("report visible");
+    assert!(d_rec.audio.is_allowed());
+
+    // Broadcast chunk 8 after recovery.
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 8");
+
+    // Release audio drain: media.rs drains queued chunks 6 and 7 while gate is Allowed,
+    // but the admission watermark (7) drops them, delivering ONLY chunk 8!
+    producer.release_audio_drain();
+    assert_eq!(collect_audio_seqs(&mut wm_ws, Duration::from_millis(900)).await, vec!["8"]);
+
+    // 4b.2: Recovery via explicit wire unmute
+    producer.hold_audio_drain();
+    wm_ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({
+            "kind": "muteState",
+            "subscriptionEpoch": sub_wm,
+            "muted": true,
+        }).to_string().into()
+    )).await.expect("send wire mute");
+    let mut wm_mute_ack = false;
+    for _ in 0..40 {
+        if let Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t)))) =
+            timeout(Duration::from_millis(50), wm_ws.next()).await
+        {
+            if let Ok(dam_hopper_server::browser_host::protocol::ServerMediaEvent::Quality(q)) =
+                dam_hopper_server::browser_host::protocol::ServerMediaEvent::parse_and_validate(&t)
+            {
+                if q.audio_suppressed && q.audio_reason == Some(dam_hopper_server::browser_host::protocol::StreamAudioReason::Muted) {
+                    wm_mute_ack = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(wm_mute_ack, "must observe consumed wire mute ack");
+
+    // Broadcast chunks 9 & 10 into backlog while muted and held
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 9");
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 10");
+
+    // Explicit wire unmute recovery -> gate transitions to Allowed, watermark recorded as 10
+    wm_ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({
+            "kind": "muteState",
+            "subscriptionEpoch": sub_wm,
+            "muted": false,
+        }).to_string().into()
+    )).await.expect("send wire unmute");
+    for _ in 0..40 {
+        if producer.viewer_audio_gate(&sub_wm).is_some_and(|g| g.is_allowed()) {
+            break;
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(producer.viewer_audio_gate(&sub_wm), Some(dam_hopper_server::browser_host::adaptive_stream_controller::AudioGate::Allowed));
+
+    // Broadcast chunk 11 after wire unmute recovery
+    producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 11");
+
+    // Release audio drain: chunks 9 and 10 were queued in backlog; admission watermark (10) drops them!
+    producer.release_audio_drain();
+    assert_eq!(collect_audio_seqs(&mut wm_ws, Duration::from_millis(900)).await, vec!["11"]);
+    // 4c. Source-scoped admission watermark (C3-W1d): audio source restart resets audio_seq to 0
+    // and creates a new audio_source_run. The retained subscription keeps watermark (10 under run1),
+    // but because watermark is source-scoped, first chunks from the new source (seq 1, 2 <= 10)
+    // are NOT suppressed and are delivered to the retained subscription.
+    let run1 = run;
+    let (_, _, wm1) = producer.viewer_audio_gate_info(&sub_wm).unwrap();
+    assert_eq!(wm1.seq, 10); // recorded at wire unmute
+
+    producer.stop_screencast().await.expect("stop screencast");
+    producer.start_screencast_run().await.expect("start run2");
+    let run2 = producer.audio_source_run().expect("run2 audio source");
+    assert_ne!(run1, run2, "restarted source must have distinct run id");
+    // First chunks from the new source have sequences 1, 2 <= watermark 10 from old source!
+    // Because watermark is source-scoped, they MUST be delivered to the retained subscription!
+    producer.admit_and_broadcast_audio_chunk(run2, doc, &pcm).await.expect("chunk 1 on run2");
+    let seqs2_1 = collect_audio_seqs(&mut wm_ws, Duration::from_millis(900)).await;
+    assert_eq!(
+        seqs2_1,
+        vec!["1"],
+        "first chunk of restarted audio source must be delivered to retained subscription"
+    );
+
+    producer.admit_and_broadcast_audio_chunk(run2, doc, &pcm).await.expect("chunk 2 on run2");
+    let seqs2_2 = collect_audio_seqs(&mut wm_ws, Duration::from_millis(900)).await;
+    assert_eq!(
+        seqs2_2,
+        vec!["2"],
+        "subsequent chunks of restarted audio source must be delivered to retained subscription"
+    );
+    let _ = wm_ws.close(None).await;
+    // 5. Cross-subscription control is ignored with no effect on live subscription.
+    media_ws
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::json!({
+                "kind": "qualityPreference",
+                "subscriptionEpoch": "wrong-cross-sub",
+                "preference": "low",
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send cross-subscription control");
+    sleep(Duration::from_millis(50)).await;
+    // Still none because removed
+    assert!(producer.viewer_audio_gate(&sub_epoch).is_none());
+
+    // 6. Malformed client control message disconnects the socket.
+    media_ws
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            "{\"kind\":\"invalidControlKind\"}".to_string().into(),
+        ))
+        .await
+        .expect("send malformed control");
+    let closed = timeout(Duration::from_secs(2), async {
+        while let Some(msg) = media_ws.next().await {
+            if let Ok(tokio_tungstenite::tungstenite::Message::Close(_)) = msg {
+                return true;
+            }
+        }
+        true
+    })
+    .await;
+    assert!(closed.is_ok(), "malformed client control message disconnects socket");
+
+    // 7. Producer-less media session emits unavailable once.
+    let (dto2, _) = dam_hopper_server::api::browser_host::global_session_registry()
+        .insert_running_for_test(
+            "dev-user",
+            true,
+            &inc,
+            1,
+            &dam_hopper_server::browser_host::session::CreateSessionRequest {
+                creation_key: Uuid::new_v4().to_string(),
+                url: "about:blank".to_string(),
+                viewport: dam_hopper_server::browser_host::session::ViewportRequest { width: 1280, height: 900, dpr: 1.0 },
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+    let unavail_sub = Uuid::new_v4().to_string();
+    let unavail_ticket = global_attachment_manager()
+        .issue_ticket(
+            &admission,
+            &IssueTicketRequest {
+                purpose: AttachmentPurpose::Media,
+                browser_session_id: Some(dto2.browser_session_id),
+                viewer_id: Some("unavail-viewer".to_string()),
+                subscription_epoch: Some(unavail_sub.clone()),
+                browser_incarnation: inc.clone(),
+                profile_epoch: 1,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let mut unavail_req = format!("ws://{local_addr}/api/browser/media").into_client_request().unwrap();
+    unavail_req.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        format!("damhopper.browser.media.v1, damhopper.ticket.{}", unavail_ticket.ticket).parse().unwrap(),
+    );
+    let (mut unavail_ws, _) = connect_async(unavail_req).await.expect("unavail ws connect");
+    let unavail_msg = timeout(Duration::from_secs(2), unavail_ws.next()).await.unwrap().unwrap().unwrap();
+    let unavail_text = match unavail_msg {
+        tokio_tungstenite::tungstenite::Message::Text(t) => t,
+        other => panic!("expected text, got {other:?}"),
+    };
+    let unavail_ev = dam_hopper_server::browser_host::protocol::ServerMediaEvent::parse_and_validate(&unavail_text).unwrap();
+    match unavail_ev {
+        dam_hopper_server::browser_host::protocol::ServerMediaEvent::Quality(q) => {
+            assert_eq!(q.status, dam_hopper_server::browser_host::protocol::StreamQualityStatus::Unavailable);
+            assert_eq!(q.preference, dam_hopper_server::browser_host::capture_tier::QualityPreference::Auto);
+            assert!(q.audio_suppressed);
+            assert_eq!(q.audio_reason, Some(dam_hopper_server::browser_host::protocol::StreamAudioReason::Muted));
+        }
+        other => panic!("expected quality event, got {other:?}"),
+    }
+    assert!(timeout(Duration::from_millis(300), unavail_ws.next()).await.is_err(), "unavailable emitted once");
+    let _ = unavail_ws.close(None).await;
 }
 
 #[tokio::test]
@@ -2888,7 +3214,7 @@ async fn test_media_writer_drops_queued_audio_when_gate_closes_before_the_write(
         BlockedSink { started: started.clone(), release: release.clone(), sent: sent.clone() },
         cancel.clone(),
         None,
-        move |_run, _doc| gate.load(Ordering::SeqCst),
+        move |_run, _doc, _gen, _seq| gate.load(Ordering::SeqCst),
     );
     let sub = Uuid::new_v4().to_string();
     let chunk = |seq: &str| {
@@ -2897,7 +3223,7 @@ async fn test_media_writer_drops_queued_audio_when_gate_closes_before_the_write(
             browser_session_id: Uuid::new_v4().to_string(),
             browser_incarnation: Uuid::new_v4().to_string(),
             profile_epoch: "1".to_string(),
-            producer_run: Uuid::new_v4().to_string(),
+            audio_run: Uuid::new_v4().to_string(),
             doc_epoch: 1,
             audio_seq: seq.to_string(),
             sample_rate: AUDIO_SAMPLE_RATE,
@@ -2911,7 +3237,7 @@ async fn test_media_writer_drops_queued_audio_when_gate_closes_before_the_write(
     // Block the writer on a control write, queue audio behind it, then close the gate.
     writer.enqueue_control_text("{\"kind\":\"status\"}".to_string());
     started.notified().await;
-    assert!(writer.enqueue_latest_audio(&sub, chunk("1")));
+    assert!(writer.enqueue_latest_audio(&sub, chunk("1"), 1, 1));
     gate_open.store(false, Ordering::SeqCst);
     release.notify_one();
     assert!(matches!(events.recv().await, Some(MediaWriterEvent::ControlSent { .. })));
@@ -2920,7 +3246,7 @@ async fn test_media_writer_drops_queued_audio_when_gate_closes_before_the_write(
 
     // Reopened gate: a fresh chunk is written; the dropped one is never replayed.
     gate_open.store(true, Ordering::SeqCst);
-    assert!(writer.enqueue_latest_audio(&sub, chunk("2")));
+    assert!(writer.enqueue_latest_audio(&sub, chunk("2"), 2, 2));
     started.notified().await;
     release.notify_one();
     assert!(matches!(events.recv().await, Some(MediaWriterEvent::AudioSent { .. })));

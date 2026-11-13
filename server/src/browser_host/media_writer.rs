@@ -40,7 +40,9 @@ struct QueuedAudioSlot {
     json: String,
     byte_len: usize,
     doc_epoch: u64,
-    producer_run: String,
+    audio_run: String,
+    admitted_gen: u64,
+    audio_seq: u64,
     _chunk: ProducerAudioChunk,
 }
 
@@ -78,15 +80,26 @@ impl MediaWriterHandle {
         self.notify.notify_one();
         true
     }
-    pub fn enqueue_latest_audio(&self, sub_epoch: &str, chunk: ProducerAudioChunk) -> bool {
+    pub fn enqueue_latest_audio(
+        &self,
+        sub_epoch: &str,
+        chunk: ProducerAudioChunk,
+        admitted_gen: u64,
+        audio_seq: u64,
+    ) -> bool {
         let env = chunk.to_viewer_envelope(sub_epoch);
         if env.validate().is_err() { return false; }
         let Ok(json) = serde_json::to_string(&env) else { return false; };
         if json.is_empty() || json.len() > MAX_AUDIO_MESSAGE_BYTES { return false; }
         let mut g = self.slots.lock();
         g.audio_slot = Some(QueuedAudioSlot {
-            byte_len: json.len(), json, doc_epoch: chunk.doc_epoch,
-            producer_run: chunk.producer_run.clone(), _chunk: chunk,
+            byte_len: json.len(),
+            json,
+            doc_epoch: chunk.doc_epoch,
+            audio_run: chunk.audio_run.clone(),
+            admitted_gen,
+            audio_seq,
+            _chunk: chunk,
         });
         drop(g);
         self.notify.notify_one();
@@ -325,7 +338,7 @@ pub fn spawn_media_writer<S, F>(
 ) -> (MediaWriterHandle, mpsc::Receiver<MediaWriterEvent>, tokio::task::JoinHandle<()>)
 where
     S: MediaPacketSink,
-    F: Fn(&str, u64) -> bool + Send + Sync + 'static,
+    F: Fn(&str, u64, u64, u64) -> bool + Send + Sync + 'static,
 {
     let handle = MediaWriterHandle {
         slots: Arc::new(Mutex::new(WriterSlots::default())),
@@ -415,8 +428,9 @@ where
                     }
                 }
                 NextWriteItem::Audio(a) => {
-                    // 1. Check doc authority BEFORE handing item to sink
-                    if !is_audio_admissible(&a.producer_run, a.doc_epoch)
+                    // 1. Check doc authority & slot admissibility (validating slot's own admitted generation and sequence)
+                    // BEFORE handing item to sink
+                    if !is_audio_admissible(&a.audio_run, a.doc_epoch, a.admitted_gen, a.audio_seq)
                         || doc_rx.as_mut().is_some_and(|r| !r.borrow_and_update().is_admissible(a.doc_epoch))
                     {
                         drop(a._chunk);

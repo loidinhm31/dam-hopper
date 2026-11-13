@@ -234,4 +234,27 @@ describe("PcmPlayer", () => {
     player.enqueue(encodePcm16LeBase64([100, 200]));
     expect(MockAudioContext.instances).toHaveLength(1);
   });
+
+  it("drops all queued data on flush and mute so old chunks cannot revive playback", () => {
+    let canPlay = true;
+    const player = new PcmPlayer({ canPlay: () => canPlay });
+    const chunk = encodePcm16LeBase64([100, 200, 300, 400]);
+
+    player.enqueue(chunk);
+    const ctx = MockAudioContext.instances[0];
+    expect(ctx.sources).toHaveLength(1);
+
+    // Flush stops and disconnects all scheduled audio
+    player.flush();
+    expect(player.queuedSeconds()).toBe(0);
+    expect(ctx.sources[0].stop).toHaveBeenCalledTimes(1);
+    expect(ctx.sources[0].disconnect).toHaveBeenCalledTimes(1);
+
+    // Mute (canPlay = false) drops incoming chunks immediately
+    canPlay = false;
+    player.enqueue(chunk);
+    // No new source scheduled
+    expect(ctx.sources).toHaveLength(1);
+    expect(player.queuedSeconds()).toBe(0);
+  });
 });
