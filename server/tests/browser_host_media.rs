@@ -2487,7 +2487,6 @@ async fn test_media_writer_audio_cancellation_retires_sink_without_stale_leak() 
     use dam_hopper_server::browser_host::protocol::{
         ProducerAudioChunk, AUDIO_CHANNELS, AUDIO_ENCODING_PCM16LE, AUDIO_SAMPLE_RATE,
     };
-    use dam_hopper_server::browser_host::screencast::AudioDocAuthority;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
@@ -2520,7 +2519,6 @@ async fn test_media_writer_audio_cancellation_retires_sink_without_stale_leak() 
     let send_count = Arc::new(AtomicUsize::new(0));
     let cancel = CancellationToken::new();
 
-    let (doc_tx, doc_rx) = tokio::sync::watch::channel(AudioDocAuthority::for_epoch(1));
     let mem_ctrl = MemoryAdmissionController::new(1024 * 1024);
     let reservation = mem_ctrl.try_reserve(2048).expect("reserve 2048 bytes");
     assert_eq!(mem_ctrl.current_reserved_bytes(), 2048);
@@ -2532,7 +2530,7 @@ async fn test_media_writer_audio_cancellation_retires_sink_without_stale_leak() 
             send_count: send_count.clone(),
         },
         cancel.clone(),
-        Some(doc_rx),
+        None,
         |_, _, _, _| true,
     );
 
@@ -2558,30 +2556,146 @@ async fn test_media_writer_audio_cancellation_retires_sink_without_stale_leak() 
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
     assert_eq!(mem_ctrl.current_reserved_bytes(), 2048, "reservation must be held while sink is flushing");
 
-    // Change document authority to epoch 2 mid-flush
-    doc_tx.send(AudioDocAuthority::for_epoch(2)).unwrap();
+    // Retire the transport (session cancellation) while the sink holds the item mid-flush
+    cancel.cancel();
 
-    // Writer must detect interrupt after sink accepted item:
-    // Transport is retired (cancel token cancelled), reservation released only after retirement, and task exits.
+    // Writer must drop the in-flight write and exit; the reservation is released only after retirement.
     let _ = join.await;
-
-    assert!(cancel.is_cancelled(), "media transport must be retired/cancelled on doc change mid-flush");
     assert_eq!(
         mem_ctrl.current_reserved_bytes(),
         0,
         "memory reservation must be released after transport retirement"
     );
 
-    // Verify TransportFailed was emitted
+    // Verify TransportFailed was emitted for the cancellation
     let ev = events.recv().await.expect("transport failed event");
     assert!(
-        matches!(ev, MediaWriterEvent::TransportFailed(_)),
-        "expected TransportFailed, got: {:?}",
+        matches!(ev, MediaWriterEvent::TransportFailed("cancelled")),
+        "expected TransportFailed(\"cancelled\"), got: {:?}",
         ev
     );
 
     // Sink is NEVER reused: send_count remains 1
     assert_eq!(send_count.load(Ordering::SeqCst), 1, "sink must not be reused after retirement");
+}
+
+/// A doc-epoch change racing an in-flight audio write must not retire the viewer's transport: the
+/// sink already holds the message, so the write completes under its own (stale) `docEpoch` label.
+/// Stale audio queued behind it never reaches the sink; video and fresh-epoch audio keep flowing.
+#[tokio::test]
+async fn test_media_writer_doc_epoch_change_during_audio_write_keeps_transport_and_drops_stale_backlog() {
+    use base64::Engine as _;
+    use dam_hopper_server::browser_host::media_writer::{
+        spawn_media_writer, MediaPacketSink, MediaWriterEvent, OutboundMediaPacket,
+    };
+    use dam_hopper_server::browser_host::protocol::{
+        ProducerAudioChunk, AUDIO_CHANNELS, AUDIO_ENCODING_PCM16LE, AUDIO_SAMPLE_RATE,
+    };
+    use dam_hopper_server::browser_host::screencast::AudioDocAuthority;
+    use std::future::Future;
+    use std::pin::Pin;
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
+
+    struct BlockedSink {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+        sent: Arc<parking_lot::Mutex<Vec<OutboundMediaPacket>>>,
+    }
+    impl MediaPacketSink for BlockedSink {
+        fn send_packet(
+            &mut self,
+            packet: OutboundMediaPacket,
+        ) -> Pin<Box<dyn Future<Output = Result<(), &'static str>> + Send + '_>> {
+            let (started, release, sent) = (self.started.clone(), self.release.clone(), self.sent.clone());
+            Box::pin(async move {
+                started.notify_one();
+                release.notified().await;
+                sent.lock().push(packet);
+                Ok(())
+            })
+        }
+    }
+
+    let (started, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let sent = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let cancel = CancellationToken::new();
+    let (doc_tx, doc_rx) = tokio::sync::watch::channel(AudioDocAuthority::for_epoch(1));
+    let (writer, mut events, join) = spawn_media_writer(
+        BlockedSink { started: started.clone(), release: release.clone(), sent: sent.clone() },
+        cancel.clone(),
+        Some(doc_rx),
+        |_, _, _, _| true,
+    );
+    let sub = "sub-1";
+    let chunk = |doc_epoch: u64, seq: &str| ProducerAudioChunk {
+        browser_session_id: Uuid::new_v4().to_string(),
+        browser_incarnation: Uuid::new_v4().to_string(),
+        profile_epoch: "1".to_string(),
+        audio_run: Uuid::new_v4().to_string(),
+        doc_epoch,
+        audio_seq: seq.to_string(),
+        sample_rate: AUDIO_SAMPLE_RATE,
+        channels: AUDIO_CHANNELS,
+        encoding: AUDIO_ENCODING_PCM16LE.to_string(),
+        data: Arc::from(base64::engine::general_purpose::STANDARD.encode([0u8; 960])),
+        reservation: None,
+    };
+
+    // Audio seq 1 (epoch 1) is in flight, blocked by a saturated link; the page navigates meanwhile
+    // and a stale chunk (seq 2, epoch 1) queues behind the write.
+    assert!(writer.enqueue_latest_audio(sub, chunk(1, "1"), 1, 1));
+    started.notified().await;
+    assert!(writer.enqueue_latest_audio(sub, chunk(1, "2"), 1, 2));
+    doc_tx.send(AudioDocAuthority::for_epoch(2)).unwrap();
+    sleep(Duration::from_millis(150)).await;
+    assert!(!cancel.is_cancelled(), "a doc-epoch change must not retire the transport");
+    assert!(!join.is_finished(), "the writer must keep running");
+
+    // The link drains: the in-flight chunk completes, the stale backlog never reaches the sink.
+    release.notify_one();
+    assert!(matches!(events.recv().await, Some(MediaWriterEvent::AudioSent { .. })));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), started.notified()).await.is_err(),
+        "stale audio queued across the doc-epoch change must not be written"
+    );
+
+    // The same transport keeps carrying video and fresh-epoch audio.
+    assert!(writer.enqueue_admitted_frame(make_test_frame(&Uuid::new_v4().to_string(), "1", "1")));
+    started.notified().await;
+    release.notify_one();
+    assert!(matches!(events.recv().await, Some(MediaWriterEvent::FrameSent { .. })));
+    assert!(writer.enqueue_latest_audio(sub, chunk(2, "3"), 3, 3));
+    started.notified().await;
+    release.notify_one();
+    assert!(matches!(events.recv().await, Some(MediaWriterEvent::AudioSent { .. })));
+
+    {
+        let packets = sent.lock();
+        assert_eq!(packets.len(), 3, "in-flight audio, video frame, fresh audio");
+        assert!(matches!(packets[1], OutboundMediaPacket::Binary(_)));
+        let audio: Vec<&str> = packets
+            .iter()
+            .filter_map(|p| match p {
+                OutboundMediaPacket::Text(t) => Some(t.as_str()),
+                OutboundMediaPacket::Binary(_) => None,
+            })
+            .collect();
+        assert_eq!(audio.len(), 2);
+        assert!(
+            audio[0].contains("\"audioSeq\":\"1\"") && audio[0].contains("\"docEpoch\":\"1\""),
+            "the in-flight chunk keeps its own epoch label, never current-epoch audio: {}",
+            audio[0]
+        );
+        assert!(
+            audio[1].contains("\"audioSeq\":\"3\"") && audio[1].contains("\"docEpoch\":\"2\""),
+            "{}",
+            audio[1]
+        );
+    }
+    assert!(!cancel.is_cancelled());
+    cancel.cancel();
+    let _ = join.await;
 }
 
 #[test]
@@ -3871,5 +3985,812 @@ mod pair_live {
         peer.frame("SESSION-1", 1);
         let q = quality_where(&mut media, |q| q["status"] == "unavailable").await;
         assert_eq!(q["subscriptionEpoch"], json!(sub));
+    }
+}
+
+/// Real-Chromium qualification of audio identity, audio gating and mixed-viewer policy over the
+/// live router. Timing-statistical results are printed as `QUAL|<topic>|k=v|...` lines
+/// (run with `--nocapture`); assertions only use generous safety bounds.
+mod qual_live {
+    use super::pair_live::{self, Server};
+    use super::*;
+    use base64::Engine as _;
+    use chromiumoxide_cdp::cdp::browser_protocol::target::CreateTargetParams;
+    use dam_hopper_server::api::browser_host::get_or_register_producer;
+    use dam_hopper_server::browser_host::cdp::CdpClient;
+    use dam_hopper_server::browser_host::process::{find_browser_executable, BrowserLaunchConfig, BrowserProcess};
+    use dam_hopper_server::browser_host::screencast::ScreencastProducer;
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+    use std::sync::{Mutex, MutexGuard};
+    use std::time::Instant;
+    use tokio::sync::mpsc;
+    use tokio_tungstenite::tungstenite::Message;
+
+    type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+    /// Animated canvas (continuous frames) plus a real 440 Hz WebAudio oscillator.
+    const PAGE_SCRIPT: &str = r#"(() => {
+        document.body.style.margin = '0';
+        const c = document.createElement('canvas'); c.width = 1280; c.height = 900; document.body.appendChild(c);
+        const g = c.getContext('2d'); let n = 0;
+        const draw = () => { n++; for (let i = 0; i < 40; i++) { g.fillStyle = `hsl(${(n * 7 + i * 23) % 360} 70% 50%)`;
+            g.fillRect((i * 97 + n * 13) % 1280, (i * 53 + n * 7) % 900, 160, 120); } requestAnimationFrame(draw); };
+        draw();
+        const AC = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AC({ sampleRate: 24000 });
+        const osc = ctx.createOscillator(); const gain = ctx.createGain();
+        gain.gain.value = 0.35; osc.frequency.value = 440; osc.connect(gain); gain.connect(ctx.destination); osc.start();
+        if (ctx.state === 'suspended') ctx.resume();
+        window.__tone = { ctx, osc, gain };
+        return true;
+    })()"#;
+
+    #[derive(Clone)]
+    pub struct Tr {
+        pub at: Instant,
+        pub run: Option<Uuid>,
+        pub audio: Option<Uuid>,
+        pub target: String,
+    }
+
+    pub struct Rig {
+        pub server: Server,
+        pub session: String,
+        pub producer: Arc<ScreencastProducer>,
+        pub transitions: Arc<Mutex<Vec<Tr>>>,
+        /// Broadcast-side `(receive instant, audioSeq)` of every chunk the producer published.
+        pub tap: Arc<Mutex<Vec<(Instant, u64)>>>,
+        pub t0: Instant,
+        process: BrowserProcess,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl Rig {
+        /// Real Chromium through the production launcher/producer, registered behind the live router.
+        pub async fn start() -> Option<Rig> {
+            let exec = find_browser_executable(None).ok().or_else(|| {
+                ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
+                    .into_iter()
+                    .map(std::path::PathBuf::from)
+                    .find(|p| p.is_file())
+            });
+            let Some(exec) = exec else {
+                if std::env::var("DAM_HOPPER_REQUIRE_BROWSER").as_deref() == Ok("1") {
+                    panic!("Required Chrome/Chromium executable not found on host");
+                }
+                eprintln!("SKIP: No Chrome/Chromium executable available on this system.");
+                return None;
+            };
+            let tmp = tempfile::tempdir().unwrap();
+            let mut cfg = BrowserLaunchConfig::new(tmp.path().join("qual-live-data"));
+            cfg.executable_path = Some(exec);
+            cfg.headless = true;
+            let process = BrowserProcess::launch(cfg).await.expect("browser launch");
+            let client = CdpClient::connect(process.ws_endpoint()).await.expect("cdp connect");
+            let target = client
+                .send_typed(CreateTargetParams::builder().url("about:blank").build().unwrap(), None)
+                .await
+                .expect("Target.createTarget");
+            let server = pair_live::start(2).await;
+            let session = pair_live::session(&server, false).await;
+            let producer = Arc::new(
+                ScreencastProducer::new(
+                    session.clone(),
+                    server.inc.clone(),
+                    1,
+                    1,
+                    client.clone(),
+                    target.target_id.into(),
+                    TargetGeometry {
+                        css_width: 1280.0, css_height: 900.0, offset_top: 0.0, scroll_x: 0.0, scroll_y: 0.0,
+                        page_scale: 1.0, visual_offset_x: 0.0, visual_offset_y: 0.0, dpr: 1.0,
+                    },
+                )
+                .with_capture_policy(24, 75),
+            );
+            producer.init_audio_doc_epoch(1);
+            let sid = producer.ensure_page_session().await.expect("page session");
+            producer.apply_stealth_and_focus(&sid).await.expect("stealth");
+            client
+                .send_command(
+                    "Runtime.evaluate",
+                    Some(json!({ "expression": PAGE_SCRIPT, "returnByValue": true })),
+                    Some(&sid),
+                )
+                .await
+                .expect("start animated page and tone");
+            get_or_register_producer(&session, producer.clone()).await;
+
+            let transitions = Arc::new(Mutex::new(Vec::new()));
+            let (p, tr) = (producer.clone(), transitions.clone());
+            tokio::spawn(async move {
+                let mut last = None;
+                loop {
+                    let (run, audio, snap) = (p.current_run().await, p.audio_source_run(), p.capture_snapshot());
+                    if last != Some((run, audio, snap.version)) {
+                        last = Some((run, audio, snap.version));
+                        let target = format!("{:?}/{}fps/q{}/s{}", snap.tier, snap.fps, snap.jpeg_quality, snap.scale_permille);
+                        tr.lock().unwrap().push(Tr { at: Instant::now(), run, audio, target });
+                    }
+                    sleep(Duration::from_millis(15)).await;
+                }
+            });
+            let tap = Arc::new(Mutex::new(Vec::new()));
+            let (mut rx, tap2) = (producer.subscribe_audio(), tap.clone());
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(c) => tap2.lock().unwrap().push((Instant::now(), c.audio_seq.parse().unwrap_or(0))),
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(_) => break,
+                    }
+                }
+            });
+            Some(Rig { server, session, producer, transitions, tap, t0: Instant::now(), process, _tmp: tmp })
+        }
+
+        pub async fn finish(mut self) {
+            let _ = self.process.terminate().await;
+        }
+
+        pub fn ms(&self, at: Instant) -> i128 {
+            at.saturating_duration_since(self.t0).as_millis() as i128
+        }
+
+        /// Producer-side state for failure messages and diagnostics lines.
+        pub async fn dump(&self, v: &Viewer) -> String {
+            let d = self.producer.viewer_directives(&v.sub);
+            format!(
+                "run={:?} state={:?} target={:?} effective={:?} directives={d:?} lastQuality={:?} transitions={} socketEnded={:?}",
+                self.producer.current_run().await,
+                self.producer.state().await,
+                self.producer.capture_snapshot(),
+                self.producer.effective_capture(),
+                v.last_q(),
+                self.transitions.lock().unwrap().len(),
+                v.log().ended
+            )
+        }
+
+        /// Highest audioSeq the producer had broadcast at the time of the call.
+        pub fn broadcast_seq(&self) -> u64 {
+            self.tap.lock().unwrap().last().map_or(0, |(_, s)| *s)
+        }
+
+        /// Producer-side broadcast instant of `seq`, if the tap saw it.
+        pub fn broadcast_at(&self, seq: u64) -> Option<Instant> {
+            self.tap.lock().unwrap().iter().rev().find(|(_, s)| *s == seq).map(|(t, _)| *t)
+        }
+
+        /// REST lease acquire/release for `viewer` (the production lease path).
+        pub async fn acquire(&self, viewer: &str) -> String {
+            let path = format!("/api/browser/sessions/{}/control/acquire", self.session);
+            let (status, body) = self.server.rest("POST", &path, json!({ "viewerId": viewer, "holderKind": "human" })).await;
+            assert_eq!(status, 200, "lease acquire for {viewer}: {body}");
+            body["leaseToken"].as_str().unwrap().to_string()
+        }
+
+        pub async fn release(&self, token: &str) {
+            let path = format!("/api/browser/sessions/{}/control/release", self.session);
+            let (status, body) = self.server.rest("POST", &path, json!({ "leaseToken": token })).await;
+            assert_eq!(status, 200, "lease release: {body}");
+        }
+    }
+
+    pub struct Au {
+        pub idx: u64,
+        pub at: Instant,
+        pub seq: u64,
+        pub run: String,
+        pub doc: String,
+        pub sub: String,
+        pub peak: i16,
+    }
+
+    #[derive(Default)]
+    pub struct Log {
+        pub n: u64,
+        pub audio: Vec<Au>,
+        pub quality: Vec<(u64, Instant, Value)>,
+        pub frames: Vec<(u64, Instant, String)>,
+        /// Why the socket ended (server close frame / error), once it did.
+        pub ended: Option<String>,
+    }
+
+    struct Cfg {
+        delay_ms: AtomicU64,
+        hold: AtomicBool,
+        visible: AtomicBool,
+        beats: AtomicBool,
+    }
+
+    /// One live media socket whose ack behaviour is scripted at the application level.
+    pub struct Viewer {
+        pub sub: String,
+        tx: mpsc::UnboundedSender<Message>,
+        log: Arc<Mutex<Log>>,
+        cfg: Arc<Cfg>,
+        task: tokio::task::JoinHandle<()>,
+        ctrl_task: tokio::task::JoinHandle<()>,
+    }
+
+    async fn pump(ws: Ws, sub: String, mut rx: mpsc::UnboundedReceiver<Message>, log: Arc<Mutex<Log>>, cfg: Arc<Cfg>) {
+        let (mut sink, mut stream) = ws.split();
+        let mut due: VecDeque<(Instant, Message)> = VecDeque::new();
+        let mut tick = tokio::time::interval(Duration::from_millis(10));
+        let mut beat = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                msg = stream.next() => {
+                    let msg = match msg {
+                        Some(Ok(m)) => m,
+                        other => {
+                            log.lock().unwrap().ended = Some(format!("{other:?}"));
+                            break;
+                        }
+                    };
+                    let now = Instant::now();
+                    match msg {
+                        Message::Binary(bytes) => {
+                            let Ok((h, _)) = unpack_bhjf_frame(&bytes) else { continue };
+                            {
+                                let mut l = log.lock().unwrap();
+                                l.n += 1;
+                                let n = l.n;
+                                l.frames.push((n, now, h.producer_run.clone()));
+                            }
+                            let ack = Message::Text(json!({"kind": "frameAck", "subscriptionEpoch": sub,
+                                "producerRun": h.producer_run, "viewportEpoch": h.viewport_epoch,
+                                "frameSeq": h.frame_seq, "decodeMs": 1.0}).to_string().into());
+                            let delay = Duration::from_millis(cfg.delay_ms.load(Relaxed));
+                            if delay.is_zero() && !cfg.hold.load(Relaxed) && due.is_empty() {
+                                if sink.send(ack).await.is_err() { break; }
+                            } else {
+                                due.push_back((now + delay, ack));
+                            }
+                        }
+                        Message::Text(t) => {
+                            let Ok(v) = serde_json::from_str::<Value>(&t) else { continue };
+                            let peak = (v["kind"] == "audioChunk")
+                                .then(|| base64::engine::general_purpose::STANDARD.decode(v["data"].as_str().unwrap_or("")).unwrap_or_default())
+                                .map_or(0, |pcm| pcm.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]).saturating_abs()).max().unwrap_or(0));
+                            let mut l = log.lock().unwrap();
+                            l.n += 1;
+                            let n = l.n;
+                            let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+                            match v["kind"].as_str() {
+                                Some("audioChunk") => l.audio.push(Au { idx: n, at: now, seq: s("audioSeq").parse().unwrap_or(0),
+                                    run: s("audioRun"), doc: s("docEpoch"), sub: s("subscriptionEpoch"), peak }),
+                                Some("streamQuality") => l.quality.push((n, now, v)),
+                                _ => {}
+                            }
+                        }
+                        Message::Close(frame) => {
+                            log.lock().unwrap().ended = Some(format!("close {frame:?}"));
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                out = rx.recv() => {
+                    let Some(m) = out else { break };
+                    let closing = matches!(m, Message::Close(_));
+                    if sink.send(m).await.is_err() || closing { break; }
+                }
+                _ = tick.tick() => {
+                    if !cfg.hold.load(Relaxed) {
+                        let now = Instant::now();
+                        while due.front().is_some_and(|(t, _)| *t <= now) {
+                            let (_, m) = due.pop_front().unwrap();
+                            if sink.send(m).await.is_err() { return; }
+                        }
+                    }
+                }
+                _ = beat.tick() => {
+                    if cfg.beats.load(Relaxed) {
+                        let hb = json!({"kind": "heartbeat", "subscriptionEpoch": sub, "visible": cfg.visible.load(Relaxed)});
+                        if sink.send(Message::Text(hb.to_string().into())).await.is_err() { break; }
+                    }
+                }
+            }
+        }
+    }
+
+    impl Viewer {
+        pub async fn connect(rig: &Rig, id: &str) -> Viewer {
+            let sub = Uuid::new_v4().to_string();
+            let mut ws = None;
+            for _ in 0..100 {
+                match rig.server.connect_sub("media", &rig.session, id, &sub).await {
+                    Ok(w) => {
+                        ws = Some(w);
+                        break;
+                    }
+                    Err(429) => sleep(Duration::from_millis(50)).await,
+                    Err(s) => panic!("media upgrade refused: {s}"),
+                }
+            }
+            let (tx, rx) = mpsc::unbounded_channel();
+            let log = Arc::new(Mutex::new(Log::default()));
+            let cfg = Arc::new(Cfg { delay_ms: AtomicU64::new(0), hold: AtomicBool::new(false), visible: AtomicBool::new(true), beats: AtomicBool::new(true) });
+            let task = tokio::spawn(pump(ws.expect("media socket"), sub.clone(), rx, log.clone(), cfg.clone()));
+            // A media socket without its paired control socket is reaped at the 15 s pair deadline.
+            let mut ctrl = rig.server.connect_sub("control", &rig.session, id, &sub).await.expect("paired control socket");
+            let ctrl_task = tokio::spawn(async move { while let Some(Ok(_)) = ctrl.next().await {} });
+            Viewer { sub, tx, log, cfg, task, ctrl_task }
+        }
+
+        pub fn log(&self) -> MutexGuard<'_, Log> {
+            self.log.lock().unwrap()
+        }
+
+        pub fn mark(&self) -> u64 {
+            self.log().n
+        }
+
+        fn send(&self, v: Value) {
+            let _ = self.tx.send(Message::Text(v.to_string().into()));
+        }
+
+        pub fn mute(&self, muted: bool) {
+            self.send(json!({"kind": "muteState", "subscriptionEpoch": self.sub, "muted": muted}));
+        }
+
+        pub fn pref(&self, preference: &str) {
+            self.send(json!({"kind": "qualityPreference", "subscriptionEpoch": self.sub, "preference": preference}));
+        }
+
+        pub fn show(&self, visible: bool) {
+            self.cfg.visible.store(visible, Relaxed);
+            self.send(json!({"kind": "heartbeat", "subscriptionEpoch": self.sub, "visible": visible}));
+        }
+
+        pub fn set_delay(&self, ms: u64) {
+            self.cfg.delay_ms.store(ms, Relaxed);
+        }
+
+        /// `true` holds every ack (received frames stay outstanding) until released.
+        pub fn hold_acks(&self, hold: bool) {
+            self.cfg.hold.store(hold, Relaxed);
+        }
+
+        pub fn beats(&self, on: bool) {
+            self.cfg.beats.store(on, Relaxed);
+        }
+
+        pub fn last_q(&self) -> Option<Value> {
+            self.log().quality.last().map(|(_, _, q)| q.clone())
+        }
+
+        /// `(sharedTier, viewerTier)` of the latest streamQuality event.
+        pub fn tiers(&self) -> (String, String) {
+            let q = self.last_q().unwrap_or(Value::Null);
+            (q["sharedTier"].as_str().unwrap_or("?").to_string(), q["viewerTier"].as_str().unwrap_or("?").to_string())
+        }
+
+        /// First streamQuality event after `mark` satisfying `pred`.
+        pub async fn wait_q(&self, mark: u64, limit: Duration, pred: impl Fn(&Value) -> bool) -> Option<(u64, Instant, Value)> {
+            until(limit, || self.log().quality.iter().find(|(i, _, q)| *i > mark && pred(q)).cloned()).await
+        }
+
+        pub fn audio_at(&self) -> Vec<Instant> {
+            self.log().audio.iter().map(|a| a.at).collect()
+        }
+
+        pub fn audio_after(&self, mark: u64) -> Vec<(u64, Instant)> {
+            self.log().audio.iter().filter(|a| a.idx > mark).map(|a| (a.seq, a.at)).collect()
+        }
+
+        pub fn frames_between(&self, from: Instant, to: Instant) -> usize {
+            self.log().frames.iter().filter(|(_, t, _)| *t >= from && *t <= to).count()
+        }
+
+        pub async fn close(self) {
+            let _ = self.tx.send(Message::Close(None));
+            let _ = tokio::time::timeout(Duration::from_secs(2), self.task).await;
+            self.ctrl_task.abort();
+        }
+    }
+
+    pub async fn until<T>(limit: Duration, mut f: impl FnMut() -> Option<T>) -> Option<T> {
+        let end = Instant::now() + limit;
+        loop {
+            if let Some(v) = f() {
+                return Some(v);
+            }
+            if Instant::now() >= end {
+                return None;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Polls `pred` every 250 ms and prints one `QUAL|tier-trace` line per second; returns elapsed ms.
+    pub async fn trace_until(rig: &Rig, label: &str, v: &Viewer, limit: Duration, mut pred: impl FnMut() -> bool) -> Option<u128> {
+        let (start, mut last_print) = (Instant::now(), Instant::now() - Duration::from_secs(1));
+        loop {
+            if pred() {
+                return Some(start.elapsed().as_millis());
+            }
+            if start.elapsed() >= limit {
+                return None;
+            }
+            if last_print.elapsed() >= Duration::from_secs(1) {
+                last_print = Instant::now();
+                let (shared, own) = v.tiers();
+                let (snap, stage) = (rig.producer.capture_snapshot(), rig.producer.viewer_directives(&v.sub).map(|d| d.stage));
+                println!(
+                    "QUAL|tier-trace|label={label}|tMs={}|shared={shared}|viewer={own}|viewerStage={stage:?}|target={:?}/{}fps/q{}/s{}|status={}",
+                    rig.ms(Instant::now()), snap.tier, snap.fps, snap.jpeg_quality, snap.scale_permille,
+                    v.last_q().map_or(Value::Null, |q| q["status"].clone())
+                );
+            }
+            sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    pub fn rank(tier: &str) -> i32 {
+        ["high", "medium", "low", "constrained"].iter().position(|t| *t == tier).map_or(-1, |p| p as i32)
+    }
+
+    pub fn loadavg() -> String {
+        std::fs::read_to_string("/proc/loadavg").unwrap_or_default().trim().replace(' ', ",")
+    }
+
+    /// (chunk count, longest gap in ms including both window edges) of `at` inside `[from, to]`.
+    pub fn gap_stats(at: &[Instant], from: Instant, to: Instant) -> (usize, u128) {
+        let pts: Vec<Instant> = at.iter().copied().filter(|t| *t >= from && *t <= to).collect();
+        let mut prev = from;
+        let mut max = Duration::ZERO;
+        for t in pts.iter().copied().chain(std::iter::once(to)) {
+            max = max.max(t.duration_since(prev));
+            prev = t;
+        }
+        (pts.len(), max.as_millis())
+    }
+
+    /// Unmutes `v` and waits for the first real chunk.
+    pub async fn listening(v: &Viewer) {
+        let m = v.mark();
+        v.mute(false);
+        v.wait_q(m, Duration::from_secs(10), |q| q["audioSuppressed"] == false).await.expect("viewer unmuted on the wire");
+        until(Duration::from_secs(10), || (!v.log().audio.is_empty()).then_some(())).await.expect("first real audio chunk");
+    }
+
+    #[tokio::test]
+    async fn real_audio_run_survives_video_only_tier_switches_while_chunks_keep_flowing() {
+        let _live = pair_live::live_guard().await;
+        let Some(rig) = Rig::start().await else { return };
+        println!("QUAL|load|test=tier-switch|when=before|loadavg={}", loadavg());
+        let listener = Viewer::connect(&rig, "qual-listener").await;
+        listening(&listener).await;
+        let audio_run = rig.producer.audio_source_run().expect("audio source");
+        let doc_epoch = rig.producer.audio_doc_epoch();
+
+        // Steady-state reference before any switch.
+        sleep(Duration::from_secs(3)).await;
+        let (steady_n, steady_gap) = gap_stats(&listener.audio_at(), Instant::now() - Duration::from_secs(3), Instant::now());
+        println!("QUAL|audio-gap|test=tier-switch|switch=steady|chunks={steady_n}|maxGapMs={steady_gap}|window=3000");
+
+        // Cycle 0: a Low-preference co-viewer lowers the shared tier; leaving lets it recover per dwell.
+        // Cycle 1: the co-viewer also stops keeping up (delayed acks) so the shared tier reaches Constrained.
+        for cycle in 0..2u32 {
+            let driver = Viewer::connect(&rig, &format!("qual-driver-{cycle}")).await;
+            driver.pref("low");
+            if cycle == 1 {
+                sleep(Duration::from_millis(2500)).await; // prompt acks first: a real baseline
+                driver.set_delay(700);
+            }
+            let goal = if cycle == 0 { 2 } else { 3 };
+            let label = format!("cycle{cycle}-descend");
+            let Some(reached) = trace_until(&rig, &label, &listener, Duration::from_secs(120), || rank(&listener.tiers().0) >= goal).await else {
+                panic!("shared tier never reached rank {goal}: {}", rig.dump(&listener).await);
+            };
+            sleep(Duration::from_secs(2)).await;
+            driver.close().await;
+            let label = format!("cycle{cycle}-recover");
+            // The wire `sharedTier` is the tier of the last PROVEN snapshot and only refreshes with the next
+            // native run, so an fps-only recovery step is judged on the producer's published target tier.
+            let Some(recovered) = trace_until(&rig, &label, &listener, Duration::from_secs(90), || {
+                format!("{:?}", rig.producer.capture_snapshot().tier).to_lowercase() == listener.tiers().1
+            })
+            .await
+            else {
+                panic!("shared tier never recovered to the listener's own tier: {}", rig.dump(&listener).await);
+            };
+            println!("QUAL|tier-cycle|cycle={cycle}|goalRank={goal}|reachedMs={reached}|recoveredMs={recovered}|listenerTiers={:?}", listener.tiers());
+        }
+        sleep(Duration::from_millis(2500)).await;
+        println!("QUAL|load|test=tier-switch|when=after|loadavg={}", loadavg());
+
+        // Ground truth: native switches = video run rotations seen by the producer.
+        let trs = rig.transitions.lock().unwrap().clone();
+        let mut prev = None;
+        let mut switches = Vec::new();
+        for t in &trs {
+            assert_eq!(t.audio.or(Some(audio_run)), Some(audio_run), "audio source identity must never change: {:?}", t.audio);
+            if let Some(run) = t.run {
+                if prev.is_some_and(|p| p != run) {
+                    switches.push((t.at, prev.unwrap(), run, t.target.clone()));
+                }
+                prev = Some(run);
+            }
+        }
+        let audio = listener.audio_at();
+        let mut worst = 0u128;
+        for (i, (at, from, to, target)) in switches.iter().enumerate() {
+            let (n, gap) = gap_stats(&audio, *at - Duration::from_secs(1), *at + Duration::from_secs(2));
+            worst = worst.max(gap);
+            println!("QUAL|audio-gap|test=tier-switch|switch={}|tMs={}|from={from}|to={to}|target={target}|chunks={n}|maxGapMs={gap}|window=3000", i + 1, rig.ms(*at));
+            assert!(n >= 1 && gap <= 2500, "audio stalled around switch {}: chunks={n} maxGapMs={gap}", i + 1);
+        }
+        let wire_runs: std::collections::BTreeSet<String> = listener.log().frames.iter().map(|(_, _, r)| r.clone()).collect();
+        let tiers: std::collections::BTreeSet<String> = listener.log().quality.iter().filter_map(|(_, _, q)| q["sharedTier"].as_str().map(String::from)).collect();
+        println!("QUAL|tier-switch|switches={}|wireVideoRuns={}|worstGapMs={worst}|steadyGapMs={steady_gap}|sharedTiersSeen={tiers:?}|audioRun={audio_run}", switches.len(), wire_runs.len());
+        assert!(switches.len() >= 6, "need >=6 video-only switches, got {}", switches.len());
+        assert!(wire_runs.len() >= 6, "viewer must see the rotated video runs on the wire: {}", wire_runs.len());
+        assert_ne!(rig.producer.current_run().await, Some(audio_run), "video runs rotated away from the audio source identity");
+        assert_eq!(rig.producer.audio_source_run(), Some(audio_run));
+
+        // Wire identity: one audioRun/docEpoch/subscription across every chunk, strictly increasing seq, real tone.
+        let log = listener.log();
+        assert!(log.audio.len() > 100, "chunks must keep arriving: {}", log.audio.len());
+        let mut prev_seq = 0u64;
+        for a in &log.audio {
+            assert_eq!(a.run, audio_run.to_string(), "audioRun changed on the wire");
+            assert_eq!(a.doc, doc_epoch.to_string(), "docEpoch changed across tier switches");
+            assert_eq!(a.sub, listener.sub);
+            assert!(a.seq > prev_seq, "audioSeq not strictly increasing: {} after {prev_seq}", a.seq);
+            prev_seq = a.seq;
+        }
+        let loud = log.audio.iter().filter(|a| a.peak > 2000).count();
+        println!("QUAL|audio-rate|test=tier-switch|chunks={}|loudChunks={loud}|lastSeq={prev_seq}", log.audio.len());
+        assert!(loud * 100 >= log.audio.len() * 95, "real tone expected in nearly every chunk: {loud}/{}", log.audio.len());
+        drop(log);
+        listener.close().await;
+        rig.finish().await;
+    }
+
+    /// Chunks the viewer received after socket position `idx`.
+    fn chunks_after(v: &Viewer, idx: u64) -> usize {
+        v.log().audio.iter().filter(|a| a.idx > idx).count()
+    }
+
+    /// First chunk after `mark`: `(seq, instant)`.
+    async fn first_chunk_after(v: &Viewer, mark: u64, limit: Duration) -> Option<(u64, Instant)> {
+        until(limit, || v.audio_after(mark).first().copied()).await
+    }
+
+    /// Prints one `QUAL|audio-unmute` line (freshness of the first chunk after audio reopens) and
+    /// asserts it is newer than everything broadcast before the reopen request was sent.
+    fn report_resume(rig: &Rig, v: &Viewer, reason: &str, mark: u64, sent: Instant, watermark: u64, steady_per_100ms: usize) {
+        let after = v.audio_after(mark);
+        let (seq, at) = after[0];
+        let age = rig.broadcast_at(seq).map(|b| at.saturating_duration_since(b).as_millis() as i128).unwrap_or(-1);
+        let burst = after.iter().filter(|(_, t)| t.duration_since(at) <= Duration::from_millis(100)).count();
+        println!(
+            "QUAL|audio-unmute|reason={reason}|broadcastSeqAtRequest={watermark}|firstSeq={seq}|skippedSeqs={}|firstChunkMs={}|firstChunkAgeMs={age}|burst100ms={burst}|steadyPer100ms={steady_per_100ms}",
+            seq.saturating_sub(watermark + 1),
+            at.duration_since(sent).as_millis()
+        );
+        assert!(seq > watermark, "{reason}: first chunk after reopen (seq {seq}) must be newer than broadcast seq {watermark} at request time");
+        assert!(burst <= steady_per_100ms + 4, "{reason}: backlog burst of {burst} chunks in 100 ms (steady {steady_per_100ms})");
+        assert!(age <= 600, "{reason}: first chunk was {age} ms old when delivered");
+    }
+
+    /// Waits for the server's suppression acknowledgement, then counts chunks over `window`.
+    async fn measure_suppression(rig: &Rig, v: &Viewer, reason: &str, wire_reason: &str, sent_mark: u64, sent: Instant, window: Duration) {
+        let (ack_idx, ack_at, _) = v
+            .wait_q(sent_mark, Duration::from_secs(150), |q| q["audioSuppressed"] == true && q["audioReason"] == wire_reason)
+            .await
+            .unwrap_or_else(|| panic!("no {wire_reason} suppression acknowledgement; last={:?}", v.last_q()));
+        let between = v.log().audio.iter().filter(|a| a.idx > sent_mark && a.idx < ack_idx).map(|a| a.at).collect::<Vec<_>>();
+        let last_ms = between.last().map_or(-1, |t| t.duration_since(sent).as_millis() as i128);
+        let broadcast_before = rig.tap.lock().unwrap().len();
+        sleep(window).await;
+        let after = chunks_after(v, ack_idx);
+        let produced = rig.tap.lock().unwrap().len() - broadcast_before;
+        println!(
+            "QUAL|audio-suppress|reason={reason}|ackMs={}|chunksBetweenRequestAndAck={}|lastChunkMs={last_ms}|chunksAfterAck={after}|windowMs={}|sourceChunksBroadcastInWindow={produced}",
+            ack_at.duration_since(sent).as_millis(),
+            between.len(),
+            window.as_millis()
+        );
+        assert!(produced > 20, "{reason}: tone must keep playing during the window ({produced} chunks)");
+        assert_eq!(after, 0, "{reason}: audio chunks reached the socket after the server acknowledged suppression");
+    }
+
+    #[tokio::test]
+    async fn real_audio_is_withheld_after_server_ack_for_every_drivable_reason_and_resumes_fresh() {
+        let _live = pair_live::live_guard().await;
+        let Some(rig) = Rig::start().await else { return };
+        println!("QUAL|load|test=audio-suppress|when=before|loadavg={}", loadavg());
+        // A second visible viewer keeps the source polled while `v` is hidden (zero visible demand stops audio production).
+        let keep = Viewer::connect(&rig, "qual-keepalive").await;
+        let v = Viewer::connect(&rig, "qual-suppress").await;
+        listening(&v).await;
+        sleep(Duration::from_secs(2)).await;
+        let steady = v.audio_at().iter().filter(|t| t.elapsed() <= Duration::from_secs(2)).count();
+        let per_100 = steady.div_ceil(20).max(1);
+        println!("QUAL|audio-rate|test=audio-suppress|chunksPerSec={}|steadyPer100ms={per_100}", steady / 2);
+        let window = Duration::from_millis(3500);
+
+        // Explicit mute: no chunk after the ack, then a fresh unmute without backlog.
+        let pre_mute_seq = v.log().audio.last().map_or(0, |a| a.seq);
+        let (m, sent) = (v.mark(), Instant::now());
+        v.mute(true);
+        measure_suppression(&rig, &v, "muted", "muted", m, sent, window).await;
+        let watermark = rig.broadcast_seq();
+        let (m, sent) = (v.mark(), Instant::now());
+        v.mute(false);
+        first_chunk_after(&v, m, Duration::from_secs(6)).await.expect("audio resumes after unmute");
+        report_resume(&rig, &v, "muted", m, sent, watermark, per_100);
+        assert!(v.audio_after(m)[0].0 > pre_mute_seq, "first chunk after the mute window must be newer than any pre-mute chunk");
+
+        // Hidden: heartbeat visible=false.
+        sleep(Duration::from_secs(1)).await;
+        let (m, sent) = (v.mark(), Instant::now());
+        v.show(false);
+        measure_suppression(&rig, &v, "hidden", "hidden", m, sent, window).await;
+        let watermark = rig.broadcast_seq();
+        let (m, sent) = (v.mark(), Instant::now());
+        v.show(true);
+        first_chunk_after(&v, m, Duration::from_secs(8)).await.expect("audio resumes after visible");
+        report_resume(&rig, &v, "hidden", m, sent, watermark, per_100);
+
+        // Stalled: acks held until the controller declares the viewer stalled.
+        sleep(Duration::from_secs(1)).await;
+        let (m, sent) = (v.mark(), Instant::now());
+        v.hold_acks(true);
+        measure_suppression(&rig, &v, "stalled", "stalled", m, sent, window).await;
+        let watermark = rig.broadcast_seq();
+        let (m, sent) = (v.mark(), Instant::now());
+        v.hold_acks(false);
+        first_chunk_after(&v, m, Duration::from_secs(12)).await.expect("audio resumes after progress");
+        report_resume(&rig, &v, "stalled", m, sent, watermark, per_100);
+
+        // Constrained: the viewer itself falls behind until its own tier is Constrained ('bandwidth').
+        sleep(Duration::from_secs(2)).await;
+        let (m, sent) = (v.mark(), Instant::now());
+        v.set_delay(700);
+        measure_suppression(&rig, &v, "bandwidth", "bandwidth", m, sent, window).await;
+        let tiers: Vec<String> = v.log().quality.iter().filter(|(i, _, _)| *i > m).map(|(_, t, q)| format!("{}@{}:{}", q["viewerTier"].as_str().unwrap_or("?"), t.duration_since(sent).as_millis(), q["audioReason"])).collect();
+        println!("QUAL|audio-suppress|reason=bandwidth|viewerTierTimeline={tiers:?}");
+        println!("QUAL|load|test=audio-suppress|when=after|loadavg={}", loadavg());
+        v.close().await;
+        keep.close().await;
+        rig.finish().await;
+    }
+
+    /// Prints one `QUAL|mixed` line per second until `done` or `limit`; returns elapsed ms when done.
+    async fn watch(rig: &Rig, phase: &str, limit: Duration, fast: &Viewer, slow: &Viewer, mut done: impl FnMut() -> bool) -> Option<u128> {
+        let t = Instant::now();
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            let now = Instant::now();
+            let side = |who: &str, v: &Viewer| {
+                let q = v.last_q().unwrap_or(Value::Null);
+                format!(
+                    "{who}.shared={}|{who}.viewer={}|{who}.fps={}|{who}.audioSuppressed={}|{who}.reason={}|{who}.frames1s={}",
+                    q["sharedTier"].as_str().unwrap_or("?"), q["viewerTier"].as_str().unwrap_or("?"), q["fps"],
+                    q["audioSuppressed"], q["audioReason"], v.frames_between(now - Duration::from_secs(1), now)
+                )
+            };
+            println!("QUAL|mixed|phase={phase}|tMs={}|{}|{}", rig.ms(now), side("fast", fast), side("slow", slow));
+            if done() {
+                return Some(t.elapsed().as_millis());
+            }
+            if t.elapsed() >= limit {
+                return None;
+            }
+        }
+    }
+
+    /// Producer's published target tier (the wire `sharedTier` only refreshes with the next native run).
+    fn target_tier(rig: &Rig) -> String {
+        format!("{:?}", rig.producer.capture_snapshot().tier).to_lowercase()
+    }
+
+    #[tokio::test]
+    async fn real_mixed_viewers_share_the_slowest_tier_independent_of_the_lease_holder() {
+        let _live = pair_live::live_guard().await;
+        let Some(rig) = Rig::start().await else { return };
+        println!("QUAL|load|test=mixed|when=before|loadavg={}", loadavg());
+        let fast = Viewer::connect(&rig, "qual-fast").await;
+        listening(&fast).await;
+        let slow = Viewer::connect(&rig, "qual-slow").await;
+        listening(&slow).await;
+        let never = || false;
+        watch(&rig, "baseline", Duration::from_secs(6), &fast, &slow, never).await;
+        let base_mark = fast.mark();
+
+        // Phase 1: lease on the FAST viewer; the slow viewer's acks lag -> shared tier drops to >= Low.
+        let lease_fast = rig.acquire("qual-fast").await;
+        let slow_mark = slow.mark();
+        slow.set_delay(700);
+        let reached = watch(&rig, "descent-lease-fast", Duration::from_secs(90), &fast, &slow, || rank(&fast.tiers().0) >= 2)
+            .await
+            .expect("shared tier follows the slow viewer down to Low");
+        let (shared, own) = fast.tiers();
+        println!("QUAL|mixed-policy|check=fast-sees-shared-limit|reachedLowMs={reached}|fast.shared={shared}|fast.viewer={own}|slow.viewer={:?}", slow.tiers().1);
+        assert!(rank(&own) < rank(&shared), "fast viewer keeps its own (better) viewerTier while shared is {shared}: viewer={own}");
+        let t_a = Instant::now();
+        sleep(Duration::from_secs(4)).await;
+        let t_b = Instant::now();
+        let (fast_fps, slow_fps) = (fast.frames_between(t_a, t_b) as f64 / 4.0, slow.frames_between(t_a, t_b) as f64 / 4.0);
+        println!("QUAL|mixed-policy|check=delivery-fps|fast.framesPerSec={fast_fps:.1}|slow.framesPerSec={slow_fps:.1}|fast.wireFps={}|slow.wireFps={}", fast.last_q().unwrap()["fps"], slow.last_q().unwrap()["fps"]);
+        assert!(fast_fps > slow_fps, "fast viewer must keep a higher delivery rate than the lagging viewer ({fast_fps} vs {slow_fps})");
+        assert_eq!(fast.last_q().unwrap()["audioSuppressed"], false, "capable viewer keeps audio");
+
+        // Phase 2: lease moves to the SLOW viewer; the policy must not react to the holder.
+        rig.release(&lease_fast).await;
+        let lease_slow = rig.acquire("qual-slow").await;
+        let to_constrained = watch(&rig, "descent-lease-slow", Duration::from_secs(150), &fast, &slow, || fast.tiers().0 == "constrained")
+            .await
+            .expect("shared tier reaches Constrained");
+        let ranks: Vec<i32> = fast.log().quality.iter().filter(|(i, _, _)| *i > base_mark).map(|(_, _, q)| rank(q["sharedTier"].as_str().unwrap_or("?"))).collect();
+        assert!(ranks.windows(2).all(|w| w[1] >= w[0]), "shared tier improved while the slow viewer kept lagging (lease swap?): {ranks:?}");
+        let ack = slow
+            .wait_q(slow_mark, Duration::from_secs(60), |q| q["audioSuppressed"] == true && q["audioReason"] == "bandwidth")
+            .await
+            .expect("slow viewer audio suppressed for bandwidth");
+        let (fast_m, now) = (fast.mark(), Instant::now());
+        sleep(Duration::from_secs(3)).await;
+        let slow_after = chunks_after(&slow, ack.0);
+        let fast_during = fast.audio_after(fast_m).len();
+        println!("QUAL|mixed-policy|check=audio-split|toConstrainedMs={to_constrained}|slow.chunksAfterAck={slow_after}|fast.chunksIn3s={fast_during}|fast.audioSuppressed={}|slow.ackAgeMsAtWindowStart={}", fast.last_q().unwrap()["audioSuppressed"], now.saturating_duration_since(ack.1).as_millis());
+        assert_eq!(slow_after, 0, "constrained viewer must receive no audio after its ack");
+        assert!(fast_during > 20, "capable viewer must keep receiving audio: {fast_during}");
+        assert_ne!(fast.tiers().1, "constrained");
+
+        // Phase 3: hidden slow viewer stops voting -> the shared tier recovers.
+        let rank_before = rank(&fast.tiers().0);
+        slow.show(false);
+        let recov = watch(&rig, "hidden", Duration::from_secs(40), &fast, &slow, || rank(&fast.tiers().0) < rank_before).await;
+        println!("QUAL|mixed-policy|check=hidden-stops-voting|rankBefore={rank_before}|firstImprovementMs={recov:?}|slow.reason={}", slow.last_q().unwrap()["audioReason"]);
+        assert!(recov.is_some(), "hidden viewer must stop voting");
+        assert_eq!(slow.last_q().unwrap()["audioReason"], "hidden");
+        watch(&rig, "hidden-settle", Duration::from_secs(20), &fast, &slow, never).await;
+        slow.show(true);
+        let back = watch(&rig, "visible-again", Duration::from_secs(60), &fast, &slow, || fast.tiers().0 == "constrained").await;
+        println!("QUAL|mixed-policy|check=visible-again-revotes|backToConstrainedMs={back:?}");
+
+        // Phase 4: stalled slow viewer (acks held) is excluded and the shared tier recovers.
+        let rank_before = rank(&fast.tiers().0);
+        let m = slow.mark();
+        slow.set_delay(0);
+        slow.hold_acks(true);
+        slow.wait_q(m, Duration::from_secs(40), |q| q["audioReason"] == "stalled").await.expect("slow viewer declared stalled");
+        let recov = watch(&rig, "stalled", Duration::from_secs(40), &fast, &slow, || rank(&fast.tiers().0) < rank_before).await;
+        println!("QUAL|mixed-policy|check=stalled-stops-voting|rankBefore={rank_before}|firstImprovementMs={recov:?}");
+        assert!(recov.is_some() || rank_before <= rank(&fast.tiers().1), "stalled viewer must stop voting");
+        slow.hold_acks(false);
+        rig.release(&lease_slow).await;
+
+        // Phase 5: a viewer with no heartbeat for >15 s is dropped from the controller (fails closed).
+        slow.beats(false);
+        let expired = until(Duration::from_secs(40), || rig.producer.viewer_audio_gate(&slow.sub).is_none().then_some(())).await;
+        println!("QUAL|mixed-policy|check=expired-viewer-dropped|dropped={}|gate={:?}", expired.is_some(), rig.producer.viewer_audio_gate(&slow.sub));
+        assert!(expired.is_some(), "viewer silent for >15 s must be removed from the controller");
+        let m = slow.mark();
+        sleep(Duration::from_secs(3)).await;
+        assert!(slow.audio_after(m).is_empty(), "an expired subscription receives no audio");
+
+        // Phase 6: removal + rejoin -> the shared tier recovers to the slowest REMAINING viewer's own tier
+        // (a rejoined Auto viewer warms at Medium and needs healthy windows before asking for more).
+        slow.close().await;
+        let rejoin = Viewer::connect(&rig, "qual-slow").await;
+        let worst_own = || rank(&fast.tiers().1).max(rank(&rejoin.tiers().1));
+        let healed = watch(&rig, "rejoin", Duration::from_secs(90), &fast, &rejoin, || rank(&target_tier(&rig)) <= worst_own()).await;
+        println!("QUAL|mixed-policy|check=rejoin-recovers|healedMs={healed:?}|fast.tiers={:?}|rejoin.tiers={:?}|target={}", fast.tiers(), rejoin.tiers(), target_tier(&rig));
+        assert!(healed.is_some(), "shared tier must recover after the slow viewer is removed and a healthy one rejoins");
+        listening(&rejoin).await;
+        println!("QUAL|load|test=mixed|when=after|loadavg={}", loadavg());
+        rejoin.close().await;
+        fast.close().await;
+        rig.finish().await;
     }
 }

@@ -1,3 +1,9 @@
+#[path = "browser_host_qualification/adaptive_media.rs"]
+mod adaptive_media;
+#[path = "browser_host_qualification/fixtures.rs"]
+mod fixtures;
+#[path = "browser_host_qualification/stream_metrics.rs"]
+mod stream_metrics;
 use axum::extract::ws::{Message as AxumWsMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -77,6 +83,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mode = std::env::var("DAM_HOPPER_QUALIFICATION_MODE")
         .unwrap_or_else(|_| "phase01".to_string());
+
+    if mode == "adaptive-media" {
+        return adaptive_media::run().await;
+    }
 
     if mode == "production-gateway" {
         return run_production_gateway(auth_token).await;

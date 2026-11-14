@@ -833,6 +833,91 @@ async fn capture_tier_switch_rotates_video_run_keeps_css_epoch_and_audio_source(
     assert!(f3.header().unwrap().input_trusted, "qualified downscale becomes input-trusted");
 }
 
+/// Dummy JPEG whose SOF declares `width`x`height` (the mock peer's stand-in for Chromium pixels).
+fn screencast_frame_event_sized(native_id: i64, width: u16, height: u16) -> Value {
+    let mut jpeg = dummy_jpeg_64();
+    jpeg[7..9].copy_from_slice(&height.to_be_bytes());
+    jpeg[9..11].copy_from_slice(&width.to_be_bytes());
+    let mut ev = screencast_frame_event(native_id);
+    ev["params"]["data"] = json!(B64.encode(jpeg));
+    ev
+}
+
+fn acked_native_ids(commands: &[Value]) -> Vec<i64> {
+    commands
+        .iter()
+        .filter(|c| c["method"] == "Page.screencastFrameAck")
+        .filter_map(|c| c["params"]["sessionId"].as_i64())
+        .collect()
+}
+
+/// Streaming producer at Medium with its first (1280x720, native session `first_native_id`)
+/// frame published and proven, then switched to Low (960x540). Returns the fresh run.
+async fn switched_to_low(
+    first_native_id: i64,
+) -> (ScreencastProducer, RecordingCdp, Uuid, u64) {
+    let (producer, mut cdp, sub) = streaming_producer(Faults::default(), 60).await;
+    let run1 = producer.current_run().await.unwrap();
+    let mut frames = producer.subscribe_frames();
+    cdp.push.send(screencast_frame_event_sized(first_native_id, 1280, 720)).unwrap();
+    timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    let proven = producer.effective_capture().expect("first frame proves Medium").version;
+    request_low_and_wait_for_scaled_snapshot(&producer, &sub).await;
+    let run2 = wait_for_new_run(&producer, run1).await;
+    let _ = drain_commands(&mut cdp);
+    (producer, cdp, run2, proven)
+}
+
+/// Class N: Chromium completes an in-flight capture of the retired session after the fresh start,
+/// labelled with the NEW native session id but at the OLD size. It is ACKed (the new session
+/// counts it) yet never published, never proves the Low settings and never disturbs the run.
+#[tokio::test]
+async fn capture_switch_drops_first_frame_with_new_session_id_at_previous_size() {
+    let (producer, mut cdp, run2, proven_before) = switched_to_low(1).await;
+    let mut frames = producer.subscribe_frames();
+
+    cdp.push.send(screencast_frame_event_sized(2, 1280, 720)).unwrap();
+    assert!(
+        timeout(Duration::from_millis(600), frames.recv()).await.is_err(),
+        "a frame at the replaced run's size must not be published under the fresh run"
+    );
+    assert_eq!(producer.effective_capture().unwrap().version, proven_before, "stale pixels never prove Low");
+    assert!(producer.get_cached_frame().await.is_none());
+    assert_eq!(acked_native_ids(&drain_commands(&mut cdp)), vec![2], "the stale frame is ACKed exactly once");
+
+    cdp.push.send(screencast_frame_event_sized(2, 960, 540)).unwrap();
+    let frame = timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    let header = frame.header().unwrap();
+    assert_eq!((header.producer_run.as_str(), header.width, header.height), (run2.to_string().as_str(), 960, 540));
+    assert_ne!(producer.effective_capture().unwrap().version, proven_before, "the requested size proves Low");
+    assert_eq!(producer.current_run().await, Some(run2));
+    assert_eq!(producer.ledger.runs_aborted.load(Ordering::Relaxed), 0);
+}
+
+/// Class S: the first frame after the fresh start still carries the RETIRED native session id.
+/// It must not become the run's native session (the real session's frames would then abort the
+/// run as an unplanned native restart); it is ACKed and dropped.
+#[tokio::test]
+async fn capture_switch_drops_first_frame_of_retired_native_session() {
+    let (producer, mut cdp, run2, _) = switched_to_low(7).await;
+    let mut frames = producer.subscribe_frames();
+
+    cdp.push.send(screencast_frame_event_sized(7, 960, 540)).unwrap();
+    assert!(
+        timeout(Duration::from_millis(600), frames.recv()).await.is_err(),
+        "a frame of the retired native session must not be published under the fresh run"
+    );
+    assert_eq!(acked_native_ids(&drain_commands(&mut cdp)), vec![7], "the stale frame is ACKed exactly once");
+
+    cdp.push.send(screencast_frame_event_sized(8, 960, 540)).unwrap();
+    let frame = timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    assert_eq!(frame.header().unwrap().producer_run, run2.to_string());
+    sleep(Duration::from_millis(300)).await;
+    assert_eq!(producer.current_run().await, Some(run2), "the real session must not abort the run");
+    assert_eq!(producer.ledger.runs_aborted.load(Ordering::Relaxed), 0);
+    assert_eq!(producer.effective_capture().unwrap().scale_permille, 750);
+}
+
 #[tokio::test]
 async fn failed_stop_leaves_live_run_untouched_and_never_reissues_start() {
     let (producer, mut cdp, sub) = streaming_producer(Faults { fail_stop: true, ..Faults::default() }, 60).await;
@@ -2917,4 +3002,971 @@ async fn stale_resize_does_not_strip_a_successor_fences_transitional_bit() {
         timeout(Duration::from_millis(700), frames.recv()).await.is_err(),
         "a frame was published while the successor fence was still in progress"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Real-engine qualification receipts (Phase 05). The production ScreencastProducer drives real
+// Chromium; every measurement prints a machine-greppable `QUAL|<topic>|k=v|...` line (--nocapture).
+// ---------------------------------------------------------------------------------------------
+use dam_hopper_server::browser_host::adaptive_stream_controller::REPORT_EXPIRY;
+use dam_hopper_server::browser_host::input::{map_fraction_to_css_coords, InputEvent, MouseButton};
+use dam_hopper_server::browser_host::media::dispatch_input_event_to_cdp;
+use dam_hopper_server::browser_host::protocol::TargetFrameHeader;
+use std::collections::HashMap;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use zune_jpeg::JpegDecoder;
+
+/// Corner and centre hot zones (distinct flat colours) that record every mousedown; the grey
+/// heartbeat square keeps Chromium repainting so frames keep flowing at every tier.
+const MARKER_HTML: &str = r#"<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;background:#fff;overflow:hidden}
+.z{position:fixed;width:48px;height:48px}
+#tl{left:0;top:0;background:#f00}#tr{right:0;top:0;background:#00c800}
+#bl{left:0;bottom:0;background:#00f}#br{right:0;bottom:0;background:#f0f}
+#c{left:calc(50% - 24px);top:calc(50% - 24px);background:#ffc800}
+#hb{position:fixed;left:25%;top:25%;width:8px;height:8px;background:#888}
+</style></head><body>
+<div class="z" id="tl"></div><div class="z" id="tr"></div><div class="z" id="bl"></div>
+<div class="z" id="br"></div><div class="z" id="c"></div><div id="hb"></div>
+<script>window.__clicks=[];
+document.addEventListener('mousedown',e=>window.__clicks.push([e.clientX,e.clientY,e.target.id]),true);
+let n=0;setInterval(()=>{n=(n+37)%200;document.getElementById('hb').style.background='rgb('+(n+20)+','+(n+20)+','+(n+20)+')'},33);
+</script></body></html>"#;
+
+fn qual_geometry(css_width: f64, css_height: f64, dpr: f64) -> TargetGeometry {
+    TargetGeometry {
+        css_width, css_height, offset_top: 0.0, scroll_x: 0.0, scroll_y: 0.0,
+        page_scale: 1.0, visual_offset_x: 0.0, visual_offset_y: 0.0, dpr,
+    }
+}
+
+fn qual_load(topic: &str, tag: &str, when: &str) {
+    let raw = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
+    let load = raw.split_whitespace().take(3).collect::<Vec<_>>().join(",");
+    println!("QUAL|load|topic={topic}|tag={tag}|when={when}|loadavg={load}");
+}
+
+/// Nearest-rank percentile of an ascending slice.
+fn percentile(sorted: &[f64], p: f64) -> f64 {
+    let n = sorted.len();
+    sorted[((p * n as f64).ceil() as usize).clamp(1, n) - 1]
+}
+
+/// Dimensions from the JPEG SOF segment, parsed independently of the production header packer.
+fn try_sof_dims(jpeg: &[u8]) -> Option<(u32, u32)> {
+    let mut decoder = JpegDecoder::new(std::io::Cursor::new(jpeg));
+    decoder.decode_headers().ok()?;
+    let info = decoder.info()?;
+    Some((u32::from(info.width), u32::from(info.height)))
+}
+
+fn sof_dims(jpeg: &[u8]) -> (u32, u32) {
+    try_sof_dims(jpeg).expect("JPEG SOF")
+}
+
+fn decode_rgb(jpeg: &[u8]) -> (usize, usize, Vec<u8>) {
+    let mut decoder = JpegDecoder::new(std::io::Cursor::new(jpeg));
+    let pixels = decoder.decode().expect("JPEG decode");
+    let info = decoder.info().expect("JPEG info");
+    (info.width as usize, info.height as usize, pixels)
+}
+
+/// Serves one fixed HTML document from a local loopback listener (no external network).
+async fn serve_fixture(html: &str) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let body = html.to_string();
+    let task = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut request = [0u8; 2048];
+                let _ = stream.read(&mut request).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes()).await;
+                let _ = stream.write_all(body.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    (url, task)
+}
+
+/// One published frame as delivered to viewers, stamped when it left the producer's broadcast.
+#[derive(Clone)]
+struct FrameRec {
+    at: Instant,
+    header: TargetFrameHeader,
+    bhjf: Vec<u8>,
+}
+
+impl FrameRec {
+    fn jpeg(&self) -> &[u8] {
+        unpack_bhjf_frame(&self.bhjf).expect("valid BHJF").1
+    }
+}
+
+/// Raw native screencast frame as Chromium reported it (before any production processing).
+struct RawNative {
+    at: Instant,
+    native_id: i64,
+    device: (f64, f64),
+    page_scale: f64,
+    sof: (u32, u32),
+}
+
+struct LogEntry {
+    at: Instant,
+    run: String,
+    trusted: bool,
+}
+
+struct Switch {
+    old_run: Uuid,
+    new_run: Uuid,
+    first: FrameRec,
+    ms: f64,
+    old_before_first: usize,
+    native_old: i64,
+    native_new: i64,
+    d_rx: u64,
+    d_pub: u64,
+    d_drop_old: u64,
+    d_drop_over: u64,
+    /// Raw native frames (`id:SOFxSOF@ms-after-request`) Chromium emitted until the first published frame.
+    raw_trace: String,
+}
+
+/// Real Chromium + production producer + one visible viewer whose controller vote has expired, so
+/// only the test drives tier switches (through the shared capture snapshot the run task watches).
+struct EngineRig {
+    process: BrowserProcess,
+    client: Arc<CdpClient>,
+    producer: ScreencastProducer,
+    page_sid: String,
+    frames: mpsc::UnboundedReceiver<FrameRec>,
+    raw: Arc<std::sync::Mutex<Vec<RawNative>>>,
+    log: Vec<LogEntry>,
+    _tmp: tempfile::TempDir,
+    _http: tokio::task::JoinHandle<()>,
+}
+
+impl EngineRig {
+    async fn start(html: &str, geometry: TargetGeometry) -> Option<Self> {
+        let exec = require_browser_executable()?;
+        let tmp = tempdir().unwrap();
+        let mut config = BrowserLaunchConfig::new(tmp.path().join("qual-data"));
+        config.executable_path = Some(exec);
+        config.headless = true;
+        let process = BrowserProcess::launch(config).await.expect("browser launch failed");
+        let client = CdpClient::connect(process.ws_endpoint()).await.expect("CDP connect");
+        let (url, http) = serve_fixture(html).await;
+        let target_id: String = client
+            .send_typed(CreateTargetParams::builder().url(url).build().unwrap(), None)
+            .await
+            .expect("Target.createTarget")
+            .target_id
+            .into();
+        let producer = ScreencastProducer::new(
+            Uuid::new_v4().to_string(), Uuid::new_v4().to_string(), 1, 1,
+            client.clone(), target_id, geometry.clone(),
+        )
+        .with_capture_policy(30, 80);
+        let page_sid = producer.ensure_page_session().await.expect("page session");
+        let mut rig = Self {
+            process, client, producer, page_sid,
+            frames: mpsc::unbounded_channel().1,
+            raw: Arc::new(std::sync::Mutex::new(Vec::new())),
+            log: Vec::new(), _tmp: tmp, _http: http,
+        };
+        for _ in 0..200 {
+            if rig.eval("document.readyState").await == "complete" {
+                break;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+        // Same geometry, newer epoch: forces the native metrics override (DPR included) to apply.
+        rig.producer.update_geometry(geometry, 2).await.expect("apply geometry");
+
+        let (frame_tx, frame_rx) = mpsc::unbounded_channel();
+        rig.frames = frame_rx;
+        let mut published = rig.producer.subscribe_frames();
+        tokio::spawn(async move {
+            loop {
+                match published.recv().await {
+                    Ok(f) => {
+                        let (at, header) = (Instant::now(), f.header().expect("header").clone());
+                        if frame_tx.send(FrameRec { at, header, bhjf: f.data().to_vec() }).is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+        let raw = rig.raw.clone();
+        let mut native = rig.client.subscribe_screencast();
+        tokio::spawn(async move {
+            loop {
+                match native.recv().await {
+                    Ok(f) => raw.lock().unwrap().push(RawNative {
+                        at: Instant::now(),
+                        native_id: f.frame_session_id,
+                        device: (
+                            f.metadata["deviceWidth"].as_f64().unwrap_or(0.0),
+                            f.metadata["deviceHeight"].as_f64().unwrap_or(0.0),
+                        ),
+                        page_scale: f.metadata["pageScaleFactor"].as_f64().unwrap_or(0.0),
+                        sof: B64.decode(&f.data_base64).ok().and_then(|b| try_sof_dims(&b)).unwrap_or((0, 0)),
+                    }),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let sub = Uuid::new_v4().to_string();
+        rig.producer.register_viewer_demand("qual-viewer", &sub, true).await;
+        let version = rig.producer.capture_snapshot().version;
+        rig.next_frame(Duration::from_secs(10)).await;
+        // The controller keeps voting for its own stage until its (never refreshed) report expires.
+        let quiet_at = Instant::now() + REPORT_EXPIRY + Duration::from_secs(1);
+        while Instant::now() < quiet_at {
+            rig.producer.register_viewer_demand("qual-viewer", &sub, true).await;
+            sleep(Duration::from_secs(2)).await;
+            while let Ok(r) = rig.frames.try_recv() {
+                rig.note(&r);
+            }
+        }
+        assert_eq!(rig.producer.capture_snapshot().version, version, "controller must stay quiet");
+        Some(rig)
+    }
+
+    async fn eval(&self, expression: &str) -> Value {
+        let res = self
+            .client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({ "expression": expression, "returnByValue": true })),
+                Some(&self.page_sid),
+            )
+            .await
+            .expect("Runtime.evaluate");
+        res["result"]["value"].clone()
+    }
+
+    /// Page-side `(innerWidth, innerHeight, devicePixelRatio)`.
+    async fn page_metrics(&self) -> (f64, f64, f64) {
+        let v = self.eval("JSON.stringify([innerWidth,innerHeight,devicePixelRatio])").await;
+        let m: Vec<f64> = serde_json::from_str(v.as_str().expect("metrics string")).unwrap();
+        (m[0], m[1], m[2])
+    }
+
+    fn note(&mut self, rec: &FrameRec) {
+        self.log.push(LogEntry {
+            at: rec.at, run: rec.header.producer_run.clone(), trusted: rec.header.input_trusted,
+        });
+    }
+
+    async fn next_frame(&mut self, within: Duration) -> FrameRec {
+        let rec = timeout(within, self.frames.recv())
+            .await
+            .expect("frame within deadline")
+            .expect("frame collector open");
+        self.note(&rec);
+        rec
+    }
+
+    fn max_native_id(&self, until: Instant) -> i64 {
+        let raw = self.raw.lock().unwrap();
+        raw.iter().filter(|r| r.at <= until).map(|r| r.native_id).max().unwrap_or(0)
+    }
+
+    /// Last raw native metadata Chromium reported at or before `until`: (device dims, page scale).
+    fn raw_meta_at(&self, until: Instant) -> ((f64, f64), f64) {
+        let raw = self.raw.lock().unwrap();
+        raw.iter().rev().find(|r| r.at <= until).map_or(((0.0, 0.0), 0.0), |r| (r.device, r.page_scale))
+    }
+
+    /// One production tier switch: publish the ladder stage's snapshot (the run task restarts the
+    /// native screencast with a fresh run) and wait for the first published frame of the new run.
+    async fn switch_to_stage(&mut self, stage: usize) -> Switch {
+        while let Ok(r) = self.frames.try_recv() {
+            self.note(&r);
+        }
+        // After a producer-side recovery the next run may still be starting.
+        let mut live = None;
+        for _ in 0..200 {
+            if self.producer.state().await == ScreencastState::Streaming {
+                live = self.producer.current_run().await;
+                if live.is_some() {
+                    break;
+                }
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+        let old_run = live.expect("live run");
+        let fps = self.producer.capture_state().ladder().stage(stage).fps;
+        let l = &self.producer.ledger;
+        let counters = |l: &dam_hopper_server::browser_host::screencast::ScreencastLedger| {
+            (
+                l.events_received.load(Ordering::Relaxed),
+                l.frames_published.load(Ordering::Relaxed),
+                l.events_dropped_old_run.load(Ordering::Relaxed),
+                l.events_dropped_overwritten.load(Ordering::Relaxed),
+            )
+        };
+        let before = counters(l);
+        let native_old = self.max_native_id(Instant::now());
+        let t0 = Instant::now();
+        self.producer.capture_state().publish(stage, fps).expect("stage changes the snapshot");
+        let mut old_before_first = 0;
+        let first = loop {
+            let rec = self.next_frame(Duration::from_secs(5)).await;
+            if rec.header.producer_run == old_run.to_string() {
+                old_before_first += 1;
+                continue;
+            }
+            break rec;
+        };
+        let new_run = self.producer.current_run().await.expect("fresh run");
+        assert_eq!(first.header.producer_run, new_run.to_string());
+        assert_ne!(new_run, old_run, "run id rotates on every native restart");
+        let want = self.producer.capture_state().ladder().stage(stage);
+        for _ in 0..40 {
+            if self.producer.effective_capture().is_some_and(|e| e.native_key() == (want.jpeg_quality, want.scale_permille)) {
+                break;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+        assert_eq!(
+            self.producer.effective_capture().unwrap().native_key(),
+            (want.jpeg_quality, want.scale_permille),
+            "a current-run frame proves the new native settings"
+        );
+        let after = counters(&self.producer.ledger);
+        let raw_trace = self
+            .raw
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.at >= t0 && r.at <= first.at)
+            .map(|r| format!("{}:{}x{}@{:.0}", r.native_id, r.sof.0, r.sof.1, r.at.duration_since(t0).as_secs_f64() * 1000.0))
+            .collect::<Vec<_>>()
+            .join(",");
+        Switch {
+            old_run, new_run, ms: first.at.duration_since(t0).as_secs_f64() * 1000.0,
+            old_before_first, native_old, native_new: self.max_native_id(first.at),
+            d_rx: after.0 - before.0, d_pub: after.1 - before.1,
+            d_drop_old: after.2 - before.2, d_drop_over: after.3 - before.3,
+            raw_trace,
+            first,
+        }
+    }
+
+    /// The switch's first frame when its SOF is the target size; otherwise (Chromium sometimes
+    /// emits the first frame of a fresh native session at the previous session's size) the next
+    /// frames until one is, counting the skipped. The gap test reports how often that happens.
+    async fn settled(&mut self, first: FrameRec, expect: (u32, u32)) -> (FrameRec, usize) {
+        let (mut frame, mut skipped) = (first, 0);
+        while sof_dims(frame.jpeg()) != expect && skipped < 8 {
+            frame = self.next_frame(Duration::from_secs(5)).await;
+            skipped += 1;
+        }
+        (frame, skipped)
+    }
+
+    async fn finish(mut self) {
+        let _ = self.process.terminate().await;
+    }
+}
+
+/// Image size the capture pipeline asks Chromium for: CSS size x scale (DPR is never multiplied in).
+fn expected_dims(css_w: f64, css_h: f64, scale_permille: u16) -> (u32, u32) {
+    let axis = |css: f64| ((css.round() as u64 * u64::from(scale_permille) + 500) / 1000) as u32;
+    (axis(css_w), axis(css_h))
+}
+
+fn tier_stage(rig: &EngineRig, tier: CaptureTier) -> usize {
+    rig.producer.capture_state().ladder().anchor(tier)
+}
+
+/// Receipt 1: CSS viewport, DPR and viewport epoch stay invariant across capture-scale switches;
+/// the JPEG SOF scales with the capture scale only.
+async fn geometry_matrix_for_dpr(dpr: f64) {
+    let (css_w, css_h) = (1280.0, 720.0);
+    let mut rig = EngineRig::start(MARKER_HTML, qual_geometry(css_w, css_h, dpr)).await.expect("rig");
+    let epoch0 = rig.producer.viewport_epoch();
+    let plan = [
+        ("initial", 1000u16, None),
+        ("to750", 750, Some(tier_stage(&rig, CaptureTier::Low))),
+        ("to500", 500, Some(tier_stage(&rig, CaptureTier::Constrained))),
+        ("to1000", 1000, Some(tier_stage(&rig, CaptureTier::Medium))),
+    ];
+    for (phase, scale, stage) in plan {
+        let inner_before = rig.page_metrics().await;
+        let expect = expected_dims(css_w, css_h, scale);
+        let (frame, trace, stale) = match stage {
+            Some(stage) => {
+                let sw = rig.switch_to_stage(stage).await;
+                let trace = format!("{}->{}|{}", sw.native_old, sw.native_new, sw.raw_trace);
+                let (frame, stale) = rig.settled(sw.first, expect).await;
+                (frame, trace, stale)
+            }
+            None => (rig.next_frame(Duration::from_secs(5)).await, String::new(), 0),
+        };
+        let inner = rig.page_metrics().await;
+        let (hdr, sof) = (&frame.header, sof_dims(frame.jpeg()));
+        let (raw_dev, raw_ps) = rig.raw_meta_at(frame.at);
+        let epoch: u64 = hdr.viewport_epoch.parse().unwrap();
+        println!(
+            "QUAL|geometry|dpr={dpr}|scale={scale}|phase={phase}|innerBefore={}x{}|inner={}x{}|dprPage={}|meta={}x{}|hdr={}x{}|sof={}x{}|epoch={epoch}|rawDev={}x{}|rawPageScale={}|trusted={}|fallbacks={}|staleFirst={stale}|rawTrace={trace}",
+            inner_before.0, inner_before.1, inner.0, inner.1, inner.2,
+            hdr.geometry.css_width, hdr.geometry.css_height, hdr.width, hdr.height, sof.0, sof.1,
+            raw_dev.0, raw_dev.1, raw_ps, hdr.input_trusted,
+            rig.producer.ledger.screenshot_fallbacks.load(Ordering::Relaxed),
+        );
+        assert_eq!((inner_before.0, inner_before.1), (css_w, css_h), "CSS viewport before switch");
+        assert_eq!((inner.0, inner.1), (css_w, css_h), "CSS viewport after switch");
+        assert!((inner_before.2 - dpr).abs() < 0.01 && (inner.2 - dpr).abs() < 0.01, "page DPR {inner:?}");
+        assert_eq!((hdr.geometry.css_width, hdr.geometry.css_height), (css_w, css_h));
+        assert_eq!((hdr.width, hdr.height), sof, "header dims come from the real SOF");
+        // Pipeline relation: bounds derive from CSS size x scale; DPR is never multiplied in.
+        let s = f64::from(scale) / 1000.0;
+        assert!((f64::from(sof.0) - css_w * s).abs() <= 1.0, "sof width {sof:?} vs css*scale");
+        assert!((f64::from(sof.1) - css_h * s).abs() <= 1.0, "sof height {sof:?} vs css*scale");
+        assert_eq!(epoch, epoch0, "a tier-only switch never advances the viewport epoch");
+        assert_eq!(hdr.input_trusted, scale >= 1000, "downscaled frames stay untrusted until qualified");
+    }
+    assert_eq!(rig.producer.viewport_epoch(), epoch0);
+    rig.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_engine_geometry_invariant_across_capture_scales_and_dpr() {
+    if require_browser_executable().is_none() {
+        return;
+    }
+    qual_load("geometry", "all", "before");
+    futures_util::future::join_all([1.0, 1.5, 2.0].map(geometry_matrix_for_dpr)).await;
+    qual_load("geometry", "all", "after");
+}
+
+/// Run-order analysis over every frame delivered: a frame whose run was already superseded by a
+/// newer run's first frame is a late old-run frame. Returns late counts per run id.
+fn late_old_by_run(log: &[LogEntry]) -> HashMap<String, usize> {
+    let mut first_seen: HashMap<&str, Instant> = HashMap::new();
+    for e in log {
+        first_seen.entry(&e.run).and_modify(|t| *t = (*t).min(e.at)).or_insert(e.at);
+    }
+    let mut order: Vec<(&str, Instant)> = first_seen.into_iter().collect();
+    order.sort_by_key(|(_, t)| *t);
+    let retired_at: HashMap<&str, Instant> = order.windows(2).map(|w| (w[0].0, w[1].1)).collect();
+    let mut late = HashMap::new();
+    for e in log {
+        if retired_at.get(e.run.as_str()).is_some_and(|t| e.at > *t) {
+            *late.entry(e.run.clone()).or_default() += 1;
+        }
+    }
+    late
+}
+
+/// Per-run anomaly counts of the serialized-switch receipt.
+struct GapOutcome {
+    ms: Vec<f64>,
+    stale_first: usize,
+    aborted: u64,
+    unplanned_frames: usize,
+}
+
+/// Receipt 3, one run: 32 serialized production tier switches cycling High/Low/Constrained/Medium.
+async fn gap_run(run: usize) -> GapOutcome {
+    let (css_w, css_h) = (1280.0, 720.0);
+    let mut rig = EngineRig::start(MARKER_HTML, qual_geometry(css_w, css_h, 1.0)).await.expect("rig");
+    let ladder = rig.producer.capture_state().ladder().clone();
+    let mut scale_of_run: HashMap<String, u16> = HashMap::new();
+    scale_of_run.insert(rig.producer.current_run().await.expect("run").to_string(), 1000);
+    let cycle = [CaptureTier::High, CaptureTier::Low, CaptureTier::Constrained, CaptureTier::Medium];
+    let (mut from, mut rows) = (CaptureTier::Medium, Vec::new());
+    let mut settle_skips = Vec::new();
+    for i in 0..32 {
+        let to = cycle[i % 4];
+        let stage = ladder.anchor(to);
+        let sw = rig.switch_to_stage(stage).await;
+        let scale = ladder.stage(stage).scale_permille;
+        scale_of_run.insert(sw.new_run.to_string(), scale);
+        // Not part of the timed gap: how many frames until the run delivers the target size.
+        let (_, skipped) = rig.settled(sw.first.clone(), expected_dims(css_w, css_h, scale)).await;
+        settle_skips.push(skipped);
+        rows.push((i, from, to, stage, sw));
+        from = to;
+    }
+    sleep(Duration::from_millis(700)).await; // let any late old-run frame surface
+    while let Ok(r) = rig.frames.try_recv() {
+        rig.note(&r);
+    }
+    let late = late_old_by_run(&rig.log);
+    let mut stale_first = 0;
+    let mut ms_all = Vec::new();
+    for (i, from, to, stage, sw) in &rows {
+        let scale = ladder.stage(*stage).scale_permille;
+        let first_dims = sof_dims(sw.first.jpeg());
+        assert_eq!((sw.first.header.width, sw.first.header.height), first_dims, "header never misreports the JPEG size");
+        let dims_ok = first_dims == expected_dims(css_w, css_h, scale);
+        stale_first += usize::from(!dims_ok);
+        let late_old = late.get(&sw.old_run.to_string()).copied().unwrap_or(0);
+        println!(
+            "QUAL|gap|run={run}|i={i}|from={from:?}|to={to:?}|ms={:.1}|firstFrameRun={}|rotated={}|lateOld={late_old}|oldBeforeFirst={}|nativeOld={}|nativeNew={}|firstDims={}x{}|firstDimsOk={dims_ok}|rx={}|pub={}|dropOld={}|dropOver={}|rawTrace={}",
+            sw.ms, &sw.new_run.to_string()[..8], sw.new_run != sw.old_run, sw.old_before_first,
+            sw.native_old, sw.native_new, first_dims.0, first_dims.1,
+            sw.d_rx, sw.d_pub, sw.d_drop_old, sw.d_drop_over, sw.raw_trace,
+        );
+        ms_all.push(sw.ms);
+    }
+    let mut sorted = ms_all.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let l = &rig.producer.ledger;
+    let (aborted, recoveries) = (l.runs_aborted.load(Ordering::Relaxed), l.recovery_attempts.load(Ordering::Relaxed));
+    let late_total: usize = late.values().sum();
+    println!(
+        "QUAL|gap-summary|run={run}|switches={}|p50={:.1}|p95={:.1}|max={:.1}|lateOldTotal={late_total}|staleFirst={stale_first}|settleSkipsMax={}|runsAborted={aborted}|recoveryAttempts={recoveries}|acksFailed={}|state={:?}",
+        sorted.len(), percentile(&sorted, 0.5), percentile(&sorted, 0.95), sorted[sorted.len() - 1],
+        settle_skips.iter().max().unwrap(),
+        l.acks_failed.load(Ordering::Relaxed), rig.producer.state().await,
+    );
+    // A run this test never requested can only come from a producer-side abort/recovery.
+    let unplanned = rig.log.iter().filter(|e| !scale_of_run.contains_key(&e.run)).count();
+    for e in rig.log.iter().filter(|e| scale_of_run.contains_key(&e.run)) {
+        let scale = scale_of_run[&e.run];
+        assert_eq!(e.trusted, scale >= 1000, "input trust of a run-{scale} frame");
+    }
+    // Generous safety bounds only: the producer is never retired and no old-run frame outlives its run.
+    assert!(sorted.iter().all(|ms| *ms < 5000.0), "every first frame within 5 s");
+    assert_eq!(late_total, 0, "an old-run frame was delivered after a newer run began");
+    assert_eq!(rig.producer.state().await, ScreencastState::Streaming);
+    assert!(rig.producer.current_run().await.is_some(), "producer still has a live run");
+    rig.finish().await;
+    GapOutcome { ms: ms_all, stale_first, aborted, unplanned_frames: unplanned }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_capture_tier_switch_gap_over_serialized_native_restarts() {
+    if require_browser_executable().is_none() {
+        return;
+    }
+    for run in 1..=3 {
+        qual_load("gap", &run.to_string(), "before");
+        let out = gap_run(run).await;
+        qual_load("gap", &run.to_string(), "after");
+        assert_eq!(out.ms.len(), 32);
+    }
+}
+
+/// Strict session-admission receipt over the same serialized switches: a fresh native session's
+/// first published frame must have the target size and no switch may abort the run into recovery.
+/// Chromium can deliver a frame of the previous session (or one at the previous size) right after
+/// a restart; this fails whenever the producer admits it (see `rawTrace` in the gap lines).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_native_restart_admits_only_target_session_frames() {
+    if require_browser_executable().is_none() {
+        return;
+    }
+    let mut bad = Vec::new();
+    for run in 1..=2 {
+        let out = gap_run(run).await;
+        if (out.stale_first, out.aborted, out.unplanned_frames) != (0, 0, 0) {
+            bad.push(format!("run {run}: staleFirst={} aborted={} unplannedFrames={}", out.stale_first, out.aborted, out.unplanned_frames));
+        }
+    }
+    assert!(bad.is_empty(), "previous-session frame admitted after a native restart: {bad:?}");
+}
+
+/// Corner/centre hot-zone colours as (zone id, predicate over RGB).
+type ZonePredicate = (&'static str, fn(u8, u8, u8) -> bool);
+const ZONES: [ZonePredicate; 5] = [
+    ("tl", |r, g, b| r > 200 && g < 70 && b < 70),
+    ("tr", |r, g, b| g > 150 && r < 70 && b < 70),
+    ("bl", |r, g, b| b > 200 && r < 70 && g < 70),
+    ("br", |r, g, b| r > 200 && b > 200 && g < 70),
+    ("c", |r, g, b| r > 200 && g > 150 && b < 70),
+];
+
+/// Normalized image position of a zone's centroid (pixel centres), from the decoded frame.
+fn zone_centroid(rgb: &[u8], w: usize, h: usize, pred: fn(u8, u8, u8) -> bool) -> (f64, f64) {
+    let (mut sx, mut sy, mut n) = (0.0, 0.0, 0usize);
+    for y in 0..h {
+        for x in 0..w {
+            let p = &rgb[(y * w + x) * 3..(y * w + x) * 3 + 3];
+            if pred(p[0], p[1], p[2]) {
+                (sx, sy, n) = (sx + x as f64 + 0.5, sy + y as f64 + 0.5, n + 1);
+            }
+        }
+    }
+    assert!(n >= 4, "zone not visible in the decoded frame");
+    (sx / n as f64 / w as f64, sy / n as f64 / h as f64)
+}
+
+/// Decodes the JPEG and locates every hot zone's centroid on the blocking pool. A debug-build
+/// decode plus the per-pixel scans take hundreds of milliseconds of CPU; run on an async worker
+/// (four layouts do this in lock-step) they starve the production run tasks, the capacity-2
+/// screencast ingress overflows and the producer aborts the run into recovery (which re-attaches
+/// the page session the rig still addresses).
+async fn decode_zone_centroids(jpeg: Vec<u8>) -> Vec<(&'static str, f64, f64)> {
+    let work = tokio::task::spawn_blocking(move || {
+        let (w, h, rgb) = decode_rgb(&jpeg);
+        ZONES.map(|(name, pred)| {
+            let (u, v) = zone_centroid(&rgb, w, h, pred);
+            (name, u, v)
+        })
+    });
+    match work.await {
+        Ok(zones) => zones.to_vec(),
+        Err(e) => std::panic::resume_unwind(e.into_panic()),
+    }
+}
+
+/// The viewer's aspect-fit mapping (same arithmetic as the UI input controller): canvas backing
+/// store `round(css * dpr)`, image drawn aspect-fit and centred, pointer -> image fractions.
+/// Returns the centre and the four corners inset by 4 CSS px.
+fn letterbox_points(canvas_css: (f64, f64), dpr: f64, img: (u32, u32)) -> [(&'static str, f64, f64); 5] {
+    let (cw, ch) = ((canvas_css.0 * dpr).round(), (canvas_css.1 * dpr).round());
+    let image_aspect = f64::from(img.0) / f64::from(img.1);
+    let (dw, dh, dx, dy) = if cw / ch > image_aspect {
+        let dw = ch * image_aspect;
+        (dw, ch, (cw - dw) / 2.0, 0.0)
+    } else {
+        let dh = cw / image_aspect;
+        (cw, dh, 0.0, (ch - dh) / 2.0)
+    };
+    let inset = 4.0 * dpr;
+    [
+        ("c", dx + dw / 2.0, dy + dh / 2.0),
+        ("tl", dx + inset, dy + inset),
+        ("tr", dx + dw - inset, dy + inset),
+        ("bl", dx + inset, dy + dh - inset),
+        ("br", dx + dw - inset, dy + dh - inset),
+    ]
+    .map(|(name, x, y)| (name, (x - dx) / dw, (y - dy) / dh))
+}
+
+/// Real pointer press/release through the production projection; returns the DOM-observed click.
+async fn click_fraction(rig: &EngineRig, u: f64, v: f64) -> ((f64, f64), String) {
+    let geometry = rig.producer.geometry().await;
+    let (mx, my) = map_fraction_to_css_coords(u, v, &geometry).expect("fraction maps");
+    assert!((mx - u * geometry.css_width).abs() < 1e-6 && (my - v * geometry.css_height).abs() < 1e-6);
+    for event in [
+        InputEvent::PointerDown { button: MouseButton::Left, u, v, modifiers: 0 },
+        InputEvent::PointerUp { button: MouseButton::Left, u, v, modifiers: 0 },
+    ] {
+        if let Err(e) = dispatch_input_event_to_cdp(&rig.producer.cdp_client, &rig.page_sid, &geometry, &event).await {
+            panic!("input dispatch failed ({e:?}); {}", abort_summary(&rig.producer));
+        }
+    }
+    let raw = rig.eval("JSON.stringify(window.__clicks.splice(0))").await;
+    let clicks: Vec<(f64, f64, String)> = serde_json::from_str(raw.as_str().expect("clicks")).unwrap();
+    assert_eq!(clicks.len(), 1, "exactly one DOM click per press: {clicks:?}");
+    ((clicks[0].0, clicks[0].1), clicks[0].2.clone())
+}
+
+/// Run-abort counters of the production producer, to name the cause when the rig's page session is lost.
+fn abort_summary(producer: &ScreencastProducer) -> String {
+    let l = &producer.ledger;
+    format!(
+        "runs_aborted={} ingress_lagged={} recovery_attempts={}",
+        l.runs_aborted.load(Ordering::Relaxed),
+        l.ingress_lagged.load(Ordering::Relaxed),
+        l.recovery_attempts.load(Ordering::Relaxed),
+    )
+}
+
+struct Layout {
+    name: &'static str,
+    css: (f64, f64),
+    dpr: f64,
+    canvas: (f64, f64),
+}
+
+/// Receipt 2, one layout: click oracle at 1000/750/500, then qualification on the real data.
+async fn oracle_layout(l: Layout) {
+    let (cw, ch) = l.css;
+    let mut rig = EngineRig::start(MARKER_HTML, qual_geometry(cw, ch, l.dpr)).await.expect("rig");
+    let plan = [
+        (1000u16, None),
+        (750, Some(tier_stage(&rig, CaptureTier::Low))),
+        (500, Some(tier_stage(&rig, CaptureTier::Constrained))),
+    ];
+    let mut by_scale: Vec<Vec<DownscaleObservation>> = Vec::new();
+    for (scale, stage) in plan {
+        let expect = expected_dims(cw, ch, scale);
+        let frame = match stage {
+            Some(stage) => {
+                let first = rig.switch_to_stage(stage).await.first;
+                rig.settled(first, expect).await.0
+            }
+            None => rig.next_frame(Duration::from_secs(5)).await,
+        };
+        let (inner_w, inner_h, page_dpr) = rig.page_metrics().await;
+        let (hdr, sof) = (&frame.header, sof_dims(frame.jpeg()));
+        assert_eq!(hdr.input_trusted, scale >= 1000, "pre-qualification trust at scale {scale}");
+        let zones = decode_zone_centroids(frame.jpeg().to_vec()).await;
+        let mut points = Vec::new();
+        for (name, u, v) in letterbox_points(l.canvas, l.dpr, (hdr.width, hdr.height)) {
+            let (got, hit) = click_fraction(&rig, u, v).await;
+            points.push(("A", name, (u, v), (u * cw, v * ch), got, hit));
+        }
+        for (name, u, v) in zones {
+            let want = match name {
+                "tl" => (24.0, 24.0),
+                "tr" => (cw - 24.0, 24.0),
+                "bl" => (24.0, ch - 24.0),
+                "br" => (cw - 24.0, ch - 24.0),
+                _ => (cw / 2.0, ch / 2.0),
+            };
+            let (got, hit) = click_fraction(&rig, u, v).await;
+            points.push(("B", name, (u, v), want, got, hit));
+        }
+        let tol_px = 1.0 + 1000.0 / f64::from(scale);
+        let (mut max_u, mut max_v, mut max_px) = (0.0f64, 0.0f64, 0.0f64);
+        let mut observations = Vec::new();
+        for (set, name, (u, v), want, got, hit) in points {
+            let (err_u, err_v) = ((got.0 - want.0) / cw, (got.1 - want.1) / ch);
+            let err_px = (got.0 - want.0).hypot(got.1 - want.1);
+            println!(
+                "QUAL|oracle|layout={}|dpr={}|css={cw}x{ch}|canvas={}x{}|scale={scale}|set={set}|pt={name}|u={u:.5}|v={v:.5}|wantCss={:.2},{:.2}|gotCss={:.2},{:.2}|hit={hit}|errU={err_u:.5}|errV={err_v:.5}|errPx={err_px:.3}",
+                l.name, l.dpr, l.canvas.0, l.canvas.1, want.0, want.1, got.0, got.1,
+            );
+            assert_eq!(hit, name, "click landed on the wrong element ({set}/{name} at scale {scale})");
+            assert!(err_px <= tol_px, "click {set}/{name} off by {err_px}px at scale {scale}");
+            (max_u, max_v, max_px) = (max_u.max(err_u.abs()), max_v.max(err_v.abs()), max_px.max(err_px));
+            observations.push(DownscaleObservation {
+                scale_permille: scale,
+                dom_inner: (inner_w, inner_h),
+                dom_dpr: page_dpr,
+                meta_css: (hdr.geometry.css_width, hdr.geometry.css_height),
+                jpeg: sof,
+                click_expected_uv: (want.0 / cw, want.1 / ch),
+                click_observed_uv: (got.0 / cw, got.1 / ch),
+            });
+        }
+        println!(
+            "QUAL|oracle-max|layout={}|scale={scale}|points={}|maxErrU={max_u:.5}|maxErrV={max_v:.5}|maxErrPx={max_px:.3}|trustedBefore={}",
+            l.name, observations.len(), hdr.input_trusted
+        );
+        by_scale.push(observations);
+    }
+
+    // Qualification runs on the real observations, one call per click point.
+    let state = rig.producer.capture_state().clone();
+    assert!(!state.downscale_input_qualified());
+    let sets: Vec<[DownscaleObservation; 3]> =
+        (0..by_scale[0].len()).map(|k| [by_scale[0][k], by_scale[1][k], by_scale[2][k]]).collect();
+    for (k, set) in sets.iter().enumerate() {
+        state.qualify_downscale(cw, ch, l.dpr, set).unwrap_or_else(|e| panic!("point {k}: {e}"));
+    }
+    assert!(state.downscale_input_qualified());
+    println!("QUAL|oracle-qualify|layout={}|points={}|result=ok|qualified=true", l.name, sets.len());
+
+    // Negative controls: the oracle must be able to fail, and each failure revokes qualification.
+    let mut bad_dpr = sets[0];
+    bad_dpr[1].dom_dpr += 0.5;
+    let mut bad_click = sets[0];
+    bad_click[2].click_observed_uv.0 += 0.02;
+    let mut bad_jpeg = sets[0];
+    bad_jpeg[1].jpeg = (cw as u32, ch as u32);
+    let mut bad_inner = sets[0];
+    bad_inner[0].dom_inner.0 += 20.0;
+    for (label, set, needle) in [
+        ("dpr", bad_dpr, "devicePixelRatio changed"),
+        ("click", bad_click, "click mapping drifted"),
+        ("jpeg", bad_jpeg, "JPEG size not scaled"),
+        ("inner", bad_inner, "DOM inner size changed"),
+    ] {
+        let err = state.qualify_downscale(cw, ch, l.dpr, &set).expect_err("corrupted observation must fail");
+        println!("QUAL|oracle-negative|layout={}|corrupt={label}|result=err|msg={err}|qualified={}", l.name, state.downscale_input_qualified());
+        assert!(err.contains(needle), "{err}");
+        assert!(!state.downscale_input_qualified());
+    }
+    let missing = state.qualify_downscale(cw, ch, l.dpr, &sets[0][..2]).expect_err("missing scale must fail");
+    assert!(missing.contains("missing observation"), "{missing}");
+
+    // Consumer-visible effect: the downscaled run's frames follow the qualification flag.
+    async fn trust_of_next_frame(rig: &mut EngineRig) -> bool {
+        sleep(Duration::from_millis(400)).await;
+        while let Ok(r) = rig.frames.try_recv() {
+            rig.note(&r);
+        }
+        rig.next_frame(Duration::from_secs(5)).await.header.input_trusted
+    }
+    let revoked = trust_of_next_frame(&mut rig).await;
+    state.qualify_downscale(cw, ch, l.dpr, &sets[0]).expect("re-qualify");
+    let granted = trust_of_next_frame(&mut rig).await;
+    println!("QUAL|oracle-trust|layout={}|scale=500|afterNegative={revoked}|afterQualify={granted}", l.name);
+    assert!(!revoked && granted, "scale-500 frames must follow the qualification flag");
+    assert_eq!(rig.producer.ledger.runs_aborted.load(Ordering::Relaxed), 0, "the producer must not abort its run mid-oracle: {}", abort_summary(&rig.producer));
+    rig.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_engine_dom_click_oracle_qualifies_downscaled_input_and_can_fail() {
+    if require_browser_executable().is_none() {
+        return;
+    }
+    qual_load("oracle", "all", "before");
+    let layouts = [
+        Layout { name: "native-16x9", css: (1280.0, 720.0), dpr: 1.0, canvas: (1280.0, 720.0) },
+        Layout { name: "pillarbox-4x3-dpr1.5", css: (1280.0, 720.0), dpr: 1.5, canvas: (1024.0, 768.0) },
+        Layout { name: "ultrawide-21x9", css: (1280.0, 720.0), dpr: 1.0, canvas: (1680.0, 720.0) },
+        Layout { name: "square-odd-css-dpr2", css: (1366.0, 768.0), dpr: 2.0, canvas: (900.0, 900.0) },
+    ];
+    let handles: Vec<_> = layouts.into_iter().map(|l| (l.name, tokio::spawn(oracle_layout(l)))).collect();
+    let mut failed = Vec::new();
+    for (name, handle) in handles {
+        if let Err(e) = handle.await {
+            failed.push(format!("{name}: {e}"));
+        }
+    }
+    assert!(failed.is_empty(), "layouts failed: {failed:?}");
+    qual_load("oracle", "all", "after");
+}
+
+/// Synthetic 1280x720 legibility page: two themes (dark left, light right), monospaced code at
+/// 12/14/16 px with syntax colours, sans body text at 12/14/16 px, 1 px borders and tables.
+/// Review regions (CSS px, per theme panel at x=0 / x=640): code12 (16,40,608,96), code14
+/// (16,150,608,120), code16 (16,284,608,132), body12 (16,430,608,32), body14 (16,470,608,40),
+/// body16 (16,520,608,44), borders (16,568,608,144).
+const LEGIBILITY_HTML: &str = r##"<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}
+html,body{margin:0;width:1280px;height:720px;overflow:hidden;font-family:sans-serif}
+.p{position:absolute;top:0;width:640px;height:720px}
+.dark{left:0;background:#1e1e1e;color:#d4d4d4}.light{left:640px;background:#fff;color:#24292f}
+.h{position:absolute;left:16px;top:8px;font:600 14px sans-serif}
+pre,.t{position:absolute;left:16px;margin:0;white-space:pre}
+pre{font-family:monospace}
+.c12{top:40px;font-size:12px;line-height:16px}.c14{top:150px;font-size:14px;line-height:20px}
+.c16{top:284px;font-size:16px;line-height:22px}
+.b12{top:430px;font-size:12px;line-height:16px}.b14{top:470px;font-size:14px;line-height:20px}
+.b16{top:520px;font-size:16px;line-height:22px}
+.dark .k{color:#569cd6}.dark .s{color:#ce9178}.dark .m{color:#6a9955}.dark .n{color:#b5cea8}.dark .f{color:#dcdcaa}
+.light .k{color:#0000ff}.light .s{color:#a31515}.light .m{color:#008000}.light .n{color:#098658}.light .f{color:#795e26}
+.bx{position:absolute;top:572px;width:68px;height:40px}
+.tb{position:absolute;top:624px;border-collapse:collapse;font-size:12px}
+.tb td{padding:4px 10px}
+.dark .bx:nth-child(1){border:1px solid #fff}.dark .bx:nth-child(2){border:1px solid #bbb}
+.dark .bx:nth-child(3){border:1px solid #888}.dark .bx:nth-child(4){border:1px solid #444}
+.light .bx:nth-child(1){border:1px solid #000}.light .bx:nth-child(2){border:1px solid #444}
+.light .bx:nth-child(3){border:1px solid #888}.light .bx:nth-child(4){border:1px solid #ccc}
+.bx:nth-child(5){border:1px solid #f00}.bx:nth-child(6){border:1px solid #00f}
+.bx:nth-child(7){border:1px solid #080}.bx:nth-child(8){border:1px dashed #888}
+.t1{left:16px}.t2{left:300px}
+.t1 td{border:1px solid #888}.t2 td{border:1px solid #d00}
+</style></head><body>
+<div class="p dark"><div class="h">dark theme</div>
+<pre class="c12"><span class="m">// synthetic fixture: sum of items</span>
+<span class="k">function</span> <span class="f">sum</span>(items) {
+  <span class="k">let</span> total = <span class="n">0</span>;
+  <span class="k">for</span> (<span class="k">const</span> x <span class="k">of</span> items) total += x.<span class="f">v</span> * <span class="n">1.5</span>;
+  <span class="k">return</span> <span class="s">"total="</span> + total;
+}</pre>
+<pre class="c14"><span class="m">// synthetic fixture: sum of items</span>
+<span class="k">function</span> <span class="f">sum</span>(items) {
+  <span class="k">let</span> total = <span class="n">0</span>;
+  <span class="k">for</span> (<span class="k">const</span> x <span class="k">of</span> items) total += x.<span class="f">v</span> * <span class="n">1.5</span>;
+  <span class="k">return</span> <span class="s">"total="</span> + total;
+}</pre>
+<pre class="c16"><span class="m">// synthetic fixture: sum of items</span>
+<span class="k">function</span> <span class="f">sum</span>(items) {
+  <span class="k">let</span> total = <span class="n">0</span>;
+  <span class="k">for</span> (<span class="k">const</span> x <span class="k">of</span> items) total += x.<span class="f">v</span>;
+  <span class="k">return</span> <span class="s">"t="</span> + total;
+}</pre>
+<div class="t b12">The quick brown fox jumps over the lazy dog, 0123456789 {}[]()
+Pack my box with five dozen liquor jugs. Il1 O0 rn m cl d</div>
+<div class="t b14">The quick brown fox jumps over the lazy dog, 0123456789
+Pack my box with five dozen liquor jugs. Il1 O0 rn m cl d</div>
+<div class="t b16">The quick brown fox jumps over the lazy dog 0123456789
+Pack my box with five dozen liquor jugs. Il1 O0 rn</div>
+<div class="bx" style="left:16px"></div><div class="bx" style="left:92px"></div><div class="bx" style="left:168px"></div><div class="bx" style="left:244px"></div><div class="bx" style="left:320px"></div><div class="bx" style="left:396px"></div><div class="bx" style="left:472px"></div><div class="bx" style="left:548px"></div>
+<table class="tb t1"><tr><td>id</td><td>name</td><td>qty</td></tr><tr><td>1</td><td>alpha</td><td>10</td></tr><tr><td>2</td><td>beta</td><td>20</td></tr></table>
+<table class="tb t2"><tr><td>id</td><td>name</td><td>qty</td></tr><tr><td>3</td><td>gamma</td><td>30</td></tr><tr><td>4</td><td>delta</td><td>40</td></tr></table>
+</div>
+<div class="p light"><div class="h">light theme</div>
+<pre class="c12"><span class="m">// synthetic fixture: sum of items</span>
+<span class="k">function</span> <span class="f">sum</span>(items) {
+  <span class="k">let</span> total = <span class="n">0</span>;
+  <span class="k">for</span> (<span class="k">const</span> x <span class="k">of</span> items) total += x.<span class="f">v</span> * <span class="n">1.5</span>;
+  <span class="k">return</span> <span class="s">"total="</span> + total;
+}</pre>
+<pre class="c14"><span class="m">// synthetic fixture: sum of items</span>
+<span class="k">function</span> <span class="f">sum</span>(items) {
+  <span class="k">let</span> total = <span class="n">0</span>;
+  <span class="k">for</span> (<span class="k">const</span> x <span class="k">of</span> items) total += x.<span class="f">v</span> * <span class="n">1.5</span>;
+  <span class="k">return</span> <span class="s">"total="</span> + total;
+}</pre>
+<pre class="c16"><span class="m">// synthetic fixture: sum of items</span>
+<span class="k">function</span> <span class="f">sum</span>(items) {
+  <span class="k">let</span> total = <span class="n">0</span>;
+  <span class="k">for</span> (<span class="k">const</span> x <span class="k">of</span> items) total += x.<span class="f">v</span>;
+  <span class="k">return</span> <span class="s">"t="</span> + total;
+}</pre>
+<div class="t b12">The quick brown fox jumps over the lazy dog, 0123456789 {}[]()
+Pack my box with five dozen liquor jugs. Il1 O0 rn m cl d</div>
+<div class="t b14">The quick brown fox jumps over the lazy dog, 0123456789
+Pack my box with five dozen liquor jugs. Il1 O0 rn m cl d</div>
+<div class="t b16">The quick brown fox jumps over the lazy dog 0123456789
+Pack my box with five dozen liquor jugs. Il1 O0 rn</div>
+<div class="bx" style="left:16px"></div><div class="bx" style="left:92px"></div><div class="bx" style="left:168px"></div><div class="bx" style="left:244px"></div><div class="bx" style="left:320px"></div><div class="bx" style="left:396px"></div><div class="bx" style="left:472px"></div><div class="bx" style="left:548px"></div>
+<table class="tb t1"><tr><td>id</td><td>name</td><td>qty</td></tr><tr><td>1</td><td>alpha</td><td>10</td></tr><tr><td>2</td><td>beta</td><td>20</td></tr></table>
+<table class="tb t2"><tr><td>id</td><td>name</td><td>qty</td></tr><tr><td>3</td><td>gamma</td><td>30</td></tr><tr><td>4</td><td>delta</td><td>40</td></tr></table>
+</div></body></html>"##;
+
+/// Receipt 4: the exact JPEG bytes Chromium delivers at every distinct ladder quality/scale pair,
+/// written for human review (crops/contact sheets are built from these files, never judged here).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_capture_ladder_stages_write_legibility_fixtures_for_human_review() {
+    let Some(mut rig) = EngineRig::start(LEGIBILITY_HTML, qual_geometry(1280.0, 720.0, 1.0)).await else {
+        return;
+    };
+    let out = std::path::PathBuf::from(
+        std::env::var("DAM_HOPPER_QUAL_LEGIBILITY_DIR").unwrap_or_else(|_| "/tmp/dh-qual/legibility".into()),
+    );
+    std::fs::create_dir_all(&out).unwrap();
+    // Stage indexes of the distinct (quality, scale) pairs; the run starts at Medium (stage 2),
+    // so it is captured last (every step changes the native key).
+    let stages = [(0usize, 80u8, 1000u16), (4, 60, 1000), (5, 60, 750), (7, 55, 750), (8, 55, 500), (2, 65, 1000)];
+    let mut sizes = HashMap::new();
+    for (idx, quality, scale) in stages {
+        let st = rig.producer.capture_state().ladder().stage(idx);
+        assert_eq!((st.jpeg_quality, st.scale_permille), (quality, scale), "ladder stage {idx}");
+        let first = rig.switch_to_stage(idx).await.first;
+        let (frame, skipped) = rig.settled(first, expected_dims(1280.0, 720.0, scale)).await;
+        let jpeg = frame.jpeg();
+        let (w, h, rgb) = decode_rgb(jpeg);
+        // Content sanity only: the dark panel (left) must be darker than the light panel (right).
+        let mean = |x0: usize, x1: usize| {
+            let (mut sum, mut n) = (0u64, 0u64);
+            for y in 0..h {
+                for x in x0..x1 {
+                    let p = &rgb[(y * w + x) * 3..(y * w + x) * 3 + 3];
+                    sum += u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]);
+                    n += 3;
+                }
+            }
+            sum as f64 / n as f64
+        };
+        let (left, right) = (mean(0, w / 2), mean(w / 2, w));
+        assert!(right > left + 60.0, "fixture panels not captured: {left} vs {right}");
+        let file = out.join(format!("full-{quality}-{scale}.jpg"));
+        std::fs::write(&file, jpeg).unwrap();
+        sizes.insert((quality, scale), jpeg.len());
+        println!(
+            "QUAL|legibility|stage={idx}|q={quality}|scale={scale}|bytes={}|sof={w}x{h}|skippedStale={skipped}|meanLeft={left:.1}|meanRight={right:.1}|file={}",
+            jpeg.len(), file.display()
+        );
+    }
+    assert!(sizes[&(80, 1000)] > sizes[&(55, 500)], "the finest stage is larger than the coarsest");
+    rig.finish().await;
 }
