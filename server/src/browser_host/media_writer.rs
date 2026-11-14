@@ -333,7 +333,7 @@ impl PendingEventAggregation {
 pub fn spawn_media_writer<S, F>(
     mut sink: S,
     cancel: CancellationToken,
-    mut doc_rx: Option<tokio::sync::watch::Receiver<AudioDocAuthority>>,
+    doc_rx: Option<tokio::sync::watch::Receiver<AudioDocAuthority>>,
     is_audio_admissible: F,
 ) -> (MediaWriterHandle, mpsc::Receiver<MediaWriterEvent>, tokio::task::JoinHandle<()>)
 where
@@ -431,38 +431,19 @@ where
                     // 1. Check doc authority & slot admissibility (validating slot's own admitted generation and sequence)
                     // BEFORE handing item to sink
                     if !is_audio_admissible(&a.audio_run, a.doc_epoch, a.admitted_gen, a.audio_seq)
-                        || doc_rx.as_mut().is_some_and(|r| !r.borrow_and_update().is_admissible(a.doc_epoch))
+                        || doc_rx.as_ref().is_some_and(|r| !r.borrow().is_admissible(a.doc_epoch))
                     {
                         drop(a._chunk);
                         continue;
                     }
 
-                    let pkt = OutboundMediaPacket::Text(a.json);
-                    // 2. Hand item to sink; if interrupted mid-flush, sink may have buffered item,
-                    // so transport MUST be retired rather than reused with released reservation.
-                    let send_fut = send_with_deadline(&mut sink, pkt, &cancel);
-                    let (res, interrupted_by_doc_change) = if let Some(r) = doc_rx.as_mut() {
-                        tokio::select! {
-                            biased;
-                            _ = r.changed() => (Err("doc_changed"), true),
-                            res = send_fut => (res, false),
-                        }
-                    } else {
-                        (send_fut.await, false)
-                    };
-
-                    if interrupted_by_doc_change {
-                        cancel.cancel();
-                        w.clear_queued();
-                        agg.emit_event(
-                            &tx,
-                            &w,
-                            MediaWriterEvent::TransportFailed("doc authority changed during write; transport retired"),
-                        );
-                        drop(a._chunk);
-                        return;
-                    }
-
+                    // 2. Hand item to sink. Once handed over it cannot be recalled: dropping the send future
+                    // leaves the message queued in the sink (split-sink slot / websocket write buffer) and the
+                    // next write would still flush it. A doc-epoch change therefore never abandons an in-flight
+                    // write: it completes under the usual deadline/cancel bound still labelled with its own
+                    // (now stale) docEpoch, which the viewer fences, while any stale chunk queued behind it
+                    // fails the admissibility check above.
+                    let res = send_with_deadline(&mut sink, OutboundMediaPacket::Text(a.json), &cancel).await;
                     drop(a._chunk);
                     match res {
                         Ok(write_duration) => {

@@ -654,6 +654,8 @@ pub struct ScreencastProducer {
     adaptive: Arc<SyncMutex<AdaptiveStreamController>>,
     /// Snapshot the live native run was started with (native quality/scale are fixed per run).
     run_snapshot: Arc<SyncMutex<Arc<CaptureTierSnapshot>>>,
+    /// Set by a capture switch for its fresh run and by every other start to `None`.
+    run_fence: Arc<SyncMutex<Option<SwitchFence>>>,
     audio_source: Arc<SyncMutex<Option<AudioSource>>>,
     switch_backoff_until: Arc<SyncMutex<Option<Instant>>>,
     /// FPS the governor is actually running at (FPS-only updates apply without a native restart).
@@ -685,6 +687,43 @@ pub struct ProvenFrameState {
     pub snapshot: Arc<CaptureTierSnapshot>,
     pub width: u32,
     pub height: u32,
+}
+
+/// The run a capture switch retires: its last native session id and requested image bounds.
+#[derive(Debug, Clone, Copy)]
+struct ReplacedRun {
+    native_session_id: Option<i64>,
+    bounds: (u32, u32),
+}
+
+/// Fence of a fresh run started by a capture switch. Chromium may deliver a frame of the
+/// retired native session right after the fresh `Page.startScreencast`: with the old session id,
+/// or with the new id but pixels captured at the old size. Neither is evidence of the requested
+/// capture, so neither may establish the run's native session or prove its settings.
+#[derive(Debug, Clone, Copy)]
+struct SwitchFence {
+    replaced: ReplacedRun,
+    /// Image bounds this run requested natively.
+    bounds: (u32, u32),
+}
+
+impl SwitchFence {
+    /// An id at or below the replaced session's last id belongs to the retired session.
+    fn is_retired_session(&self, native_session_id: i64) -> bool {
+        self.replaced.native_session_id.is_some_and(|prev| native_session_id <= prev)
+    }
+
+    /// Pixels that fill the replaced run's bounds but not this run's. A size that matches neither
+    /// is not evidence of staleness (a viewport the engine did not size is admitted as before).
+    fn is_retired_size(&self, width: u32, height: u32) -> bool {
+        fills_bounds(width, height, self.replaced.bounds) && !fills_bounds(width, height, self.bounds)
+    }
+}
+
+/// An aspect-fitted native frame touches its bound on at least one axis and never exceeds it
+/// (one pixel of rounding tolerance on both).
+fn fills_bounds(width: u32, height: u32, (max_w, max_h): (u32, u32)) -> bool {
+    width <= max_w + 1 && height <= max_h + 1 && (width + 1 >= max_w || height + 1 >= max_h)
 }
 
 /// Whether a frame's native viewport metadata supports projecting pointer fractions through
@@ -764,6 +803,7 @@ impl ScreencastProducer {
             screenshot_taken_in_epoch: Arc::new(AtomicBool::new(false)),
             adaptive: Arc::new(SyncMutex::new(AdaptiveStreamController::new(default_ceilings))),
             run_snapshot: Arc::new(SyncMutex::new(capture.current())),
+            run_fence: Arc::new(SyncMutex::new(None)),
             capture,
             audio_source: Arc::new(SyncMutex::new(None)),
             switch_backoff_until: Arc::new(SyncMutex::new(None)),
@@ -1979,6 +2019,15 @@ impl ScreencastProducer {
 
     /// Caller holds both the lifecycle operation gate and the state write lock.
     async fn start_run_locked(&self, state_lock: &mut ScreencastState) -> Result<Uuid, CdpError> {
+        self.start_run_replacing_locked(state_lock, None).await
+    }
+
+    /// `replaced` is the run a capture switch just retired (fences its stale first frames).
+    async fn start_run_replacing_locked(
+        &self,
+        state_lock: &mut ScreencastState,
+        replaced: Option<ReplacedRun>,
+    ) -> Result<Uuid, CdpError> {
         if *state_lock == ScreencastState::Streaming || *state_lock == ScreencastState::Starting {
             if let Some(run_id) = *self.current_run.read().await {
                 return Ok(run_id);
@@ -2023,6 +2072,11 @@ impl ScreencastProducer {
         let geom = self.geometry.read().await.clone();
         let screencast_params =
             build_start_params(&snap, self.capture.ceilings(), geom.css_width, geom.css_height);
+        // Armed before the native start: a frame can follow it within a millisecond.
+        *self.run_fence.lock() = replaced.map(|replaced| SwitchFence {
+            replaced,
+            bounds: snap.image_bounds(self.capture.ceilings(), geom.css_width, geom.css_height),
+        });
         // The audio source exists as soon as the run does (same identity as the first video run).
         let (audio_run, audio_cancel, new_audio_source) = self.ensure_audio_source(producer_run);
 
@@ -2031,6 +2085,7 @@ impl ScreencastProducer {
             .send_typed(screencast_params, Some(&page_session_id))
             .await
         {
+            *self.run_fence.lock() = None;
             *state_lock = ScreencastState::Stopped;
             {
                 let _mutation = self.begin_quality_mutation();
@@ -2193,13 +2248,24 @@ impl ScreencastProducer {
         let Some(sid) = self.page_session_id.read().await.clone() else {
             return Ok(false);
         };
+        let replaced = {
+            let geom = self.geometry.read().await;
+            ReplacedRun {
+                native_session_id: *self.native_screencast_session_id.read().await,
+                bounds: self.run_snapshot.lock().image_bounds(
+                    self.capture.ceilings(),
+                    geom.css_width,
+                    geom.css_height,
+                ),
+            }
+        };
         // Stop first: a failed stop leaves the live run untouched (no active-start reissue).
         if let Err(e) = self.stop_and_retire_run_locked(&mut state_lock, &sid).await {
             *self.switch_backoff_until.lock() = Some(Instant::now() + FAILED_SWITCH_BACKOFF);
             return Err(e);
         }
 
-        match self.start_run_locked(&mut state_lock).await {
+        match self.start_run_replacing_locked(&mut state_lock, Some(replaced)).await {
             Ok(_) => Ok(true),
             Err(e) => {
                 *self.switch_backoff_until.lock() = Some(Instant::now() + FAILED_SWITCH_BACKOFF);
@@ -2899,6 +2965,7 @@ impl ScreencastProducer {
 
         // Establish or verify native sessionId
         let frame_session_id = frame_data.frame_session_id;
+        let mut retired_session = false;
         {
             let mut native_sess = self.native_screencast_session_id.write().await;
             if let Some(expected_native) = *native_sess {
@@ -2923,6 +2990,15 @@ impl ScreencastProducer {
                     );
                     return Some(AbortCause::NativeSessionChanged);
                 }
+            } else if self
+                .run_fence
+                .lock()
+                .is_some_and(|fence| fence.is_retired_session(frame_session_id))
+            {
+                // First frame of a fresh switch run, but of the retired native session: it must
+                // not become this run's native session (the real frames would then look like an
+                // unplanned native restart). Dropped below, after its ACK.
+                retired_session = true;
             } else {
                 *native_sess = Some(frame_session_id);
             }
@@ -2954,6 +3030,13 @@ impl ScreencastProducer {
                 warn!(error = %e, frame_session_id, "failed to enqueue screencast frame ACK");
                 return Some(AbortCause::AckEnqueue(e));
             }
+        }
+        if retired_session {
+            self.ledger
+                .events_dropped_old_run
+                .fetch_add(1, Ordering::Relaxed);
+            debug!(got = frame_session_id, "retired native session frame on a fresh switch run; dropping event");
+            return None;
         }
         // Over the payload budget: the ACK above keeps native credit flowing; the frame is dropped.
         if !frame_data.memory_admitted {
@@ -3121,6 +3204,17 @@ impl ScreencastProducer {
         let pixels = (width as u64) * (height as u64);
         if pixels > MAX_PIXELS {
             warn!(pixels, "candidate JPEG pixel ceiling exceeded");
+            return;
+        }
+        // Pixels still captured at the replaced run's size are not the requested capture: they
+        // neither publish nor prove the run's settings (its ACK was sent at ingress).
+        if self.current_run_proven.lock().is_none()
+            && self
+                .run_fence
+                .lock()
+                .is_some_and(|fence| fence.is_retired_size(width, height))
+        {
+            debug!(width, height, "dropping candidate captured at the replaced run's size");
             return;
         }
 
@@ -3444,6 +3538,7 @@ impl ScreencastProducer {
             capture: self.capture.clone(),
             adaptive: self.adaptive.clone(),
             run_snapshot: self.run_snapshot.clone(),
+            run_fence: self.run_fence.clone(),
             audio_source: self.audio_source.clone(),
             switch_backoff_until: self.switch_backoff_until.clone(),
             applied_fps: self.applied_fps.clone(),

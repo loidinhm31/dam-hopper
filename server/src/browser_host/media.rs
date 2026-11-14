@@ -1734,7 +1734,7 @@ async fn run_media_session(
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => {
-                debug!(viewer_id = %viewer_id, "media session cancelled by auth supervisor");
+                debug!(viewer_id = %viewer_id, "media session cancelled (auth revoke or pair teardown)");
                 break;
             }
             _ = async {
@@ -1770,7 +1770,17 @@ async fn run_media_session(
                         let mut ctrl = controller.lock().await;
                         ctrl.record_control_write(byte_len, write_duration);
                     }
-                    Some(MediaWriterEvent::TransportFailed(_)) | None => {
+                    Some(MediaWriterEvent::TransportFailed(reason)) => {
+                        // "cancelled": the session token already ended the pair; any other reason is a real write failure.
+                        if reason == "cancelled" {
+                            debug!(viewer_id = %viewer_id, "media writer stopped by session cancellation");
+                        } else {
+                            warn!(viewer_id = %viewer_id, reason, "media writer transport failed; closing media session");
+                        }
+                        break;
+                    }
+                    None => {
+                        debug!(viewer_id = %viewer_id, "media writer ended; closing media session");
                         break;
                     }
                 }
@@ -2392,7 +2402,7 @@ async fn run_control_session(
         tokio::select! {
             biased;
             _ = cancel_token.cancelled() => {
-                debug!(viewer_id = %viewer_id, "control session cancelled by auth supervisor");
+                debug!(viewer_id = %viewer_id, "control session cancelled (auth revoke or pair teardown)");
                 break;
             }
             _ = async {
