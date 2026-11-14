@@ -196,6 +196,58 @@ describe("input-controller", () => {
       expect(controller.mapClientToFractions(320, 240, canvas)).toBeNull();
     });
 
+    it("untrusted frame is display-only for every entry point and releases held input once, paired", () => {
+      const evt = { currentTarget: canvas, clientX: 320, clientY: 240, button: 0, deltaX: 0, deltaY: 10,
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false } as unknown as PointerEvent & WheelEvent;
+      const key = { key: "Enter", code: "Enter", altKey: false, ctrlKey: false, metaKey: false, shiftKey: false } as KeyboardEvent;
+      controller.handlePointerDown(evt);
+      controller.handlePointerMove(evt);
+      controller.handleKeyDown(key);
+      socket.sentMessages.length = 0;
+
+      drawnRect = { ...drawnRect!, inputTrusted: false };
+      expect(controller.handleKeyUp(key)).toBe(false);
+      expect(controller.handleKeyDown(key)).toBe(false);
+      expect(controller.handleInsertText("x")).toBe(false);
+      expect(controller.handleWheel(evt)).toBe(false);
+      expect(controller.handlePointerDown(evt)).toBe(false);
+      expect(controller.handlePointerMove(evt)).toBe(false);
+      expect(controller.handlePointerUp(evt)).toBe(false);
+      expect(controller.handlePointerCancel()).toBe(false);
+      expect(socket.sentMessages.map((m) => (JSON.parse(m) as InputMessage).event.kind)).toEqual(["keyUp", "pointerCancel"]);
+      expect(controller.getHeldKeys().size).toBe(0);
+      expect(controller.getHeldButtons().size).toBe(0);
+
+      drawnRect = { ...drawnRect!, inputTrusted: true };
+      expect(controller.handleInsertText("x")).toBe(true);
+    });
+
+    it.each(["pointerDown", "pointerMove", "pointerUp", "pointerCancel", "wheel", "keyDown", "keyUp", "insertText"])(
+      "first %s after trust loss alone releases held input and sends nothing else",
+      (entry) => {
+        const evt = { currentTarget: canvas, clientX: 320, clientY: 240, button: 0, deltaX: 0, deltaY: 10,
+          altKey: false, ctrlKey: false, metaKey: false, shiftKey: false } as unknown as PointerEvent & WheelEvent;
+        const key = { key: "Enter", code: "Enter", altKey: false, ctrlKey: false, metaKey: false, shiftKey: false } as KeyboardEvent;
+        controller.handlePointerDown(evt);
+        controller.handlePointerMove(evt);
+        controller.handleKeyDown(key);
+        socket.sentMessages.length = 0;
+        drawnRect = { ...drawnRect!, inputTrusted: false };
+        const calls: Record<string, () => boolean> = {
+          pointerDown: () => controller.handlePointerDown(evt),
+          pointerMove: () => controller.handlePointerMove(evt),
+          pointerUp: () => controller.handlePointerUp(evt),
+          pointerCancel: () => controller.handlePointerCancel(),
+          wheel: () => controller.handleWheel(evt),
+          keyDown: () => controller.handleKeyDown(key),
+          keyUp: () => controller.handleKeyUp(key),
+          insertText: () => controller.handleInsertText("x"),
+        };
+        expect(calls[entry]()).toBe(false);
+        expect(socket.sentMessages.map((m) => (JSON.parse(m) as InputMessage).event.kind)).toEqual(["keyUp", "pointerCancel"]);
+      },
+    );
+
     it("rejects coordinates if displayed viewportEpoch is stale", () => {
       drawnRect = { ...drawnRect!, viewportEpoch: "0" };
       expect(controller.mapClientToFractions(320, 240, canvas)).toBeNull();
@@ -367,6 +419,42 @@ describe("input-controller", () => {
       const keyMsg = JSON.parse(socket.sentMessages[1]) as InputMessage;
       expect(moveMsg.event.kind).toBe("pointerMove");
       expect(keyMsg.event.kind).toBe("keyDown");
+    });
+  });
+
+  describe("deferred flush after trust loss", () => {
+    afterEach(() => { controller.dispose(); vi.useRealTimers(); });
+    const ptr = (clientX: number, clientY: number) =>
+      ({ currentTarget: canvas, clientX, clientY, button: 0, deltaX: 0, deltaY: 10,
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false }) as unknown as PointerEvent & WheelEvent;
+    const kinds = () => socket.sentMessages.map((m) => (JSON.parse(m) as InputMessage).event.kind);
+
+    it("drops a microtask-queued move when the frame turns untrusted before the flush", async () => {
+      expect(controller.handlePointerMove(ptr(300, 240))).toBe(true);
+      drawnRect = { ...drawnRect!, inputTrusted: false };
+      await Promise.resolve();
+      expect(socket.sentMessages).toEqual([]);
+    });
+
+    it("drops a timer-queued wheel on trust loss, releases held input once, and input works after trust returns", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      controller.handleKeyDown(new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft" }));
+      controller.handlePointerMove(ptr(300, 240));
+      await vi.advanceTimersByTimeAsync(0); // first move flushes immediately, arming the 25 ms cadence
+      socket.sentMessages.length = 0;
+      expect(controller.handleWheel(ptr(320, 240))).toBe(true); // queued behind the cadence timer
+      expect(socket.sentMessages).toEqual([]);
+      drawnRect = { ...drawnRect!, inputTrusted: false };
+      await vi.advanceTimersByTimeAsync(100);
+      expect(kinds()).toEqual(["keyUp"]); // paired release only; the wheel never reaches the wire
+      expect(controller.getHeldKeys().size).toBe(0);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(kinds()).toEqual(["keyUp"]);
+
+      drawnRect = { ...drawnRect!, inputTrusted: true };
+      expect(controller.handleWheel(ptr(320, 240))).toBe(true);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(kinds()).toEqual(["keyUp", "wheel"]);
     });
   });
 
@@ -584,6 +672,55 @@ describe("input-controller", () => {
       expect(controller.getHeldKeys().size).toBe(0);
       expect(cancelled).toHaveBeenCalledOnce();
       expect(complete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("control handoff tail after trust loss", () => {
+    beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] }));
+    afterEach(() => { controller.dispose(); vi.useRealTimers(); });
+    const kinds = () => socket.sentMessages.map((m) => (JSON.parse(m) as InputMessage).event.kind);
+    const queueTail = (onCancel = vi.fn(), onComplete = vi.fn()) => {
+      leaseToken = null;
+      const handoff = controller.beginControlHandoff(() => true, onCancel);
+      controller.handleKeyDown(new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft" }));
+      controller.handleInsertText("tail-1");
+      controller.handleInsertText("tail-2");
+      leaseToken = "handoff-lease";
+      expect(controller.completeControlHandoff(handoff, onComplete)).toBe(true);
+      return { onCancel, onComplete };
+    };
+
+    it("sends no further typeahead once the frame turns untrusted mid-tail; cancels and releases the dispatched key", async () => {
+      const { onCancel, onComplete } = queueTail();
+      expect(kinds()).toEqual(["keyDown"]); // first record drains synchronously
+      drawnRect = { ...drawnRect!, inputTrusted: false };
+      await vi.advanceTimersByTimeAsync(200);
+      expect(kinds()).toEqual(["keyDown", "keyUp"]);
+      expect(controller.getHeldKeys().size).toBe(0);
+      expect(onCancel).toHaveBeenCalledOnce();
+      expect(onComplete).not.toHaveBeenCalled();
+    });
+
+    it("refuses to start draining when already untrusted, so the host cancels the gesture", () => {
+      leaseToken = null;
+      const onCancel = vi.fn();
+      const handoff = controller.beginControlHandoff(() => true, onCancel);
+      controller.handleInsertText("typed-while-trusted");
+      leaseToken = "handoff-lease";
+      drawnRect = { ...drawnRect!, inputTrusted: false };
+      expect(controller.completeControlHandoff(handoff)).toBe(false);
+      expect(socket.sentMessages).toEqual([]);
+      expect(onCancel).toHaveBeenCalledOnce();
+    });
+
+    it("typeahead works normally again after trust returns", async () => {
+      queueTail();
+      drawnRect = { ...drawnRect!, inputTrusted: false };
+      await vi.advanceTimersByTimeAsync(200);
+      socket.sentMessages.length = 0;
+      drawnRect = { ...drawnRect!, inputTrusted: true };
+      expect(controller.handleInsertText("fresh")).toBe(true);
+      expect(socket.sentMessages.map((m) => (JSON.parse(m) as InputMessage).event)).toEqual([{ kind: "insertText", text: "fresh" }]);
     });
   });
 

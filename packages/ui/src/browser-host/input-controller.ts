@@ -192,7 +192,8 @@ export class BrowserInputController {
   private drainControlHandoff(handoff: ControlHandoff): boolean {
     if (this.handoff !== handoff) return false;
     handoff.timer = undefined;
-    if (this.isDisposed || !handoff.isCurrent()) {
+    // Typeahead queued while trusted must not replay after the frame became display-only.
+    if (this.isDisposed || this.isDisplayOnly() || !handoff.isCurrent()) {
       this.cancelControlHandoff();
       return false;
     }
@@ -286,10 +287,24 @@ export class BrowserInputController {
     return { u, v };
   }
 
+  /**
+   * Untrusted (downscaled/unverified) frames are display-only: no entry point may dispatch.
+   * Any input arriving while display-only runs the existing paired release of held input
+   * (keyUp / pointerCancel) and drops the stale pointer position, so nothing stays stuck
+   * across a trusted -> untrusted transition and no later event can reuse old coordinates.
+   */
+  private isDisplayOnly(): boolean {
+    const drawn = this.getDrawnRect();
+    if (!drawn || drawn.inputTrusted) return false;
+    this.lastPointerCoords = null;
+    this.releaseAllHeldInput();
+    return true;
+  }
+
   public handlePointerDown(
     e: CanvasPointerInput,
   ): boolean {
-    if (this.isDisposed) return false;
+    if (this.isDisposed || this.isDisplayOnly()) return false;
     const canvas = e.currentTarget as HTMLCanvasElement;
     const coords = this.mapClientToFractions(e.clientX, e.clientY, canvas);
     if (!coords) return false;
@@ -318,7 +333,7 @@ export class BrowserInputController {
   public handlePointerUp(
     e: CanvasPointerInput,
   ): boolean {
-    if (this.isDisposed) return false;
+    if (this.isDisposed || this.isDisplayOnly()) return false;
     const canvas = e.currentTarget as HTMLCanvasElement;
     const coords =
       this.mapClientToFractions(e.clientX, e.clientY, canvas) ??
@@ -343,7 +358,7 @@ export class BrowserInputController {
   public handlePointerMove(
     e: CanvasPointerInput,
   ): boolean {
-    if (this.isDisposed) return false;
+    if (this.isDisposed || this.isDisplayOnly()) return false;
     const canvas = e.currentTarget as HTMLCanvasElement;
     const coords = this.mapClientToFractions(e.clientX, e.clientY, canvas);
     if (!coords) return false;
@@ -360,7 +375,7 @@ export class BrowserInputController {
   }
 
   public handlePointerCancel(): boolean {
-    if (this.isDisposed) return false;
+    if (this.isDisposed || this.isDisplayOnly()) return false;
     this.heldButtons.clear();
     this.flushCoalescable(true);
     return this.sendInputEvent({
@@ -370,7 +385,7 @@ export class BrowserInputController {
   public handleWheel(
     e: WheelEvent | React.WheelEvent<HTMLCanvasElement>,
   ): boolean {
-    if (this.isDisposed) return false;
+    if (this.isDisposed || this.isDisplayOnly()) return false;
     const canvas = e.currentTarget as HTMLCanvasElement;
     const coords =
       this.mapClientToFractions(e.clientX, e.clientY, canvas) ??
@@ -397,7 +412,7 @@ export class BrowserInputController {
   public handleKeyDown(
     e: KeyboardEvent | React.KeyboardEvent,
   ): boolean {
-    if (this.isDisposed) return false;
+    if (this.isDisposed || this.isDisplayOnly()) return false;
 
     // Avoid duplicate text commit: printable text without modifiers is handled by TextInputProxy insertText
     const isControlOrMeta = e.ctrlKey || e.metaKey || e.altKey;
@@ -426,7 +441,7 @@ export class BrowserInputController {
   public handleKeyUp(
     e: KeyboardEvent | React.KeyboardEvent,
   ): boolean {
-    if (this.isDisposed) return false;
+    if (this.isDisposed || this.isDisplayOnly()) return false;
     const codeKey = e.code || e.key;
     return this.handleKeyboardInput({
       kind: "keyUp",
@@ -437,7 +452,7 @@ export class BrowserInputController {
   }
 
   public handleInsertText(rawText: string): boolean {
-    if (this.isDisposed) return false;
+    if (this.isDisposed || this.isDisplayOnly()) return false;
     if (!rawText) return false;
 
     const encoder = new TextEncoder();
@@ -567,6 +582,8 @@ export class BrowserInputController {
   private flushCoalescable(isBarrier = false): void {
     this.cancelCoalescableTimer();
     if (!this.pendingCoalescable) return;
+    // Queued while trusted; the frame may have become display-only before this deferred flush.
+    if (this.isDisplayOnly()) return;
     const msg = this.pendingCoalescable;
 
     const socket = this.getControlSocket();
