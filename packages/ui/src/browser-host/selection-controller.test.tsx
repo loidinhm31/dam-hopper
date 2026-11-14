@@ -4,6 +4,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionRef } from "@/api/ownership.js";
+import { BrowserHostClientError } from "@/api/browser-host-client.js";
 import {
   useHostBrowserSelection,
   type HostBrowserSelectionController,
@@ -23,7 +24,15 @@ vi.mock("@/api/connections.js", () => ({
 }));
 
 vi.mock("@/api/browser-host-client.js", () => ({
-  BrowserHostClientError: class extends Error {},
+  BrowserHostClientError: class extends Error {
+    public readonly kind?: string;
+    public readonly status?: number;
+    constructor(message: string, kind?: string, status?: number) {
+      super(message);
+      this.kind = kind;
+      this.status = status;
+    }
+  },
   requestBrowserHostJson: (
     owner: ConnectionRef,
     path: string,
@@ -183,5 +192,59 @@ describe("useHostBrowserSelection single-flight polling & visibility gating", ()
       await vi.advanceTimersByTimeAsync(50);
     });
     expect(pollCalls).toBe(3);
+  });
+
+  it("retries cancelHostBrowserSelection after syncing navigationRevision on 409 conflict", async () => {
+    const cancelRevs: string[] = [];
+    requestBrowserHostJsonMock.mockImplementation(
+      (_owner: ConnectionRef, path: string, init?: RequestInit) => {
+        if (path.endsWith("/selection/start")) {
+          return Promise.resolve({
+            selectionActive: true,
+            selectionRevision: "1",
+            navigationRevision: "1",
+          });
+        }
+        if (path.endsWith("/selection/cancel")) {
+          const body = init?.body as { navigationRevision?: string } | undefined;
+          const rev = String(body?.navigationRevision ?? "");
+          cancelRevs.push(rev);
+          if (rev === "1") {
+            return Promise.reject(
+              new BrowserHostClientError("stale navigationRevision", "conflict", 409),
+            );
+          }
+          return Promise.resolve({
+            selectionActive: false,
+            selectionRevision: "2",
+            navigationRevision: rev,
+          });
+        }
+        if (path.endsWith("/sess-1")) {
+          return Promise.resolve({
+            sessionId: "sess-1",
+            url: "https://example.com/updated",
+            navigationRevision: "2",
+            status: "running",
+            selection: { active: true, selectionRevision: "1", preview: null },
+          });
+        }
+        return Promise.resolve({});
+      },
+    );
+
+    await act(async () => {
+      root!.render(createElement(Harness, { sessionId: "sess-1", navRev: "1", pollIntervalMs: 5000 }));
+    });
+    await act(async () => {
+      await latestController!.startSelection();
+    });
+    expect(latestController!.selectionActive).toBe(true);
+
+    await act(async () => {
+      await latestController!.cancelSelection();
+    });
+    expect(latestController!.selectionActive).toBe(false);
+    expect(cancelRevs).toEqual(["1", "2"]);
   });
 });

@@ -764,7 +764,7 @@ export function useHostBrowserSelection({
     setPreparedArtifact(null);
     setCapturedTarget(null);
     setInserted(false);
-    setPending(false);
+    setPending(Boolean(sessionId && leaseToken && isCurrentConnection(owner)));
     setError(null);
     setNotice(null);
 
@@ -774,8 +774,34 @@ export function useHostBrowserSelection({
           leaseToken,
           navigationRevision,
         });
-      } catch {
-        // best effort cancel
+      } catch (firstErr) {
+        if (
+          firstErr instanceof BrowserHostClientError &&
+          (firstErr.status === 409 || /stale navigationRevision/i.test(firstErr.message))
+        ) {
+          try {
+            const synced = await getHostBrowserSelectionState(owner, sessionId);
+            if (mountedRef.current && isCurrentConnection(owner)) {
+              const nextNavRev = String(synced.navigationRevision);
+              skipResetForNavRef.current = {
+                ownerProfileId: owner.profileId,
+                ownerGeneration: owner.generation,
+                sessionId,
+                navRev: nextNavRev,
+              };
+              latestContextRef.current.onNavigationSync?.({
+                navigationRevision: nextNavRev,
+                url: synced.url,
+              });
+              await cancelHostBrowserSelection(owner, sessionId, {
+                leaseToken,
+                navigationRevision: nextNavRev,
+              });
+            }
+          } catch {
+            // best effort cancel
+          }
+        }
       }
     }
     if (mountedRef.current && epochRef.current === captureEpoch) {

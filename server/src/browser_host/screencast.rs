@@ -1296,6 +1296,10 @@ impl ScreencastProducer {
         &self.browser_incarnation
     }
 
+    pub fn target_id(&self) -> &str {
+        &self.target_id
+    }
+
     /// Advancing viewport epoch (e.g. on client resize or viewport change).
     /// Contract: viewportEpoch advances BEFORE commands and publishing.
     pub async fn retire_producer_on_fatal_error(&self) {

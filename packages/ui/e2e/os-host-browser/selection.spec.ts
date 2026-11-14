@@ -217,7 +217,7 @@ test.describe("Host Browser Managed CDP Selection & Atomic Terminal Handoff E2E"
   let authToken = "";
   let username = "admin";
   let browserExec: string | undefined;
-
+  let btnClickHits = 0;
   test.beforeAll(async () => {
     test.setTimeout(660_000);
     browserExec = findBrowserExecutable();
@@ -234,7 +234,51 @@ test.describe("Host Browser Managed CDP Selection & Atomic Terminal Handoff E2E"
 
     // Start local target HTML page with visible button and secret password field
     const targetPort = await getFreePort();
-    targetHttpServer = http.createServer((_req, res) => {
+    targetHttpServer = http.createServer((req, res) => {
+      const urlPath = req.url ?? "/target";
+      if (urlPath.startsWith("/btn-clicked")) {
+        btnClickHits += 1;
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      if (urlPath.startsWith("/subframe")) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(`<!doctype html><html><body><script>history.replaceState(null, "", "/subframe?v=1");</script></body></html>`);
+        return;
+      }
+      if (urlPath.startsWith("/interaction-audio")) {
+        setTimeout(() => {
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(`<!doctype html>
+<html>
+  <head><title>Interaction & Audio Page</title></head>
+  <body style="margin:0;padding:40px;background:#ffffff;font-family:monospace;">
+    <p id="selectable-copy" style="margin:0 0 24px 0;font-size:28px;line-height:40px;width:560px;user-select:text;">SelectThisExactPhraseWithMouse</p>
+    <button
+      id="cancel-verify-btn"
+      style="display:block;width:300px;height:100px;font-size:24px;background:#16a34a;color:#fff;border:none;border-radius:8px;"
+      onclick="window.__clicks=(window.__clicks||0)+1;this.textContent='Clicks: '+window.__clicks;fetch('/btn-clicked');"
+    >Clicks: 0</button>
+    <video id="auto-video" autoplay playsinline style="width:120px;height:60px;"></video>
+    <iframe src="/subframe" style="width:1px;height:1px;border:0;"></iframe>
+    <script>
+      window.__clicks = 0;
+      const ac = new AudioContext();
+      const osc = ac.createOscillator();
+      osc.frequency.value = 440;
+      const dst = ac.createMediaStreamDestination();
+      osc.connect(dst);
+      osc.start();
+      const v = document.getElementById("auto-video");
+      v.srcObject = dst.stream;
+      v.play().catch(() => {});
+    </script>
+  </body>
+</html>`);
+        }, 350);
+        return;
+      }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(`<!doctype html>
 <html>
@@ -646,6 +690,142 @@ type = "custom"
         )
         .toContain("; PNG ");
       expect(matchedBuffer).not.toContain("TOP_SECRET_PASSWORD_123");
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("supports mouse-drag text selection, deactivates Select Element on Cancel Select, and streams audio on first page open", async ({
+    browser,
+  }) => {
+    const profileId = randomUUID();
+    const storageState = createBrowserStorageState({
+      appOrigin,
+      profileId,
+      token: authToken,
+      username,
+    });
+    const context = await browser.newContext({
+      storageState,
+      baseURL: appOrigin,
+      permissions: ["clipboard-read", "clipboard-write"],
+    });
+    const page = await context.newPage();
+    const audioChunks: Array<{ docEpoch: string; audioSeq: string }> = [];
+    page.on("websocket", (ws) => {
+      if (new URL(ws.url()).pathname === "/api/browser/media") {
+        ws.on("framereceived", ({ payload }) => {
+          if (typeof payload !== "string") return;
+          try {
+            const msg = JSON.parse(payload) as { kind?: string; docEpoch?: string; audioSeq?: string };
+            if (msg.kind === "audioChunk") {
+              audioChunks.push({ docEpoch: String(msg.docEpoch ?? ""), audioSeq: String(msg.audioSeq ?? "") });
+            }
+          } catch {
+            // ignore non-json
+          }
+        });
+      }
+    });
+
+    try {
+      const interactionUrl = targetPageUrl.replace(/\/target$/, "/interaction-audio");
+      await page.goto(`${appOrigin}/`);
+      await expect(page.locator("[data-os-shell='true']").first()).toBeVisible({ timeout: 20_000 });
+
+      // Open Browser window from Applications Launcher
+      await page.locator('[data-testid="dock-apps-trigger"]').first().click();
+      await page.locator('[data-testid="app-card-browser"]').first().click();
+      const urlInput = page
+        .locator('[data-testid="browser-new-tab-url-input"], [data-testid="browser-address-input"]')
+        .first();
+      await expect(urlInput).toBeVisible({ timeout: 15_000 });
+      await urlInput.fill(interactionUrl);
+      const openBtn = page.locator('[data-testid="browser-new-tab-open-btn"]').first();
+      if (await openBtn.isVisible()) {
+        await openBtn.click();
+      } else {
+        await urlInput.press("Enter");
+      }
+
+      const browserSlot = page.locator("[data-os-browser-slot]").first();
+      await expect(browserSlot).toBeVisible({ timeout: 15_000 });
+      const canvas = browserSlot.locator("canvas").first();
+      await expect(canvas).toBeVisible({ timeout: 15_000 });
+      await expect
+        .poll(
+          async () =>
+            canvas.evaluate((el) => {
+              const c = el as HTMLCanvasElement;
+              return c.width > 0 && c.height > 0;
+            }),
+          { timeout: 15_000 },
+        )
+        .toBe(true);
+
+      // 3) Verify audio chunks arrive on first page open (with docEpoch "1", slow initial response, and iframe history.replaceState)
+      await expect
+        .poll(() => audioChunks.some((c) => c.docEpoch === "1"), { timeout: 15_000 })
+        .toBe(true);
+
+      // Open Tools & acquire control
+      await page.locator('[data-testid="browser-tools-toggle-btn"]').first().click();
+      const takeControlBtn = page.locator('[data-testid="browser-take-control-btn"]').first();
+      await expect(takeControlBtn).toBeEnabled({ timeout: 15_000 });
+      await takeControlBtn.click();
+      await expect(page.locator('[data-testid="browser-controller-badge"]').first()).toBeVisible({
+        timeout: 10_000,
+      });
+
+      // 1) Drag mouse across #selectable-copy text on streamed canvas and verify selected text via Copy Selection
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+      const scale = Math.min(box!.width / 1280, box!.height / 800);
+      const imgLeft = box!.x + (box!.width - 1280 * scale) / 2;
+      const imgTop = box!.y + (box!.height - 800 * scale) / 2;
+
+      const dragStartX = imgLeft + 38 * scale;
+      const dragEndX = imgLeft + 560 * scale;
+      const dragY = imgTop + 60 * scale;
+      await page.mouse.move(dragStartX, dragY);
+      await page.mouse.down();
+      await page.mouse.move(dragEndX, dragY, { steps: 10 });
+      await page.mouse.up();
+
+      const copyBtn = page.locator('[data-testid="browser-copy-selection-btn"]').first();
+      await expect(copyBtn).toBeEnabled({ timeout: 10_000 });
+      await copyBtn.click();
+      const copyStatus = page.locator('[data-testid="browser-copy-selection-status"]').first();
+      await expect(copyStatus).toContainText("Copied", { timeout: 10_000 });
+      const copiedText = await page.evaluate(() => navigator.clipboard.readText());
+      expect(copiedText.length).toBeGreaterThan(0);
+      expect("SelectThisExactPhraseWithMouse").toContain(copiedText.trim());
+      const selectBtn = page.locator('[data-testid="browser-select-element-btn"]').first();
+      const startResPromise = page.waitForResponse(
+        (r) => r.url().includes("/selection/start") && r.request().method() === "POST",
+      );
+      await selectBtn.click();
+      const startRes = await startResPromise;
+      expect(startRes.status()).toBe(200);
+      await expect(browserSlot).toHaveAttribute("data-selection-active", "true", { timeout: 10_000 });
+      await expect(selectBtn).toHaveText("Cancel Select");
+
+      const cancelResPromise = page.waitForResponse(
+        (r) => r.url().includes("/selection/cancel") && r.request().method() === "POST",
+      );
+      await selectBtn.click();
+      const cancelRes = await cancelResPromise;
+      expect(cancelRes.status()).toBe(200);
+      await expect(browserSlot).toHaveAttribute("data-selection-active", "false", { timeout: 10_000 });
+      await expect(selectBtn).toHaveText("Select Element");
+
+      // Click #cancel-verify-btn (x=40..340, y=104..204) -> must hit /btn-clicked on remote page and NOT open selection preview
+      btnClickHits = 0;
+      const btnX = imgLeft + (40 + 150) * scale;
+      const btnY = imgTop + (104 + 50) * scale;
+      await page.mouse.click(btnX, btnY);
+      await expect.poll(() => btnClickHits, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+      await expect(page.locator('[data-testid="browser-selection-preview-card"]')).toHaveCount(0);
     } finally {
       await context.close();
     }

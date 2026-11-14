@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 
 use super::input::{InputError, InputEvent, InputMessage, SessionInputManager};
 use super::input_native_release::NativeInputTarget;
-use super::media::{dispatch_input_event_to_cdp, get_producer};
+use super::media::{dispatch_input_event_to_cdp_with_mouse, get_producer};
 use super::protocol::ServerControlEvent;
 
 /// What the control socket must do after a frame.
@@ -129,8 +129,18 @@ pub async fn handle_control_text(ctx: &ControlInputContext<'_>, text: &str) -> C
         }
         let geometry = producer.geometry().await;
         debug!(session_id = %ctx.session_id, kind, "Dispatching CDP input event");
-        if let Err(err) =
-            dispatch_input_event_to_cdp(&producer.cdp_client, &page_session_id, &geometry, &msg.event).await
+        let mouse_ctx = ctx
+            .input_manager
+            .prepare_mouse_dispatch(&msg.event, &geometry)
+            .await;
+        if let Err(err) = dispatch_input_event_to_cdp_with_mouse(
+            &producer.cdp_client,
+            &page_session_id,
+            &geometry,
+            &msg.event,
+            mouse_ctx,
+        )
+        .await
         {
             warn!(session_id = %ctx.session_id, kind, error = %err, "CDP input dispatch failed");
         }

@@ -207,12 +207,14 @@ pub enum CdpLifecycleEvent {
     FrameNavigated {
         session_id: Option<String>,
         is_main_frame: bool,
+        frame_id: Option<String>,
         url: Option<String>,
         loader_id: Option<String>,
         _reservation: Option<Arc<MemoryReservation>>,
     },
     NavigatedWithinDocument {
         session_id: Option<String>,
+        frame_id: Option<String>,
         url: Option<String>,
         _reservation: Option<Arc<MemoryReservation>>,
     },
@@ -1312,6 +1314,11 @@ where
                     "Page.frameNavigated" => {
                         let is_main_frame =
                             params.and_then(|p| p.pointer("/frame/parentId")).is_none();
+                        let frame_id = params
+                            .and_then(|p| p.pointer("/frame/id"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty() && id.len() <= MAX_EVENT_SESSION_ID_BYTES)
+                            .map(str::to_string);
                         let url = params
                             .and_then(|p| p.pointer("/frame/url"))
                             .and_then(Value::as_str)
@@ -1330,12 +1337,14 @@ where
                         );
                         let bytes = std::mem::size_of::<CdpLifecycleEvent>()
                             + session_id.as_ref().map_or(0, String::len)
+                            + frame_id.as_ref().map_or(0, String::len)
                             + url.as_ref().map_or(0, String::len)
                             + loader_id.as_ref().map_or(0, String::len);
                         match self.memory_controller.try_reserve(bytes) {
                             Ok(res) => CdpLifecycleEvent::FrameNavigated {
                                 session_id,
                                 is_main_frame,
+                                frame_id,
                                 url,
                                 loader_id,
                                 _reservation: Some(Arc::new(res)),
@@ -1366,10 +1375,12 @@ where
                         );
                         let bytes = std::mem::size_of::<CdpLifecycleEvent>()
                             + session_id.as_ref().map_or(0, String::len)
+                            + frame_id.map_or(0, str::len)
                             + url.as_ref().map_or(0, String::len);
                         match self.memory_controller.try_reserve(bytes) {
                             Ok(res) => CdpLifecycleEvent::NavigatedWithinDocument {
                                 session_id,
+                                frame_id: frame_id.map(str::to_string),
                                 url,
                                 _reservation: Some(Arc::new(res)),
                             },

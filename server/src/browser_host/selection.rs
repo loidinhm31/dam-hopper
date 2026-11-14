@@ -229,8 +229,8 @@ struct NavWatcher {
     token: CancellationToken,
     cdp: std::sync::Weak<CdpClient>,
     page_sid: String,
+    main_frame_id: Arc<StdMutex<Option<String>>>,
 }
-
 static NAV_WATCHER_SEQ: AtomicU64 = AtomicU64::new(1);
 static PAGE_GAP_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -353,7 +353,16 @@ impl PageObservationGap {
     /// leaves observation fail-closed.
     pub async fn finish(self, state: &AppState, cdp: &Arc<CdpClient>, page_sid: &str) -> bool {
         if !self.invalidated
-            || !install_navigation_watcher(state, &self.session_id, cdp, page_sid, Some(self.generation)).await
+            || !install_navigation_watcher(
+                state,
+                &self.session_id,
+                cdp,
+                page_sid,
+                None,
+                None,
+                Some(self.generation),
+            )
+            .await
         {
             return false;
         }
@@ -1473,14 +1482,20 @@ async fn current_selection_revision_and_lease(session_id: &str) -> Option<(u64, 
 async fn disable_overlay_inspect_best_effort(session_id: &str) {
     if let Some(producer) = get_producer(session_id).await {
         if let Ok(page_sid) = producer.ensure_page_session().await {
-            let _ = producer
+            if let Err(err) = producer
                 .cdp_client
                 .send_command(
                     "Overlay.setInspectMode",
-                    Some(json!({ "mode": "none" })),
+                    Some(json!({
+                        "mode": "none",
+                        "highlightConfig": default_highlight_config(),
+                    })),
                     Some(&page_sid),
                 )
-                .await;
+                .await
+            {
+                warn!(session_id, error = %err, "Failed to disable CDP overlay inspect mode");
+            }
             let _ = producer
                 .cdp_client
                 .send_command("Overlay.hideHighlight", None, Some(&page_sid))
@@ -1722,7 +1737,27 @@ pub(crate) async fn ensure_session_navigation_watcher(
     cdp: &Arc<CdpClient>,
     page_sid: &str,
 ) -> bool {
-    install_navigation_watcher(state, session_id, cdp, page_sid, None).await
+    install_navigation_watcher(state, session_id, cdp, page_sid, None, None, None).await
+}
+
+pub(crate) async fn ensure_session_navigation_watcher_with_initial(
+    state: &AppState,
+    session_id: &str,
+    cdp: &Arc<CdpClient>,
+    page_sid: &str,
+    main_frame_id: Option<&str>,
+    ignore_initial_loader_id: Option<&str>,
+) -> bool {
+    install_navigation_watcher(
+        state,
+        session_id,
+        cdp,
+        page_sid,
+        main_frame_id,
+        ignore_initial_loader_id,
+        None,
+    )
+    .await
 }
 
 async fn install_navigation_watcher(
@@ -1730,6 +1765,8 @@ async fn install_navigation_watcher(
     session_id: &str,
     cdp: &Arc<CdpClient>,
     page_sid: &str,
+    main_frame_id: Option<&str>,
+    ignore_initial_loader_id: Option<&str>,
     gap: Option<u64>,
 ) -> bool {
     let generation = {
@@ -1763,6 +1800,7 @@ async fn install_navigation_watcher(
 
     let cancel_token = CancellationToken::new();
     let watcher_id = NAV_WATCHER_SEQ.fetch_add(1, Ordering::Relaxed);
+    let shared_main_frame_id = Arc::new(StdMutex::new(main_frame_id.map(str::to_string)));
     {
         let observations = NAVIGATION_OBSERVATIONS.lock().unwrap();
         let Some(entry) = observations.get(session_id) else {
@@ -1785,6 +1823,7 @@ async fn install_navigation_watcher(
                 token: cancel_token.clone(),
                 cdp: Arc::downgrade(cdp),
                 page_sid: page_sid.to_string(),
+                main_frame_id: shared_main_frame_id.clone(),
             },
         );
     }
@@ -1792,7 +1831,7 @@ async fn install_navigation_watcher(
     let state_clone = state.clone();
     let sid_owned = session_id.to_string();
     let page_sid_owned = page_sid.to_string();
-
+    let mut pending_initial_loader_id = ignore_initial_loader_id.map(str::to_string);
     tokio::spawn(async move {
         let _registration = NavWatcherRegistration {
             session_id: sid_owned.clone(),
@@ -1825,17 +1864,37 @@ async fn install_navigation_watcher(
                             warn!(session_id = %sid_owned, "Lifecycle event budget overflowed; invalidating selection and resuming observation");
                             record_navigation_queue_cleanup(&state_clone, &sid_owned, None).await;
                         }
-                        CdpLifecycleEvent::FrameNavigated { session_id: evt_sid, is_main_frame, url, .. } => {
+                        CdpLifecycleEvent::FrameNavigated { session_id: evt_sid, is_main_frame, frame_id, url, loader_id, .. } => {
                             if evt_sid.as_deref() != Some(page_sid_owned.as_str()) {
                                 continue;
                             }
                             if *is_main_frame {
+                                if let Some(fid) = frame_id {
+                                    let mut mf = shared_main_frame_id.lock().unwrap();
+                                    if mf.is_none() {
+                                        *mf = Some(fid.clone());
+                                    }
+                                }
+                                if pending_initial_loader_id
+                                    .as_deref()
+                                    .is_some_and(|init_lid| loader_id.as_deref() == Some(init_lid))
+                                {
+                                    pending_initial_loader_id = None;
+                                    continue;
+                                }
+                                pending_initial_loader_id = None;
                                 record_navigation_queue_cleanup(&state_clone, &sid_owned, url.as_deref()).await;
                             }
                         }
-                        CdpLifecycleEvent::NavigatedWithinDocument { session_id: evt_sid, url, .. } => {
+                        CdpLifecycleEvent::NavigatedWithinDocument { session_id: evt_sid, frame_id, url, .. } => {
                             if evt_sid.as_deref() != Some(page_sid_owned.as_str()) {
                                 continue;
+                            }
+                            let known_main = shared_main_frame_id.lock().unwrap().clone();
+                            if let (Some(main_id), Some(fid)) = (known_main.as_deref(), frame_id.as_deref()) {
+                                if fid != main_id {
+                                    continue;
+                                }
                             }
                             record_navigation_queue_cleanup(&state_clone, &sid_owned, url.as_deref()).await;
                         }
@@ -1957,7 +2016,10 @@ async fn run_selection_cdp_observer(
                     let _ = cdp
                         .send_command(
                             "Overlay.setInspectMode",
-                            Some(json!({ "mode": "none" })),
+                            Some(json!({
+                                "mode": "none",
+                                "highlightConfig": default_highlight_config(),
+                            })),
                             Some(&page_sid),
                         )
                         .await;
@@ -1978,7 +2040,10 @@ async fn run_selection_cdp_observer(
                     let _ = cdp
                         .send_command(
                             "Overlay.setInspectMode",
-                            Some(json!({ "mode": "none" })),
+                            Some(json!({
+                                "mode": "none",
+                                "highlightConfig": default_highlight_config(),
+                            })),
                             Some(&page_sid),
                         )
                         .await;
@@ -2000,10 +2065,21 @@ async fn run_selection_cdp_observer(
                         record_navigation_fenced(&state, &session_id, None).await;
                         break;
                     }
-                    CdpLifecycleEvent::FrameNavigated { session_id: evt_sid, is_main_frame: true, .. }
-                    | CdpLifecycleEvent::NavigatedWithinDocument { session_id: evt_sid, .. } => {
+                    CdpLifecycleEvent::FrameNavigated { session_id: evt_sid, is_main_frame: true, .. } => {
                         if evt_sid.as_deref() == Some(page_sid.as_str()) {
                             break;
+                        }
+                    }
+                    CdpLifecycleEvent::NavigatedWithinDocument { session_id: evt_sid, frame_id, .. } => {
+                        if evt_sid.as_deref() == Some(page_sid.as_str()) {
+                            let known_main = GLOBAL_NAV_WATCHERS
+                                .lock()
+                                .unwrap()
+                                .get(&session_id)
+                                .and_then(|w| w.main_frame_id.lock().unwrap().clone());
+                            if known_main.as_deref().is_none_or(|main_id| frame_id.as_deref().is_none_or(|fid| fid == main_id)) {
+                                break;
+                            }
                         }
                     }
                     CdpLifecycleEvent::FrameNavigated { is_main_frame: false, .. } => {}
@@ -2066,7 +2142,14 @@ async fn run_selection_cdp_observer(
                                             };
                                             if committed {
                                                 let _ = cdp
-                                                    .send_command("Overlay.setInspectMode", Some(json!({ "mode": "none" })), Some(&page_sid))
+                                                    .send_command(
+                                                        "Overlay.setInspectMode",
+                                                        Some(json!({
+                                                            "mode": "none",
+                                                            "highlightConfig": default_highlight_config(),
+                                                        })),
+                                                        Some(&page_sid),
+                                                    )
                                                     .await;
                                                 let _ = cdp
                                                     .send_command(

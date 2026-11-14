@@ -397,6 +397,7 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
         const AC = w.AudioContext || w.webkitAudioContext;
         if (!AC) return null;
         try { mixCtx = new AC({ sampleRate: 24000 }); } catch (_) { try { mixCtx = new AC(); } catch (_) { return null; } }
+        if (mixCtx.state === 'suspended') mixCtx.resume?.().catch(() => {});
         internalCtxs.add(mixCtx); return mixCtx;
       };
       const tapEl = (el) => {

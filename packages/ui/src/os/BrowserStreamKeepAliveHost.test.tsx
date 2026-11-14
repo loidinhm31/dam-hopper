@@ -2107,7 +2107,7 @@ describe("BrowserStreamKeepAliveHost with the real stream controller (C3-W6)", (
 
   const credentialsFor = (subscriptionEpoch: string): ViewerAttachmentCredentials => ({
     owner,
-    browserSessionId: "session-1",
+    browserSessionId: readTab("tab-1").sessionId ?? "session-1",
     browserIncarnation: readTab("tab-1").snapshot?.browserIncarnation ?? "live-runtime",
     profileEpoch: String(readTab("tab-1").snapshot?.profileEpoch ?? "2"),
     viewerId: `viewer-${subscriptionEpoch}`,
@@ -2241,5 +2241,41 @@ describe("BrowserStreamKeepAliveHost with the real stream controller (C3-W6)", (
     expect(getStreamQuality(tuple).status).toBeNull();
     await act(async () => second.media.serverClose());
     expect(streamState.realResetCalls).toBe(1);
+  });
+
+  it("delivers docEpoch 1 audio chunks on first attach without retiring docEpoch 1 when viewerId updates", async () => {
+    const uuidSess = "12345678-1234-4234-8234-123456789abc";
+    const uuidInc = "abcdef01-2345-4678-8901-234567890abc";
+    const uuidSnap: BrowserSessionDto = {
+      ...snapshot,
+      browserSessionId: uuidSess,
+      browserIncarnation: uuidInc,
+      navigationRevision: "1",
+    };
+    getSession.mockResolvedValue(uuidSnap);
+    patchTabInTest("tab-1", {
+      sessionId: uuidSess,
+      snapshot: uuidSnap,
+    });
+    const { media } = await attachRealController("sub-real-first-audio");
+    pcmPlayerMocks.enqueue.mockClear();
+    await act(async () => media.serverOpen());
+
+    const chunk: BrowserAudioChunk = {
+      kind: "audioChunk",
+      browserSessionId: uuidSess,
+      browserIncarnation: uuidInc,
+      profileEpoch: String(uuidSnap.profileEpoch),
+      audioRun: "11111111-2222-4333-8444-555555555555",
+      subscriptionEpoch: "sub-real-first-audio",
+      docEpoch: "1",
+      audioSeq: "1",
+      sampleRate: 24000,
+      channels: 1,
+      encoding: "pcm16le",
+      data: "AAAAAA==",
+    };
+    await act(async () => media.onmessage?.({ data: JSON.stringify(chunk) } as MessageEvent));
+    expect(pcmPlayerMocks.enqueue).toHaveBeenCalledExactlyOnceWith("AAAAAA==");
   });
 });

@@ -59,6 +59,17 @@ impl MouseButton {
             Self::Forward => "forward",
         }
     }
+
+    pub fn bitmask(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::Left => 1,
+            Self::Right => 2,
+            Self::Middle => 4,
+            Self::Back => 8,
+            Self::Forward => 16,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -298,6 +309,37 @@ impl HeldInputState {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MouseDispatchContext {
+    pub buttons: u32,
+    pub move_button: Option<MouseButton>,
+    pub click_count: u32,
+}
+
+#[derive(Debug, Default)]
+struct MouseDispatchTracker {
+    held_buttons: HashSet<MouseButton>,
+    last_click: Option<(MouseButton, f64, f64, Instant, u32)>,
+}
+
+impl MouseDispatchTracker {
+    fn buttons_mask(&self) -> u32 {
+        self.held_buttons.iter().fold(0u32, |acc, b| acc | b.bitmask())
+    }
+
+    fn primary_held_button(&self) -> Option<MouseButton> {
+        [
+            MouseButton::Left,
+            MouseButton::Right,
+            MouseButton::Middle,
+            MouseButton::Back,
+            MouseButton::Forward,
+        ]
+        .into_iter()
+        .find(|b| self.held_buttons.contains(b))
+    }
+}
+
 pub struct SessionInputManager {
     lease: Mutex<Option<LeaseState>>,
     last_ended_lease: Mutex<Option<(String, u64)>>,
@@ -306,6 +348,7 @@ pub struct SessionInputManager {
     queue: Mutex<VecDeque<InputMessage>>,
     total_queued_bytes: Mutex<usize>,
     held_state: Mutex<HeldInputState>,
+    dispatch_mouse: Mutex<MouseDispatchTracker>,
     selected_text: Mutex<String>,
     lease_ttl: Duration,
     /// Orders native dispatch against native release. It guards no state: a dispatch holds it
@@ -341,6 +384,7 @@ impl SessionInputManager {
             total_queued_bytes: Mutex::new(0),
             held_state: Mutex::new(HeldInputState::default()),
             selected_text: Mutex::new(String::new()),
+            dispatch_mouse: Mutex::new(MouseDispatchTracker::default()),
             lease_ttl,
             native_gate: Mutex::new(()),
             recovery_suspended: AtomicBool::new(false),
@@ -446,6 +490,7 @@ impl SessionInputManager {
 
         // Reset sequence pointer on new lease acquisition
         *self.last_processed_seq.lock().await = 0;
+        *self.dispatch_mouse.lock().await = MouseDispatchTracker::default();
 
         Ok((lease_token, expires_at_unix_ms))
     }
@@ -715,6 +760,16 @@ impl SessionInputManager {
                 if held.generation == generation {
                     held.forget_released(&events);
                 }
+                if !events.iter().any(|e| matches!(e, InputEvent::PointerUp { .. })) {
+                    // No-op when only keys were released
+                } else {
+                    let mut dm = self.dispatch_mouse.lock().await;
+                    for event in &events {
+                        if let InputEvent::PointerUp { button, .. } = event {
+                            dm.held_buttons.remove(button);
+                        }
+                    }
+                }
                 if held.is_empty() {
                     held.release_failed = None;
                 }
@@ -903,6 +958,68 @@ impl SessionInputManager {
             return Err(InputError::LeaseExpired);
         }
         Ok(self.selected_text.lock().await.clone())
+    }
+
+    /// Computes CDP mouse button/buttons/clickCount state at native dispatch time.
+    pub async fn prepare_mouse_dispatch(
+        &self,
+        event: &InputEvent,
+        geom: &TargetGeometry,
+    ) -> MouseDispatchContext {
+        let mut dm = self.dispatch_mouse.lock().await;
+        match event {
+            InputEvent::PointerDown { button, u, v, .. } => {
+                if *button != MouseButton::None {
+                    dm.held_buttons.insert(*button);
+                }
+                let x = (u * geom.css_width).clamp(0.0, geom.css_width);
+                let y = (v * geom.css_height + geom.offset_top)
+                    .clamp(0.0, geom.css_height + geom.offset_top);
+                let now = Instant::now();
+                let click_count = match dm.last_click {
+                    Some((prev_btn, px, py, prev_at, prev_count))
+                        if prev_btn == *button
+                            && *button != MouseButton::None
+                            && now.saturating_duration_since(prev_at)
+                                <= Duration::from_millis(500)
+                            && (x - px).hypot(y - py) <= 5.0 =>
+                    {
+                        (prev_count % 3) + 1
+                    }
+                    _ => 1,
+                };
+                dm.last_click = (*button != MouseButton::None)
+                    .then_some((*button, x, y, now, click_count));
+                MouseDispatchContext {
+                    buttons: dm.buttons_mask(),
+                    move_button: None,
+                    click_count,
+                }
+            }
+            InputEvent::PointerMove { .. } => MouseDispatchContext {
+                buttons: dm.buttons_mask(),
+                move_button: dm.primary_held_button(),
+                click_count: 1,
+            },
+            InputEvent::PointerUp { button, .. } => {
+                dm.held_buttons.remove(button);
+                let click_count = dm
+                    .last_click
+                    .filter(|(prev_btn, ..)| prev_btn == button)
+                    .map_or(1, |(_, _, _, _, count)| count);
+                MouseDispatchContext {
+                    buttons: dm.buttons_mask(),
+                    move_button: None,
+                    click_count,
+                }
+            }
+            InputEvent::Wheel { .. } => MouseDispatchContext {
+                buttons: dm.buttons_mask(),
+                move_button: None,
+                click_count: 1,
+            },
+            _ => MouseDispatchContext::default(),
+        }
     }
 }
 
@@ -1106,5 +1223,78 @@ mod tests {
         assert!(clamped3.len() <= MAX_SELECTED_TEXT_BYTES);
         assert_eq!(clamped3.len() % 3, 0);
         assert_eq!(mgr.get_selected_text(&token).await.unwrap(), clamped3);
+    }
+
+    #[tokio::test]
+    async fn test_prepare_mouse_dispatch_tracks_drag_buttons_and_click_count() {
+        let mgr = SessionInputManager::new();
+        let _ = mgr.acquire_lease("viewer1", "human").await.unwrap();
+        let geo = TargetGeometry {
+            css_width: 1000.0,
+            css_height: 800.0,
+            offset_top: 0.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            page_scale: 1.0,
+            visual_offset_x: 0.0,
+            visual_offset_y: 0.0,
+            dpr: 1.0,
+        };
+
+        let move_idle = mgr
+            .prepare_mouse_dispatch(&InputEvent::PointerMove { u: 0.1, v: 0.1, modifiers: 0 }, &geo)
+            .await;
+        assert_eq!(move_idle, MouseDispatchContext { buttons: 0, move_button: None, click_count: 1 });
+
+        let down1 = mgr
+            .prepare_mouse_dispatch(
+                &InputEvent::PointerDown { button: MouseButton::Left, u: 0.2, v: 0.2, modifiers: 0 },
+                &geo,
+            )
+            .await;
+        assert_eq!(down1, MouseDispatchContext { buttons: 1, move_button: None, click_count: 1 });
+
+        let drag_move = mgr
+            .prepare_mouse_dispatch(&InputEvent::PointerMove { u: 0.4, v: 0.2, modifiers: 0 }, &geo)
+            .await;
+        assert_eq!(
+            drag_move,
+            MouseDispatchContext { buttons: 1, move_button: Some(MouseButton::Left), click_count: 1 }
+        );
+
+        let up1 = mgr
+            .prepare_mouse_dispatch(
+                &InputEvent::PointerUp { button: MouseButton::Left, u: 0.4, v: 0.2, modifiers: 0 },
+                &geo,
+            )
+            .await;
+        assert_eq!(up1, MouseDispatchContext { buttons: 0, move_button: None, click_count: 1 });
+
+        let move_after = mgr
+            .prepare_mouse_dispatch(&InputEvent::PointerMove { u: 0.5, v: 0.2, modifiers: 0 }, &geo)
+            .await;
+        assert_eq!(move_after, MouseDispatchContext { buttons: 0, move_button: None, click_count: 1 });
+
+        // Rapid second click at a new position starts at 1, immediate next click at same position advances to 2
+        let down2 = mgr
+            .prepare_mouse_dispatch(
+                &InputEvent::PointerDown { button: MouseButton::Left, u: 0.4, v: 0.2, modifiers: 0 },
+                &geo,
+            )
+            .await;
+        assert_eq!(down2.click_count, 1);
+        let _ = mgr
+            .prepare_mouse_dispatch(
+                &InputEvent::PointerUp { button: MouseButton::Left, u: 0.4, v: 0.2, modifiers: 0 },
+                &geo,
+            )
+            .await;
+        let down3 = mgr
+            .prepare_mouse_dispatch(
+                &InputEvent::PointerDown { button: MouseButton::Left, u: 0.4, v: 0.2, modifiers: 0 },
+                &geo,
+            )
+            .await;
+        assert_eq!(down3.click_count, 2);
     }
 }

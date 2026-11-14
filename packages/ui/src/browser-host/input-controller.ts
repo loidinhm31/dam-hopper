@@ -256,6 +256,7 @@ export class BrowserInputController {
     clientX: number,
     clientY: number,
     canvas: HTMLCanvasElement,
+    clampToImage = false,
   ): { u: number; v: number } | null {
     const drawn = this.getDrawnRect();
     if (!drawn) return null;
@@ -276,12 +277,13 @@ export class BrowserInputController {
 
     if (drawn.drawWidth <= 0 || drawn.drawHeight <= 0) return null;
 
-    const u = (canvasX - drawn.drawX) / drawn.drawWidth;
-    const v = (canvasY - drawn.drawY) / drawn.drawHeight;
+    let u = (canvasX - drawn.drawX) / drawn.drawWidth;
+    let v = (canvasY - drawn.drawY) / drawn.drawHeight;
 
-    // Reject out-of-image
     if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) {
-      return null;
+      if (!clampToImage) return null;
+      u = Math.min(1.0, Math.max(0.0, u));
+      v = Math.min(1.0, Math.max(0.0, v));
     }
 
     return { u, v };
@@ -336,7 +338,7 @@ export class BrowserInputController {
     if (this.isDisposed || this.isDisplayOnly()) return false;
     const canvas = e.currentTarget as HTMLCanvasElement;
     const coords =
-      this.mapClientToFractions(e.clientX, e.clientY, canvas) ??
+      this.mapClientToFractions(e.clientX, e.clientY, canvas, this.heldButtons.size > 0) ??
       this.lastPointerCoords;
     if (!coords) return false;
 
@@ -360,9 +362,13 @@ export class BrowserInputController {
   ): boolean {
     if (this.isDisposed || this.isDisplayOnly()) return false;
     const canvas = e.currentTarget as HTMLCanvasElement;
-    const coords = this.mapClientToFractions(e.clientX, e.clientY, canvas);
+    const coords = this.mapClientToFractions(
+      e.clientX,
+      e.clientY,
+      canvas,
+      this.heldButtons.size > 0,
+    );
     if (!coords) return false;
-
     this.lastPointerCoords = coords;
 
     // Eligible for coalescing with adjacent moves

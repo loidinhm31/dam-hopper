@@ -1109,7 +1109,6 @@ function ParkedBrowserStreamItem({
   }, [
     owner,
     tab.sessionId,
-    tab.viewerId,
     tab.snapshot?.browserIncarnation,
     tab.snapshot?.profileEpoch,
     cancelPendingGesture,
@@ -1934,6 +1933,7 @@ function ParkedBrowserStreamItem({
             const liveMute = computeLiveMuteState();
             streamControllerRef.current?.setAudioMuted(liveMute);
             streamControllerRef.current?.attach(creds);
+            streamControllerRef.current?.resetAudioAuthority(snapshot.navigationRevision);
             streamControllerRef.current?.setVisibility(true);
             syncDialogFromSnapshot(snapshot, creds);
             updateBrowserTabInStore(win.id, tab.tabId, {
@@ -2156,6 +2156,11 @@ function ParkedBrowserStreamItem({
       }
       if (latest.tab.isController && latest.tab.leaseToken) {
         if (pendingPointerRef.current?.replayed) cancelPendingGesture();
+        try {
+          e.currentTarget?.setPointerCapture?.(e.pointerId);
+        } catch {
+          // ignore unsupported pointer capture
+        }
         input.handlePointerDown(e);
         return;
       }
@@ -2293,6 +2298,13 @@ function ParkedBrowserStreamItem({
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      try {
+        if (e.currentTarget?.hasPointerCapture?.(e.pointerId)) {
+          e.currentTarget.releasePointerCapture?.(e.pointerId);
+        }
+      } catch {
+        // ignore unsupported pointer capture
+      }
       if (canPlayAudio()) {
         ensurePcmPlayer().prime();
       }
@@ -2429,7 +2441,14 @@ function ParkedBrowserStreamItem({
     [],
   );
 
-  const handlePointerCancel = useCallback(() => {
+  const handlePointerCancel = useCallback((e?: React.PointerEvent<HTMLCanvasElement>) => {
+    try {
+      if (e && e.currentTarget?.hasPointerCapture?.(e.pointerId)) {
+        e.currentTarget.releasePointerCapture?.(e.pointerId);
+      }
+    } catch {
+      // ignore unsupported pointer capture
+    }
     cancelPendingGesture();
     inputControllerRef.current?.handlePointerCancel();
   }, [cancelPendingGesture]);

@@ -539,6 +539,8 @@ async fn build_producer(
             SessionError::NativeUnavailable(format!("browser stealth session setup failed: {err}"))
         })?;
     let initial_url = snapshot.dto.url.trim();
+    let mut initial_frame_id: Option<String> = None;
+    let mut pending_initial_loader_id: Option<String> = None;
     if navigate && !initial_url.is_empty() && initial_url != "about:blank" {
         // First managed navigation: the request policy is already live on this page session.
         // Subscribe before navigating, then wait (bounded) for the commit event BEFORE the
@@ -554,37 +556,56 @@ async fn build_producer(
             )
             .await
         {
-            Ok(_) => {
+            Ok(nav_res) => {
+                initial_frame_id = nav_res
+                    .get("frameId")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string);
+                let nav_loader_id = nav_res
+                    .get("loaderId")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string);
+                let mut initial_nav_committed = false;
                 let _ = tokio::time::timeout(INITIAL_NAVIGATION_COMMIT_WAIT, async {
                     loop {
                         match events.recv().await {
-                            Ok(ev)
-                                if matches!(
-                                    &*ev,
-                                    CdpLifecycleEvent::FrameNavigated {
-                                        session_id: event_session_id,
-                                        is_main_frame: true,
-                                        ..
-                                    } if event_session_id.as_deref() == Some(page_sid.as_str())
-                                ) =>
-                            {
-                                break
-                            }
-                            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                            Ok(ev) => match &*ev {
+                                CdpLifecycleEvent::FrameNavigated {
+                                    session_id: event_session_id,
+                                    is_main_frame: true,
+                                    frame_id,
+                                    ..
+                                } if event_session_id.as_deref() == Some(page_sid.as_str()) => {
+                                    if initial_frame_id.is_none() {
+                                        initial_frame_id = frame_id.clone();
+                                    }
+                                    initial_nav_committed = true;
+                                    break;
+                                }
+                                _ => {}
+                            },
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                     }
                 })
                 .await;
+                if !initial_nav_committed {
+                    pending_initial_loader_id = nav_loader_id;
+                }
             }
             Err(err) => warn!(error = %err, "Initial managed navigation failed"),
         }
     }
-    crate::browser_host::selection::ensure_session_navigation_watcher(
+    crate::browser_host::selection::ensure_session_navigation_watcher_with_initial(
         state,
         session_id,
         &producer.cdp_client,
         &page_sid,
+        initial_frame_id.as_deref(),
+        pending_initial_loader_id.as_deref(),
     )
     .await;
     Ok((producer, page_sid))
@@ -2699,31 +2720,52 @@ fn project_pointer(geom: &TargetGeometry, u: f64, v: f64) -> Option<(f64, f64)> 
 fn input_event_command(
     geom: &TargetGeometry,
     event: &InputEvent,
+    mouse_ctx: crate::browser_host::input::MouseDispatchContext,
 ) -> Option<(&'static str, serde_json::Value)> {
-    let mouse = |kind: &str, button: Option<&str>, u: f64, v: f64, modifiers: u32| {
+    let mouse = |kind: &str, button: Option<&str>, click_count: Option<u32>, u: f64, v: f64, modifiers: u32| {
         let (x, y) = project_pointer(geom, u, v)?;
         let mut params = serde_json::json!({
             "type": kind,
             "x": x,
             "y": y,
             "modifiers": modifiers,
+            "buttons": mouse_ctx.buttons,
         });
         if let Some(button) = button {
             params["button"] = serde_json::json!(button);
-            params["clickCount"] = serde_json::json!(1);
+        }
+        if let Some(count) = click_count {
+            params["clickCount"] = serde_json::json!(count);
         }
         Some(("Input.dispatchMouseEvent", params))
     };
     match event {
-        InputEvent::PointerDown { button, u, v, modifiers } => {
-            mouse("mousePressed", Some(button.as_cdp_str()), *u, *v, *modifiers)
-        }
-        InputEvent::PointerUp { button, u, v, modifiers } => {
-            mouse("mouseReleased", Some(button.as_cdp_str()), *u, *v, *modifiers)
-        }
-        InputEvent::PointerMove { u, v, modifiers } => mouse("mouseMoved", None, *u, *v, *modifiers),
+        InputEvent::PointerDown { button, u, v, modifiers } => mouse(
+            "mousePressed",
+            Some(button.as_cdp_str()),
+            Some(mouse_ctx.click_count.max(1)),
+            *u,
+            *v,
+            *modifiers,
+        ),
+        InputEvent::PointerUp { button, u, v, modifiers } => mouse(
+            "mouseReleased",
+            Some(button.as_cdp_str()),
+            Some(mouse_ctx.click_count.max(1)),
+            *u,
+            *v,
+            *modifiers,
+        ),
+        InputEvent::PointerMove { u, v, modifiers } => mouse(
+            "mouseMoved",
+            mouse_ctx.move_button.map(|b| b.as_cdp_str()),
+            None,
+            *u,
+            *v,
+            *modifiers,
+        ),
         InputEvent::Wheel { u, v, delta_x, delta_y, modifiers } => {
-            let (_, mut params) = mouse("mouseWheel", None, *u, *v, *modifiers)?;
+            let (_, mut params) = mouse("mouseWheel", None, None, *u, *v, *modifiers)?;
             params["deltaX"] = serde_json::json!(delta_x);
             params["deltaY"] = serde_json::json!(delta_y);
             Some(("Input.dispatchMouseEvent", params))
@@ -2743,6 +2785,23 @@ fn input_event_command(
     }
 }
 
+/// Dispatches one input event on the given native page session with explicit mouse button context.
+pub async fn dispatch_input_event_to_cdp_with_mouse(
+    client: &CdpClient,
+    page_session_id: &str,
+    geom: &TargetGeometry,
+    event: &InputEvent,
+    mouse_ctx: crate::browser_host::input::MouseDispatchContext,
+) -> Result<(), CdpError> {
+    let Some((method, params)) = input_event_command(geom, event, mouse_ctx) else {
+        return Ok(());
+    };
+    client
+        .send_command(method, Some(params), Some(page_session_id))
+        .await
+        .map(|_| ())
+}
+
 /// Dispatches one input event on the given native page session. A CDP failure is returned so
 /// release paths can report input unavailable instead of silently succeeding.
 pub async fn dispatch_input_event_to_cdp(
@@ -2751,13 +2810,14 @@ pub async fn dispatch_input_event_to_cdp(
     geom: &TargetGeometry,
     event: &InputEvent,
 ) -> Result<(), CdpError> {
-    let Some((method, params)) = input_event_command(geom, event) else {
-        return Ok(());
-    };
-    client
-        .send_command(method, Some(params), Some(page_session_id))
-        .await
-        .map(|_| ())
+    dispatch_input_event_to_cdp_with_mouse(
+        client,
+        page_session_id,
+        geom,
+        event,
+        crate::browser_host::input::MouseDispatchContext::default(),
+    )
+    .await
 }
 
 #[cfg(test)]
