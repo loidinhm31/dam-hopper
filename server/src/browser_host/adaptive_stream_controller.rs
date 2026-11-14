@@ -25,6 +25,8 @@ pub const REPORT_EXPIRY: Duration = Duration::from_secs(15);
 const SERVICE_MARGIN_MS: f64 = 100.0;
 const PROBE_BACKOFF_WINDOW: Duration = Duration::from_secs(30);
 const MAX_OUTSTANDING: usize = 2;
+/// Per decision window decay of the remembered audio rate while audio is allowed.
+const AUDIO_HINT_DECAY: f64 = 0.95;
 
 /// Why new audio chunks are withheld from one viewer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,11 +154,19 @@ struct ViewerState {
     last_stage_change: Instant,
     last_upgrade: Option<Instant>,
     stalled: bool,
+    /// Consecutive decision windows whose oldest outstanding frame was overdue for this link.
+    overdue_run: u32,
     last_progress: Instant,
     last_progress_counter: u64,
     last_motion_counter: u64,
     /// Local decoder overload pacing cap (independent of the fidelity ladder position).
     fps_cap: Option<u32>,
+    /// Last busy delivered-goodput estimate; capture restarts reset the estimator but not the link.
+    cap_hint_kbps: Option<f64>,
+    /// Last frame size estimate with the stage it was measured at (same reason).
+    bytes_hint: Option<(f64, usize)>,
+    /// Decaying peak of the audio rate while audio was allowed; the cost audio returns with.
+    audio_hint_kbps: f64,
     gate_gen: u64,
     gate_suppressed: bool,
     admission_watermark: AudioWatermark,
@@ -239,6 +249,22 @@ impl ViewerState {
         (self.pressure, self.healthy) = (0, 0);
     }
 
+    /// Remember what the estimator forgets on every capture restart: link goodput, frame size and
+    /// the audio rate that returns when audio is allowed again.
+    fn update_hints(&mut self, s: &ViewerSample) {
+        if s.provenance == SampleProvenance::Busy {
+            if let Some(d) = s.delivered_kbps_ewma {
+                self.cap_hint_kbps = Some(d);
+            }
+        }
+        if let Some(b) = s.frame_bytes_ewma {
+            self.bytes_hint = Some((b, self.stage));
+        }
+        if !self.gate_suppressed {
+            self.audio_hint_kbps = (self.audio_hint_kbps * AUDIO_HINT_DECAY).max(s.audio_kbps_ewma);
+        }
+    }
+
     /// Consume at most one new sample as one decision window.
     fn step(&mut self, ladder: &Ladder, now: Instant) {
         let Some(s) = self.sample else { return };
@@ -257,16 +283,21 @@ impl ViewerState {
             return;
         }
 
+        self.update_hints(&s);
+        // A frame is overdue when older than a normal service for this link (two services plus half
+        // a second), so a fixed (even multi-second) RTT never makes frames overdue by itself.
+        let decode = s.decode_ms_ewma.unwrap_or(0.0);
+        let overdue = s.oldest_age_ms as f64
+            > s.baseline_ms.map_or(3000.0, |b| 2.0 * b + 500.0) + decode;
+        self.overdue_run = if overdue { self.overdue_run + 1 } else { 0 };
         let frame_ms = 1000.0 / f64::from(self.fps(ladder));
         let backlog = s.has_pending || s.outstanding_frames >= MAX_OUTSTANDING;
         // ACK service includes client decode time: subtract it so decoder overload is not mistaken
         // for link congestion (the FPS-only decoder branch handles it).
-        let decode = s.decode_ms_ewma.unwrap_or(0.0);
         let rising = matches!((s.service_ewma_ms, s.baseline_ms), (Some(svc), Some(b)) if (svc - decode).max(0.0) > b + (0.5 * b).max(SERVICE_MARGIN_MS));
-        // Ack starvation counts only when older than a normal service for this link, so a fixed
-        // (even multi-second) RTT never degrades fidelity by itself.
-        let starved = s.ack_starved
-            && s.oldest_age_ms as f64 > s.baseline_ms.map_or(3000.0, |b| 2.0 * b + 500.0) + decode;
+        // Ack starvation counts only when overdue, so a fixed (even multi-second) RTT never
+        // degrades fidelity by itself.
+        let starved = s.ack_starved && overdue;
         let network = (backlog && rising) || starved;
         let decoder = !network && s.decode_ms_ewma.is_some_and(|d| d > frame_ms);
         let severe =
@@ -309,6 +340,13 @@ impl ViewerState {
             return;
         }
         if next >= ladder.len() {
+            return;
+        }
+        // Constrained (2 fps, audio withheld) is the emergency rung. For a viewer with no audio to
+        // shed it only trades smoothness for latency, so it needs overdue frames (or severity).
+        let emergency = ladder.tier_of(next) == CaptureTier::Constrained
+            && ladder.tier_of(self.stage) != CaptureTier::Constrained;
+        if emergency && self.gate_suppressed && !severe && self.overdue_run < PRESSURE_WINDOWS {
             return;
         }
         let dwell_ok = now.saturating_duration_since(self.last_stage_change) >= CAPTURE_DWELL;
@@ -359,18 +397,29 @@ impl ViewerState {
         self.last_upgrade = Some(now);
     }
 
-    /// Next demand must fit with >=25% headroom of the measured busy goodput; unknown estimates probe.
+    /// Next demand must fit with >=25% headroom of the last measured busy goodput (kept across
+    /// capture restarts, which reset the estimator); unknown estimates probe. Audio counts when the
+    /// candidate lets it back in, at the rate it had while allowed.
     fn fits(&self, ladder: &Ladder, s: &ViewerSample, cand: usize) -> bool {
-        let (cur, next) = (ladder.stage(self.stage), ladder.stage(cand));
-        let (Some(bytes), Some(cap)) = (s.frame_bytes_ewma, s.delivered_kbps_ewma) else {
+        let next = ladder.stage(cand);
+        let (Some((bytes, at)), Some(cap)) = (
+            self.bytes_hint,
+            s.delivered_kbps_ewma.or(self.cap_hint_kbps),
+        ) else {
             return true;
         };
-        let scale = f64::from(next.scale_permille) / f64::from(cur.scale_permille);
+        let from = ladder.stage(at);
+        let scale = f64::from(next.scale_permille) / f64::from(from.scale_permille);
         let bytes =
-            bytes * scale * scale * (f64::from(next.jpeg_quality) / f64::from(cur.jpeg_quality));
-        let projected = 8.0 * bytes * f64::from(next.fps) / 1000.0 + s.audio_kbps_ewma;
+            bytes * scale * scale * (f64::from(next.jpeg_quality) / f64::from(from.jpeg_quality));
+        let audio = if self.muted || ladder.tier_of(cand) == CaptureTier::Constrained {
+            0.0
+        } else {
+            s.audio_kbps_ewma.max(self.audio_hint_kbps)
+        };
+        let projected = 8.0 * bytes * f64::from(next.fps) / 1000.0 + audio;
         projected * HEADROOM <= cap
-            || (s.provenance != SampleProvenance::Busy
+            || (s.provenance == SampleProvenance::ApplicationLimited
                 && self.healthy >= 2 * self.recovery_required)
     }
 }
@@ -473,10 +522,14 @@ impl AdaptiveStreamController {
                 last_stage_change: now.checked_sub(CAPTURE_DWELL).unwrap_or(now),
                 last_upgrade: None,
                 stalled: false,
+                overdue_run: 0,
                 last_progress: now,
                 last_progress_counter: 0,
                 last_motion_counter: 0,
                 fps_cap: None,
+                cap_hint_kbps: None,
+                bytes_hint: None,
+                audio_hint_kbps: 0.0,
                 gate_gen: 0,
                 gate_suppressed: true,
                 admission_watermark: AudioWatermark::new(source_run, latest_audio_seq),
@@ -1347,5 +1400,186 @@ mod tests {
         let wm_none = AudioWatermark::new(None, 500);
         assert!(wm_none.suppresses(Some(run_a), 100));
         assert!(!wm_none.suppresses(Some(run_a), 501));
+    }
+
+    /// Viewer at ladder stage 6 (2 fps, q60, 750, still Constrained: audio gated), unmuted, with
+    /// remembered goodput 900 kbps, 10 kB frames and 470 kbps of audio from before the gate closed.
+    fn constrained_viewer(audio_hint: f64, muted: bool) -> (AdaptiveStreamController, ViewerSample) {
+        let mut c = AdaptiveStreamController::new_at(ceilings(), Instant::now());
+        c.register("a", Instant::now());
+        let v = c.viewers.get_mut("a").unwrap();
+        v.stage = 6;
+        v.muted = muted;
+        v.cap_hint_kbps = Some(900.0);
+        v.bytes_hint = Some((10_000.0, 6));
+        v.audio_hint_kbps = audio_hint;
+        let sample = ViewerSample {
+            delivered_kbps_ewma: None,
+            frame_bytes_ewma: None,
+            audio_kbps_ewma: 0.0,
+            provenance: SampleProvenance::ApplicationLimited,
+            ..ok_sample(0)
+        };
+        (c, sample)
+    }
+
+    #[test]
+    fn upgrade_that_lets_audio_back_in_must_fit_the_remembered_audio_rate() {
+        let low_anchor = Ladder::new(&ceilings()).anchor(CaptureTier::Low);
+        // Stage 5 (6 fps) leaves Constrained: 6 x 10 kB = 480 kbps video + 470 kbps audio.
+        let (c, s) = constrained_viewer(470.0, false);
+        assert!(!c.viewers["a"].fits(c.ladder(), &s, low_anchor), "video+audio exceed 900/1.25");
+        let (c, s) = constrained_viewer(0.0, false);
+        assert!(c.viewers["a"].fits(c.ladder(), &s, low_anchor), "video alone fits");
+        let (c, s) = constrained_viewer(470.0, true);
+        assert!(c.viewers["a"].fits(c.ladder(), &s, low_anchor), "a muted viewer pays no audio");
+        // Staying inside Constrained never charges audio.
+        let (c, s) = constrained_viewer(470.0, false);
+        assert!(c.viewers["a"].fits(c.ladder(), &s, 7));
+    }
+
+    #[test]
+    fn ack_starved_samples_never_unlock_the_unfit_upgrade_fallback() {
+        let low_anchor = Ladder::new(&ceilings()).anchor(CaptureTier::Low);
+        let (mut c, mut s) = constrained_viewer(470.0, false);
+        c.viewers.get_mut("a").unwrap().healthy = 2 * BASE_RECOVERY_WINDOWS;
+        s.provenance = SampleProvenance::AckStarved;
+        assert!(!c.viewers["a"].fits(c.ladder(), &s, low_anchor));
+        s.provenance = SampleProvenance::ApplicationLimited;
+        assert!(c.viewers["a"].fits(c.ladder(), &s, low_anchor), "periodic probe stays possible");
+    }
+
+    #[test]
+    fn hints_survive_estimator_resets_and_only_track_audible_busy_samples() {
+        let mut c = AdaptiveStreamController::new_at(ceilings(), Instant::now());
+        c.register("a", Instant::now());
+        let v = c.viewers.get_mut("a").unwrap();
+        v.gate_suppressed = false;
+        let busy = ViewerSample {
+            delivered_kbps_ewma: Some(700.0),
+            frame_bytes_ewma: Some(20_000.0),
+            audio_kbps_ewma: 400.0,
+            ..ok_sample(0)
+        };
+        v.update_hints(&busy);
+        // A capture restart empties the estimator; the hints stay.
+        let reset = ViewerSample {
+            delivered_kbps_ewma: None,
+            frame_bytes_ewma: None,
+            audio_kbps_ewma: 0.0,
+            ..busy
+        };
+        v.update_hints(&reset);
+        assert_eq!(v.cap_hint_kbps, Some(700.0));
+        assert_eq!(v.bytes_hint, Some((20_000.0, v.stage)));
+        assert!(v.audio_hint_kbps > 370.0, "audio peak decays slowly: {}", v.audio_hint_kbps);
+        // While the gate is closed the audio hint is frozen; non-busy samples do not move the cap.
+        v.gate_suppressed = true;
+        let before = v.audio_hint_kbps;
+        let app_limited = ViewerSample {
+            provenance: SampleProvenance::ApplicationLimited,
+            delivered_kbps_ewma: Some(50.0),
+            audio_kbps_ewma: 0.0,
+            ..busy
+        };
+        v.update_hints(&app_limited);
+        assert_eq!(v.audio_hint_kbps, before);
+        assert_eq!(v.cap_hint_kbps, Some(700.0));
+    }
+
+    /// 10 Mbps / 300 ms, audio off (matrix2 `r10000-rtt300-aoff-one`, code phase): both credits
+    /// busy, service ~2 RTT (600 ms) against a 334 ms best-case sample, ~46 kB frames, oldest frame
+    /// 340..592 ms old. Transport-bound, not bandwidth-bound. With the 5 ms decode of `ok_sample`
+    /// a frame is overdue above 2 x 334 + 500 + 5 = 1173 ms.
+    fn rtt_bound(age_ms: u64, p: u64) -> ViewerSample {
+        ViewerSample {
+            service_ewma_ms: Some(600.0),
+            baseline_ms: Some(334.0),
+            outstanding_frames: 2,
+            has_pending: true,
+            oldest_age_ms: age_ms,
+            frame_bytes_ewma: Some(46_000.0),
+            delivered_kbps_ewma: Some(1_000.0),
+            ..ok_sample(p)
+        }
+    }
+
+    fn last_stage(ctrl: &AdaptiveStreamController) -> usize {
+        ctrl.ladder().len() - 1
+    }
+
+    #[test]
+    fn muted_viewer_needs_overdue_frames_to_enter_constrained() {
+        let tier = |s: &Sim| s.ctrl.ladder().tier_of(s.ctrl.viewer_stage("a").unwrap());
+        // Matrix value: ages stay far below overdue; the ladder stops at Low (2 fps never engages).
+        let mut sim = Sim::new();
+        sim.ctrl.register("a", sim.now);
+        sim.run(90, &[("a", true, |p| rtt_bound(592, p))]);
+        assert_eq!(tier(&sim), CaptureTier::Low);
+        // Boundary: exactly 2 x baseline + 500 + decode is not overdue, one ms more is.
+        let mut sim = Sim::new();
+        sim.ctrl.register("a", sim.now);
+        sim.run(90, &[("a", true, |p| rtt_bound(1173, p))]);
+        assert_eq!(tier(&sim), CaptureTier::Low);
+        let mut sim = Sim::new();
+        sim.ctrl.register("a", sim.now);
+        sim.run(90, &[("a", true, |p| rtt_bound(1174, p))]);
+        assert_eq!(tier(&sim), CaptureTier::Constrained);
+        assert_eq!(sim.ctrl.viewer_stage("a"), Some(last_stage(&sim.ctrl)));
+    }
+
+    #[test]
+    fn muted_slow_consumer_with_a_small_baseline_still_reaches_constrained() {
+        // Real-engine shape (`qual_live`): acks delayed 700 ms against a ~20 ms baseline. The same
+        // 800 ms age that is harmless on a 334 ms-baseline link is overdue here.
+        let mut sim = Sim::new();
+        sim.ctrl.register("a", sim.now);
+        let slow: fn(u64) -> ViewerSample = |p| ViewerSample {
+            service_ewma_ms: Some(700.0),
+            baseline_ms: Some(20.0),
+            oldest_age_ms: 800,
+            ..rtt_bound(800, p)
+        };
+        sim.run(90, &[("a", true, slow)]);
+        let s = sim.ctrl.viewer_stage("a").unwrap();
+        assert_eq!(sim.ctrl.ladder().tier_of(s), CaptureTier::Constrained);
+    }
+
+    #[test]
+    fn one_overdue_frame_is_not_a_standing_queue() {
+        let mut sim = Sim::new();
+        sim.ctrl.register("a", sim.now);
+        // Old and young windows alternate: never PRESSURE_WINDOWS consecutive old windows.
+        let flapping: fn(u64) -> ViewerSample =
+            |p| rtt_bound(if (p / 1000) % 2 == 0 { 1500 } else { 592 }, p);
+        sim.run(90, &[("a", true, flapping)]);
+        assert_eq!(
+            sim.ctrl.ladder().tier_of(sim.ctrl.viewer_stage("a").unwrap()),
+            CaptureTier::Low
+        );
+    }
+
+    #[test]
+    fn audible_viewer_still_enters_constrained_to_shed_audio() {
+        let mut sim = Sim::new();
+        sim.ctrl.register("a", sim.now);
+        assert!(sim.ctrl.set_muted("a", false, sim.now));
+        sim.run(90, &[("a", true, |p| rtt_bound(592, p))]);
+        let s = sim.ctrl.viewer_stage("a").unwrap();
+        assert_eq!(sim.ctrl.ladder().tier_of(s), CaptureTier::Constrained);
+        let d = sim.ctrl.directives("a", sim.now).unwrap();
+        assert_eq!(d.audio, AudioGate::Suppressed(AudioSuppression::Constrained));
+    }
+
+    #[test]
+    fn severe_queue_bypasses_the_standing_queue_requirement_for_a_muted_viewer() {
+        let mut sim = Sim::new();
+        sim.ctrl.register("a", sim.now);
+        let low_last = sim.ctrl.ladder().anchor(CaptureTier::Low);
+        assert_eq!(sim.ctrl.ladder().tier_of(low_last), CaptureTier::Low);
+        sim.ctrl.viewers.get_mut("a").unwrap().stage = low_last;
+        // One window, age beyond max(8 x baseline, 2 s): FPS-only step without waiting for aging.
+        sim.second(&[("a", true, |p| rtt_bound(3000, p))]);
+        assert_eq!(sim.ctrl.viewer_stage("a"), Some(low_last + 1));
     }
 }
