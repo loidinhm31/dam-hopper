@@ -152,4 +152,89 @@ class RetainedWorkspaceLifecycleTest {
             scenario.close()
         }
     }
+
+    @Test
+    fun testViewModelRetainsCanonicalDocumentRegistryAcrossAliases() {
+        val scenario = ActivityScenario.launch(MainActivity::class.java)
+        scenario.onActivity { activity ->
+            val vm = activity.viewModel
+            val ownerA = dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner(
+                profileId = "prof-alias-reg",
+                baseUrl = "http://127.0.0.1:4801",
+                accountUser = "alice",
+                project = "project-1",
+                worktreePath = null,
+                workspaceEpoch = 5L,
+            )
+            val ownerB = dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner(
+                profileId = "prof-alias-reg",
+                baseUrl = "http://127.0.0.1:4801",
+                accountUser = "alice",
+                project = "project-1",
+                worktreePath = "wt-1",
+                workspaceEpoch = 5L,
+            )
+            val ownerDifferentEndpoint = ownerA.copy(baseUrl = "http://127.0.0.1:4802")
+
+            val conn = dev.damhopper.nativeapp.core.model.ConnectionRef("prof-alias-reg", 1L)
+            val client = dev.damhopper.nativeapp.core.transport.ApiClient(conn, ownerA.normalizedBaseUrl, { "token" })
+            val ws = dev.damhopper.nativeapp.core.transport.WsConnection(conn, ownerA.normalizedBaseUrl, { "token" })
+
+            val wsA = vm.getOrCreateWorkspaceState(ownerA, ownerA.toProjectTargetRef(), client, ws)
+            val wsB = vm.getOrCreateWorkspaceState(ownerB, ownerB.toProjectTargetRef(), client, ws)
+            val wsDiff = vm.getOrCreateWorkspaceState(ownerDifferentEndpoint, ownerDifferentEndpoint.toProjectTargetRef(), client, ws)
+
+            // wsA and wsB share identical CanonicalHolderScope, so they must share the canonical registry!
+            assertEquals(
+                wsA.editorTabsState.registry,
+                wsB.editorTabsState.registry,
+                "Workspaces within the same canonical holder scope must share the canonical document registry"
+            )
+
+            // Different endpoint gets a distinct canonical registry!
+            kotlin.test.assertNotEquals(
+                wsA.editorTabsState.registry,
+                wsDiff.editorTabsState.registry,
+                "Different endpoint must obtain an isolated canonical document registry"
+            )
+        }
+        scenario.close()
+    }
+
+    @Test
+    fun testViewModelRetainsPendingCreateIntentsAcrossActivityLifecycle() {
+        val scenario = ActivityScenario.launch(MainActivity::class.java)
+        try {
+            val intent = dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord(
+                intentId = "device-intent-1",
+                profileId = "prof-intent-test",
+                terminalId = "term-intent-1",
+                project = "intent-proj",
+                worktreePath = null,
+                createdAtEpochMs = System.currentTimeMillis(),
+                status = dev.damhopper.nativeapp.features.terminal.UncertainCreateStatus.PENDING,
+            )
+
+            scenario.onActivity { activity ->
+                val vm = activity.viewModel
+                vm.preferencesStore.saveUncertainCreateRecord(intent)
+            }
+
+            // Recreate activity (simulates rotation)
+            scenario.recreate()
+
+            scenario.onActivity { recreatedActivity ->
+                val vm = recreatedActivity.viewModel
+                val pending = vm.pendingCreateIntents.value
+                assertTrue(
+                    pending.any { it.intentId == "device-intent-1" },
+                    "Pending uncertain create intent must be retained across activity recreation"
+                )
+                // Cleanup
+                vm.preferencesStore.removeUncertainCreateRecord("device-intent-1")
+            }
+        } finally {
+            scenario.close()
+        }
+    }
 }

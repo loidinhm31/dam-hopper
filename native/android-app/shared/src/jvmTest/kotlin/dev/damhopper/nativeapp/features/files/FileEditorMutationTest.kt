@@ -52,12 +52,20 @@ class FileEditorMutationTest {
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val path = exchange.requestURI.query?.split("&")?.find { it.startsWith("path=") }?.substringAfter("path=")?.replace("%2F", "/") ?: "src/Main.kt"
+            val cPath = if (path.startsWith("/")) path else "/$path"
+            val idJson = """{"workspaceId":"ws-mut","workspaceEpoch":1,"canonicalPath":"$cPath"}"""
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":$idJson}"""
+            exchange.responseHeaders.set("X-File-Identity", idJson)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
+            val path = exchange.requestURI.query?.split("&")?.find { it.startsWith("path=") }?.substringAfter("path=")?.replace("%2F", "/") ?: "src/Main.kt"
+            val cPath = if (path.startsWith("/")) path else "/$path"
+            val idJson = """{"workspaceId":"ws-mut","workspaceEpoch":1,"canonicalPath":"$cPath"}"""
             val text = "initial content\n"
+            exchange.responseHeaders.set("X-File-Identity", idJson)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }

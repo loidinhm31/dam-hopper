@@ -14,6 +14,28 @@ data class TerminalTabStatus(
 )
 
 /**
+ * Presentation outcome for uncertain terminal create intent.
+ * Enforces C6/C8: never offers Launch Again, offers Check status + explanation only.
+ */
+data class TerminalCreateStatusPresentation(
+    val status: UncertainCreateStatus,
+    val label: String,
+    val explanation: String,
+    val canCheckStatus: Boolean,
+    val canLaunchAgain: Boolean = false, // Inviolable invariant: ALWAYS false
+)
+
+/**
+ * Presentation outcome for terminal termination request.
+ */
+data class TerminalTerminationPresentation(
+    val label: String,
+    val description: String,
+    val isPending: Boolean,
+    val isRefused: Boolean,
+)
+
+/**
  * Decouples terminal status presentation into transport availability, process liveness,
  * and stream replay readiness.
  */
@@ -81,6 +103,80 @@ object TerminalConnectionPresentation {
                 label = "READY",
                 description = "Terminal ready; process alive and stream connected" +
                     if (restartCount > 0u) " ($restartCount restarts)" else "",
+            )
+        }
+    }
+
+    /**
+     * Resolves truthful explanation and actions for uncertain terminal create intents.
+     * Under C6/C8: strictly blocks Launch Again, offers Check status only.
+     */
+    fun resolveCreateStatusPresentation(
+        record: UncertainCreateRecord,
+    ): TerminalCreateStatusPresentation {
+        return when (record.status) {
+            UncertainCreateStatus.PENDING -> TerminalCreateStatusPresentation(
+                status = record.status,
+                label = "CREATION UNCERTAIN",
+                explanation = "Creation outcome for '${record.terminalId}' on profile '${record.profileId}' is unresolved. The original target may still succeed on the server. Replacement is blocked to prevent duplicate PTYs.",
+                canCheckStatus = true,
+                canLaunchAgain = false,
+            )
+            UncertainCreateStatus.CONFIRMED -> TerminalCreateStatusPresentation(
+                status = record.status,
+                label = "CONFIRMED",
+                explanation = "Terminal '${record.terminalId}' confirmed created.",
+                canCheckStatus = false,
+                canLaunchAgain = false,
+            )
+            UncertainCreateStatus.REFUSED -> TerminalCreateStatusPresentation(
+                status = record.status,
+                label = "DEFINITELY REFUSED",
+                explanation = "Terminal '${record.terminalId}' confirmed definitely refused or absent on server.",
+                canCheckStatus = false,
+                canLaunchAgain = false,
+            )
+        }
+    }
+
+    /**
+     * Resolves presentation for guarded termination outcome.
+     * 202 terminationRequested and 200 restartCancelled do NOT constitute observed process exit.
+     * 409 mismatch preserves original target without retry.
+     */
+    fun resolveTerminationOutcomePresentation(
+        outcome: TerminalTerminationOutcome,
+    ): TerminalTerminationPresentation {
+        return when {
+            outcome.requested -> TerminalTerminationPresentation(
+                label = "TERMINATION REQUESTED",
+                description = "Termination acknowledged by server (202). Awaiting observed process exit.",
+                isPending = true,
+                isRefused = false,
+            )
+            outcome.restartCancelled -> TerminalTerminationPresentation(
+                label = "RESTART CANCELLED",
+                description = "Restart cancelled by server (200). Awaiting observed process exit.",
+                isPending = true,
+                isRefused = false,
+            )
+            outcome.statusCode == 409 -> TerminalTerminationPresentation(
+                label = "TERMINATION REFUSED",
+                description = "Termination refused by server (409): mismatch. Original target preserved.",
+                isPending = false,
+                isRefused = true,
+            )
+            outcome.statusCode == 0 || outcome.statusCode in 500..599 -> TerminalTerminationPresentation(
+                label = "TERMINATION UNCERTAIN",
+                description = "Termination dispatch uncertain (${outcome.statusCode}): ${outcome.message ?: "network or server error"}. Original target preserved; check status before retrying.",
+                isPending = true,
+                isRefused = false,
+            )
+            else -> TerminalTerminationPresentation(
+                label = "TERMINATION ERROR",
+                description = "Termination failed (${outcome.statusCode}): ${outcome.message ?: "unknown error"}",
+                isPending = false,
+                isRefused = true,
             )
         }
     }

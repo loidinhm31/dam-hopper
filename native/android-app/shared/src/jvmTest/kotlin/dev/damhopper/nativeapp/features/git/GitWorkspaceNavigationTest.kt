@@ -71,4 +71,50 @@ class GitWorkspaceNavigationTest {
         state.revalidateAuthority()
         assertTrue(state.isAuthorityValid.value)
     }
+
+    @Test
+    fun testNestedRouteBackStackDiffToDetailsToOverview() {
+        val state = GitWorkspaceState()
+        assertEquals(GitRoute.Overview, state.route.value)
+
+        // Navigate from Overview -> Details -> Diff
+        state.navigate(GitRoute.Details("commit-abc"))
+        assertEquals(GitRoute.Details("commit-abc"), state.route.value)
+
+        state.navigate(GitRoute.Diff("src/App.kt", "commit-abc"))
+        assertEquals(GitRoute.Diff("src/App.kt", "commit-abc"), state.route.value)
+
+        // Open modal on top of nested diff
+        state.updateModal(GitModalState(showLeasedPushDialog = true))
+        assertTrue(state.modal.value.showLeasedPushDialog)
+
+        // 1st back: closes modal, preserves nested Diff route
+        assertTrue(state.back())
+        assertEquals(GitModalState(), state.modal.value)
+        assertEquals(GitRoute.Diff("src/App.kt", "commit-abc"), state.route.value)
+
+        // 2nd back: pops Diff back to Details
+        assertTrue(state.back())
+        assertEquals(GitRoute.Details("commit-abc"), state.route.value)
+
+        // 3rd back: pops Details back to Overview
+        assertTrue(state.back())
+        assertEquals(GitRoute.Overview, state.route.value)
+
+        // 4th back: returns false, allowing workspace departure
+        assertFalse(state.back())
+    }
+
+    @Test
+    fun testNavigateOverviewClearsNestedBackStack() {
+        val state = GitWorkspaceState()
+        state.navigate(GitRoute.Details("c1"))
+        state.navigate(GitRoute.Diff("f1", "c1"))
+
+        // Explicit navigate to Overview clears back stack
+        state.navigate(GitRoute.Overview)
+        assertEquals(GitRoute.Overview, state.route.value)
+
+        assertFalse(state.back())
+    }
 }

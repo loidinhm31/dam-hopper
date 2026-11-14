@@ -54,6 +54,7 @@ private class FakeWsConnection(
             mtime = 10L,
             size = 25uL,
             data = kotlin.io.encoding.Base64.encode("fun main() = println()\n".encodeToByteArray()),
+            fileIdentity = ServerMsg.FileIdentity(workspaceId = "ws-git", workspaceEpoch = 1L, canonicalPath = "/test-proj/Source.kt"),
         )
         else -> ServerMsg.FsOpResult(reqId = reqId, ok = true)
     }
@@ -68,13 +69,16 @@ class RetainedGitTransportTest {
     fun setUp() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         serverPort = server!!.address.port
+        val identityHeader = """{"workspaceId":"ws-git","workspaceEpoch":1,"canonicalPath":"/test-proj/Source.kt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":25,"mtime":10,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":25,"mtime":10,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-git","workspaceEpoch":1,"canonicalPath":"/test-proj/Source.kt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "fun main() = println()\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -92,6 +96,7 @@ class RetainedGitTransportTest {
             baseUrl = "http://127.0.0.1:$serverPort",
             accountUser = "dev-user",
             project = "test-proj",
+            workspaceEpoch = 1L,
         )
         val target = owner.toProjectTargetRef()
         val conn = ConnectionRef("prof-test", generation)

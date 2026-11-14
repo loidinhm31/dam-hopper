@@ -40,6 +40,10 @@ fun FileItemActionsModal(
     onDownloadFile: ((path: String, filename: String) -> Unit)?,
     onCopyRelativePath: (path: String) -> Unit,
     onCopyRemotePath: (path: String) -> Unit,
+    isProjectFolder: Boolean = false,
+    projectName: String? = null,
+    onMarkProject: ((folderPath: String, defaultName: String) -> Unit)? = null,
+    onUnmarkProject: ((projectName: String, folderPath: String) -> Unit)? = null,
 ) {
     val parentDir = if (node.isDirectory) node.path else FileTreeHelpers.resolveParentPath(node.path)
     val icon = if (node.isDirectory) "📁" else "📄"
@@ -96,6 +100,29 @@ fun FileItemActionsModal(
                         onNewFolder(parentDir)
                     }
                 )
+
+                // Mark / Unmark Project for directories
+                if (node.isDirectory) {
+                    if (isProjectFolder && onUnmarkProject != null) {
+                        ActionRow(
+                            icon = "🔖-",
+                            label = "Unmark Project (preserve files)",
+                            onClick = {
+                                onDismiss()
+                                onUnmarkProject(projectName ?: node.name, node.path)
+                            }
+                        )
+                    } else if (!isProjectFolder && onMarkProject != null) {
+                        ActionRow(
+                            icon = "🔖+",
+                            label = "Mark as Project",
+                            onClick = {
+                                onDismiss()
+                                onMarkProject(node.path, node.name.ifEmpty { "project" })
+                            }
+                        )
+                    }
+                }
 
                 // Upload
                 if (onUploadFile != null) {

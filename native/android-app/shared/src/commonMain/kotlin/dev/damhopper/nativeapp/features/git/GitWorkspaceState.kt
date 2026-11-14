@@ -20,6 +20,7 @@ class GitWorkspaceState {
     private val _section = MutableStateFlow(GitPanelSection.CHANGES)
     val section: StateFlow<GitPanelSection> = _section.asStateFlow()
 
+    private val routeBackStack = mutableListOf<GitRoute>()
     private val _route = MutableStateFlow<GitRoute>(GitRoute.Overview)
     val route: StateFlow<GitRoute> = _route.asStateFlow()
 
@@ -52,7 +53,13 @@ class GitWorkspaceState {
     }
 
     fun navigate(route: GitRoute) {
-        _route.value = route
+        if (route == GitRoute.Overview) {
+            routeBackStack.clear()
+            _route.value = GitRoute.Overview
+        } else if (_route.value != route) {
+            routeBackStack.add(_route.value)
+            _route.value = route
+        }
     }
 
     fun updateModal(modal: GitModalState) {
@@ -91,6 +98,10 @@ class GitWorkspaceState {
     fun back(): Boolean {
         if (_modal.value != GitModalState()) {
             _modal.value = GitModalState()
+            return true
+        }
+        if (routeBackStack.isNotEmpty()) {
+            _route.value = routeBackStack.removeAt(routeBackStack.size - 1)
             return true
         }
         if (_route.value != GitRoute.Overview) {

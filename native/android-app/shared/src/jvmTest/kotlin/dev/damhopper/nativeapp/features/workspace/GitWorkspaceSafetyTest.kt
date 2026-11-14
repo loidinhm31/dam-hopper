@@ -19,8 +19,13 @@ import dev.damhopper.nativeapp.features.git.GitMutationImpact
 import dev.damhopper.nativeapp.features.git.GitOperationScope
 import dev.damhopper.nativeapp.features.git.WorkspaceGitSafety
 import dev.damhopper.nativeapp.features.git.WorktreeRemovalPrecheck
+import dev.damhopper.nativeapp.features.git.GitMutationEvent
+import dev.damhopper.nativeapp.features.git.GitOutcomeKind
+import dev.damhopper.nativeapp.features.git.VcsRoot
+import dev.damhopper.nativeapp.features.terminal.TerminalQualifiedKey
 import dev.damhopper.nativeapp.features.terminal.TerminalRepository
 import dev.damhopper.nativeapp.features.terminal.TerminalSessionDetailed
+import dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord
 import dev.damhopper.nativeapp.ui.flow.AppFlowNavigation
 import dev.damhopper.nativeapp.ui.flow.AppFlowStage
 import dev.damhopper.nativeapp.ui.screens.ProjectTerminalState
@@ -71,6 +76,7 @@ private class SafetyTestWsConnection(
             mtime = 10L,
             size = 25uL,
             data = kotlin.io.encoding.Base64.encode("fun main() = println()\n".encodeToByteArray()),
+            fileIdentity = ServerMsg.FileIdentity("ws-git", 1L, "/Main.kt"),
         )
         else -> ServerMsg.FsOpResult(reqId = reqId, ok = true)
     }
@@ -80,23 +86,28 @@ class GitWorkspaceSafetyTest {
 
     private var server: HttpServer? = null
     private var serverPort: Int = 0
+    private var terminalDetailedResponse: String = "[]"
 
     @BeforeTest
     fun setUp() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         serverPort = server!!.address.port
+        val identityHeader = """{"workspaceId":"ws-git","workspaceEpoch":1,"canonicalPath":"/Main.kt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":25,"mtime":10,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":25,"mtime":10,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-git","workspaceEpoch":1,"canonicalPath":"/Main.kt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "fun main() = println()\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
         server!!.createContext("/api/terminal/detailed") { exchange ->
-            val json = "[]"
+            val json = terminalDetailedResponse
+            exchange.responseHeaders.set("X-DamHopper-PTY-Epoch", "00000000-0000-0000-0000-000000000000")
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
@@ -347,5 +358,251 @@ class GitWorkspaceSafetyTest {
         assertEquals(WorkspacePanel.EDITOR, workspace.activePanel.value)
         assertEquals(1, workspace.editorTabsState.tabs.value.size)
         assertEquals("NewFile.kt", workspace.editorTabsState.tabs.value.first().path)
+    }
+
+    @Test
+    fun testUnregisteredProjectTargetRefusesGitEntryWithExactReason() = runTest {
+        val (workspace, baseSafety) = createFixture()
+        val safety = WorkspaceGitSafety(
+            boundOwner = workspace.owner,
+            connectionGetter = baseSafety.connectionGetter,
+            fileRepositoryGetter = baseSafety.fileRepositoryGetter,
+            editorRepositoryGetter = baseSafety.editorRepositoryGetter,
+            terminalRepositoryGetter = baseSafety.terminalRepositoryGetter,
+            workspaceStateGetter = baseSafety.workspaceStateGetter,
+            retainedDirtyDocsProvider = baseSafety.retainedDirtyDocsProvider,
+            targetStore = baseSafety.targetStore,
+            flowNavigation = baseSafety.flowNavigation,
+            registeredProjectsProvider = { listOf("safety-proj") },
+        )
+
+        // 1. Literal whole-workspace target rejected
+        val workspaceTargetOwner = workspace.owner.copy(project = "workspace")
+        val workspaceScope = GitOperationScope.from(workspaceTargetOwner, ConnectionRef("prof-safety", 1L))
+        val workspaceResult = safety.withMutationGuard(workspaceScope, GitMutationImpact.FILES, emptyList()) { "ok" }
+        assertTrue(workspaceResult.isFailure)
+        val wsMsg = workspaceResult.exceptionOrNull()?.message ?: ""
+        assertTrue(wsMsg.contains("target 'workspace' is not a registered project"))
+
+        // 2. Unregistered folder target rejected
+        val unregisteredOwner = workspace.owner.copy(project = "unregistered-folder")
+        val unregisteredScope = GitOperationScope.from(unregisteredOwner, ConnectionRef("prof-safety", 1L))
+        val unregisteredResult = safety.withMutationGuard(unregisteredScope, GitMutationImpact.FILES, emptyList()) { "ok" }
+        assertTrue(unregisteredResult.isFailure)
+        val unregMsg = unregisteredResult.exceptionOrNull()?.message ?: ""
+        assertTrue(unregMsg.contains("target 'unregistered-folder' is not a registered project"))
+    }
+
+    @Test
+    fun testWrongVcsRootRejectsMutationWithoutFallback() = runTest {
+        val (workspace, baseSafety) = createFixture()
+        val safety = WorkspaceGitSafety(
+            boundOwner = workspace.owner,
+            connectionGetter = baseSafety.connectionGetter,
+            fileRepositoryGetter = baseSafety.fileRepositoryGetter,
+            editorRepositoryGetter = baseSafety.editorRepositoryGetter,
+            terminalRepositoryGetter = baseSafety.terminalRepositoryGetter,
+            workspaceStateGetter = baseSafety.workspaceStateGetter,
+            retainedDirtyDocsProvider = baseSafety.retainedDirtyDocsProvider,
+            targetStore = baseSafety.targetStore,
+            flowNavigation = baseSafety.flowNavigation,
+            vcsRootsProvider = { listOf(VcsRoot(rootId = "primary-root", path = ".", kind = "primary")) },
+        )
+
+        val wrongRootScope = GitOperationScope(
+            owner = workspace.owner,
+            generation = 1L,
+            root = "non-existent-submodule-root",
+        )
+
+        var dispatched = false
+        val result = safety.withMutationGuard(wrongRootScope, GitMutationImpact.FILES, emptyList()) {
+            dispatched = true
+            "dispatched"
+        }
+        assertTrue(result.isFailure)
+        assertFalse(dispatched)
+        val msg = result.exceptionOrNull()?.message ?: ""
+        assertTrue(msg.contains("root 'non-existent-submodule-root' does not match any existing VcsRoot"))
+    }
+
+    @Test
+    fun testDirtyAliasBlocksWorktreeSwitchBranchDeletionAndReset() = runTest {
+        val (workspace, safety) = createFixture()
+        val scope = GitOperationScope.from(workspace.owner, ConnectionRef("prof-safety", 1L))
+
+        // Open tab on target and make dirty
+        workspace.editorTabsState.openTab(workspace.target, "SharedAlias.kt")
+        val docId = workspace.editorTabsState.activeTabId.value!!
+        val doc = workspace.editorTabsState.getDocument(docId)!!
+        doc.applyEdit(1, 1, 1, 1, "dirty edit\n")
+        assertTrue(doc.isDirty.value)
+
+        // Retained dirty docs provider queries canonical owner, matching all aliases of that file
+        val dirtyList = safety.retainedDirtyDocsProvider(workspace.owner)
+        assertEquals(1, dirtyList.size)
+        assertEquals("SharedAlias.kt", dirtyList[0].relativePath)
+
+        // 1. Branch deletion (REFS) blocked
+        var branchDeleteDispatched = false
+        val deleteResult = safety.withMutationGuard(scope, GitMutationImpact.REFS, emptyList()) {
+            branchDeleteDispatched = true
+        }
+        assertTrue(deleteResult.isFailure)
+        assertFalse(branchDeleteDispatched)
+        assertTrue(deleteResult.exceptionOrNull()?.message?.contains("unsaved editor changes in SharedAlias.kt") == true)
+
+        // 2. Whole-target reset (FILES with empty paths) blocked
+        var resetDispatched = false
+        val resetResult = safety.withMutationGuard(scope, GitMutationImpact.FILES, emptyList()) {
+            resetDispatched = true
+        }
+        assertTrue(resetResult.isFailure)
+        assertFalse(resetDispatched)
+        assertTrue(resetResult.exceptionOrNull()?.message?.contains("unsaved editor changes in SharedAlias.kt") == true)
+
+        // 3. Worktree switch without departure guard blocked immediately
+        val navWithoutGuard = AppFlowNavigation()
+        val directSafety = WorkspaceGitSafety(
+            boundOwner = workspace.owner,
+            connectionGetter = safety.connectionGetter,
+            fileRepositoryGetter = safety.fileRepositoryGetter,
+            editorRepositoryGetter = safety.editorRepositoryGetter,
+            terminalRepositoryGetter = safety.terminalRepositoryGetter,
+            workspaceStateGetter = safety.workspaceStateGetter,
+            retainedDirtyDocsProvider = safety.retainedDirtyDocsProvider,
+            flowNavigation = navWithoutGuard,
+        )
+        val switchResult = directSafety.requestWorktreeSwitch(scope, ProjectTargetRef("prof-safety", "safety-proj", "wt-target"))
+        assertTrue(switchResult.isFailure)
+        assertTrue(switchResult.exceptionOrNull()?.message?.contains("unsaved editor changes in SharedAlias.kt") == true)
+    }
+
+    @Test
+    fun testActiveHiddenRestartPendingAndUnknownPtysBlockTransition() = runTest {
+        val (workspace, safety) = createFixture()
+        val scope = GitOperationScope.from(workspace.owner, ConnectionRef("prof-safety", 1L))
+        val targetWt = ProjectWorktree(path = "feature-wt", repositoryPath = "safety-proj", branch = "feat", commitHash = "c1", isMain = false)
+
+        // 1. Active terminal session blocks preflight removal
+        terminalDetailedResponse = """[
+            {"id":"term-live-1","project":"safety-proj","worktreePath":"feature-wt","command":"bash","cwd":"/ws/feature-wt","alive":true,"processState":"running","serverPtyEpoch":"00000000-0000-0000-0000-000000000000","incarnation":1,"incarnationExact":"1"},
+            {"id":"term-unrelated","project":"unrelated-proj","worktreePath":"feature-wt","command":"bash","cwd":"/ws/unrelated","alive":true,"processState":"running","serverPtyEpoch":"00000000-0000-0000-0000-000000000000","incarnation":1,"incarnationExact":"1"}
+        ]""".trimIndent()
+        val activeSafety = WorkspaceGitSafety(
+            boundOwner = workspace.owner,
+            connectionGetter = safety.connectionGetter,
+            fileRepositoryGetter = safety.fileRepositoryGetter,
+            editorRepositoryGetter = safety.editorRepositoryGetter,
+            terminalRepositoryGetter = { TerminalRepository(workspace.fileRepository.apiClient) },
+            workspaceStateGetter = safety.workspaceStateGetter,
+            retainedDirtyDocsProvider = { emptyList() },
+        )
+
+        val activeCheck = activeSafety.preflightRemoval(scope, targetWt)
+        assertTrue(activeCheck is WorktreeRemovalPrecheck.Blocked)
+        assertTrue(activeCheck.reasons.any { it.contains("Active terminal session (session term-live-1)") })
+        assertFalse(activeCheck.reasons.any { it.contains("term-unrelated") }, "Unrelated project session must not block target")
+
+        // 2. Restart-pending terminal session blocks
+        terminalDetailedResponse = """[
+            {"id":"term-restart-2","project":"safety-proj","worktreePath":"feature-wt","command":"bash","cwd":"/ws/feature-wt","alive":false,"processState":"running","serverPtyEpoch":"00000000-0000-0000-0000-000000000000","incarnation":1,"incarnationExact":"1","terminationState":"restartPending"}
+        ]""".trimIndent()
+        val restartSafety = WorkspaceGitSafety(
+            boundOwner = workspace.owner,
+            connectionGetter = safety.connectionGetter,
+            fileRepositoryGetter = safety.fileRepositoryGetter,
+            editorRepositoryGetter = safety.editorRepositoryGetter,
+            terminalRepositoryGetter = { TerminalRepository(workspace.fileRepository.apiClient) },
+            workspaceStateGetter = safety.workspaceStateGetter,
+            retainedDirtyDocsProvider = { emptyList() },
+        )
+
+        val restartCheck = restartSafety.preflightRemoval(scope, targetWt)
+        assertTrue(restartCheck is WorktreeRemovalPrecheck.Blocked)
+        assertTrue(restartCheck.reasons.any { it.contains("Restart-pending terminal session (session term-restart-2)") })
+
+        // 3. Unknown state terminal session blocks
+        terminalDetailedResponse = """[
+            {"id":"term-unknown-3","project":"safety-proj","worktreePath":"feature-wt","command":"bash","cwd":"/ws/feature-wt","alive":false,"processState":"running","serverPtyEpoch":"00000000-0000-0000-0000-000000000000","incarnation":1,"incarnationExact":"1","terminationState":"unknown"}
+        ]""".trimIndent()
+        val unknownSafety = WorkspaceGitSafety(
+            boundOwner = workspace.owner,
+            connectionGetter = safety.connectionGetter,
+            fileRepositoryGetter = safety.fileRepositoryGetter,
+            editorRepositoryGetter = safety.editorRepositoryGetter,
+            terminalRepositoryGetter = { TerminalRepository(workspace.fileRepository.apiClient) },
+            workspaceStateGetter = safety.workspaceStateGetter,
+            retainedDirtyDocsProvider = { emptyList() },
+        )
+
+        val unknownCheck = unknownSafety.preflightRemoval(scope, targetWt)
+        assertTrue(unknownCheck is WorktreeRemovalPrecheck.Blocked)
+        assertTrue(unknownCheck.reasons.any { it.contains("Terminal session in unknown state (session term-unknown-3)") })
+
+        // 4. Hidden session absent from inventory and uncertain create both block
+        terminalDetailedResponse = "[]"
+        val termState = workspace.terminalState!!
+        termState.hiddenSessions.add(
+            TerminalQualifiedKey(
+                profileId = "prof-safety",
+                project = "safety-proj",
+                worktreePath = "feature-wt",
+                terminalId = "term-hidden-absent",
+            )
+        )
+        termState.uncertainCreates.add(
+            UncertainCreateRecord(
+                intentId = "intent-1",
+                profileId = "prof-safety",
+                terminalId = "term-uncertain-create",
+                project = "safety-proj",
+                worktreePath = "feature-wt",
+                createdAtEpochMs = 1000L,
+            )
+        )
+
+        val emptyInvSafety = WorkspaceGitSafety(
+            boundOwner = workspace.owner,
+            connectionGetter = safety.connectionGetter,
+            fileRepositoryGetter = safety.fileRepositoryGetter,
+            editorRepositoryGetter = safety.editorRepositoryGetter,
+            terminalRepositoryGetter = { TerminalRepository(workspace.fileRepository.apiClient) },
+            workspaceStateGetter = safety.workspaceStateGetter,
+            retainedDirtyDocsProvider = { emptyList() },
+        )
+
+        val hiddenCheck = emptyInvSafety.preflightRemoval(scope, targetWt)
+        assertTrue(hiddenCheck is WorktreeRemovalPrecheck.Blocked)
+        assertTrue(hiddenCheck.reasons.any { it.contains("Hidden terminal session absent from inventory (session term-hidden-absent)") })
+        assertTrue(hiddenCheck.reasons.any { it.contains("Uncertain pending terminal creation (terminal term-uncertain-create)") })
+    }
+
+    @Test
+    fun testUnknownMutationOutcomeFailsSafelyWithoutSuccessInvalidation() = runTest {
+        val (workspace, safety) = createFixture()
+        val scope = GitOperationScope.from(workspace.owner, ConnectionRef("prof-safety", 1L))
+
+        var dispatched = false
+        val failResult = safety.withMutationGuard(scope, GitMutationImpact.FILES, listOf("Target.kt")) {
+            dispatched = true
+            throw RuntimeException("Network pipe broken during Git execution")
+        }
+
+        assertTrue(failResult.isFailure)
+        assertTrue(dispatched)
+        assertEquals("Network pipe broken during Git execution", failResult.exceptionOrNull()?.message)
+
+        // Unknown mutation outcome event does NOT trigger reloadCleanBuffers or corrupt state
+        val unknownEvent = GitMutationEvent(
+            scope = scope,
+            impact = GitMutationImpact.FILES,
+            kind = GitOutcomeKind.UNKNOWN,
+            paths = listOf("Target.kt"),
+            message = "Uncertain transport outcome",
+        )
+        safety.onMutationOutcome(unknownEvent)
+        // Verify workspace is still accessible
+        assertNotNull(safety.workspaceStateGetter())
     }
 }

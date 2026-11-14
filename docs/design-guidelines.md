@@ -317,3 +317,24 @@ All animations honor user operating system preferences via `@media (prefers-redu
 
 - **Colocated Evidence (`packages/ui/e2e/os-host-browser/tabs-visual/`):** Full-viewport Playwright captures via `capture-evidence.ts` across `400×800`, `640×900`, and `1440×900` viewports (exercising narrow overflow, New Tab, unavailable/capacity placeholders, tools/recovery disclosure, privacy masking, large text, and coarse pointers) publish in one evidence session to `packages/ui/e2e/os-host-browser/tabs-visual/` (`checkpoint.png`s, `evidence.json`, `review.md`; optional attachment duplicates do not replace colocated files or create golden baselines).
 - **Mandatory Human Decision Receipt:** Automation initializes/resets `review.md` to `PENDING_HUMAN_REVIEW` only. Visual qualification strictly requires an independent **actual-human** `ACCEPTED` entry in `review.md` recording operator identity, timestamp, matching source fingerprint / Git HEAD / run ID, every inspected image SHA-256 digest, and visual notes. `PENDING_HUMAN_REVIEW`, `REJECTED`, missing, or mismatched hashes/metadata block visual qualification regardless of automated test results.
+
+---
+
+## 8. Native Android Agent Hub Design System & First Page Architecture
+
+### 8.1 Landing Screen Philosophy
+The Android Native client (`native/android-app/`) First Page / Landing Screen establishes a high-density, multi-zone developer workbench directly inspired by DamHopper's web Agent Hub:
+- **Left Agents Zone:** Ambient cross-project agent observation (OMP, Codex, Claude), 7-status filter chips, urgency counters (`!N`, `●N`, `○N`), and direct jump-to-terminal routing.
+- **Center Projects Stage:** Core workspace project cards, Git worktree context (`⎇ wt: branch · #hash`), live terminal counts, zero-session open targets with safe dismissal, and direct capability launch triggers (`[Files]`, `[Terminal]`, `[Git]`).
+- **Right Workspace File Tree Zone:** Contextual file tree and Git file changes overview bound to the selected project, enabling one-tap file opening into `EditorPanelScreen` with canonical `DocumentId` leases.
+
+### 8.2 Form Factor & Breakpoint Rules
+- **Compact Phone (`< 600dp`):** Single active stage. Center stage occupies 100% width. Left Agents Sidebar and Right Workspace File Tree open as modal drawers / bottom sheets with `50%` dark scrim. All interactive controls enforce minimum `48x48dp` touch targets.
+- **Foldable / Landscape (`600–839dp`):** Dual-column layout with a pinned collapsible left navigation rail (`240–280dp`) and center project stage (`weight(1f)`, `>= 360dp`). Right file tree operates as an expandable slide-over side sheet.
+- **Expanded Tablet / DeX (`>= 840dp`):** 3-column hybrid layout (Left Agents 240dp | Center Projects flex 1, ~380-480dp | Right File Tree 280-320dp, collapsible via toggle).
+
+### 8.3 Mandatory Touch & Contrast Invariants
+- **Minimum Touch Target:** Inviolable `48x48dp` for all buttons, tabs, chips, and dismiss icons (`sizeIn(minWidth = 48.dp, minHeight = 48.dp)`).
+- **Safety Gaps:** Minimum `8dp` spacing between adjacent destructive/dismiss actions and primary triggers.
+- **WCAG 2.1 AA Contrast Compliance:** Text contrast exceeds `4.5:1` (Primary Text `#F0F6FC` on Canvas `#0D1117` = `15.8:1`; on Card `#161B22` = `14.2:1`). UI components exceed `3:0:1` (Accent `#58A6FF` on Card = `6.4:1`).
+- **IME Safety:** Pinned top chrome (`56dp` compact / `48dp` expanded) never wraps; virtual keyboard resizes center content smoothly via `WindowInsets.ime`.

@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 class AppFlowNavigationTest {
@@ -26,17 +27,18 @@ class AppFlowNavigationTest {
         val nav = AppFlowNavigation()
 
         // 1. Authenticate profile
+        // 1. Authenticate profile lands directly in Hub
         nav.onProfileAuthenticated("profile-1")
         val state1 = nav.state.value
-        assertEquals(AppFlowStage.PROJECT_LIST, state1.stage)
+        assertEquals(AppFlowStage.HUB, state1.stage)
         assertEquals("profile-1", state1.activeProfileId)
         assertNull(state1.activeProject)
         assertNull(state1.activeSessionId)
 
-        // 2. Select project
+        // 2. Select project stays in Hub with selected project
         nav.selectProject("dam-hopper")
         val state2 = nav.state.value
-        assertEquals(AppFlowStage.TERMINAL, state2.stage)
+        assertEquals(AppFlowStage.HUB, state2.stage)
         assertEquals("profile-1", state2.activeProfileId)
         assertEquals("dam-hopper", state2.activeProject)
         assertNull(state2.activeSessionId)
@@ -55,23 +57,26 @@ class AppFlowNavigationTest {
         assertFalse(nav.handleBackPress(), "PROFILE_LOGIN stage must yield to platform back")
         assertEquals(AppFlowStage.PROFILE_LOGIN, nav.state.value.stage)
 
-        // Advance to TERMINAL
+        // Advance to Hub
         nav.onProfileAuthenticated("profile-1")
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
+
+        // Modal project picker precedence
+        nav.openProjectPicker()
+        assertTrue(nav.state.value.projectPickerOpen)
+        assertTrue(nav.handleBackPress(), "Back in project picker modal must be consumed")
+        assertFalse(nav.state.value.projectPickerOpen)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
+
         nav.selectProject("proj-alpha")
         nav.selectSession("sess-1")
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
 
-        // 1. Back from TERMINAL returns to PROJECT_LIST
-        assertTrue(nav.handleBackPress(), "Back in TERMINAL must be consumed")
-        assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
-        assertEquals("profile-1", nav.state.value.activeProfileId)
-        assertEquals("proj-alpha", nav.state.value.activeProject)
-
-        // 2. Back from PROJECT_LIST returns to PROFILE_LOGIN
-        assertTrue(nav.handleBackPress(), "Back in PROJECT_LIST must be consumed")
+        // 1. Back from Hub root proceeds to departure (PROFILE_LOGIN)
+        assertTrue(nav.handleBackPress(), "Back in Hub must be consumed")
         assertEquals(AppFlowStage.PROFILE_LOGIN, nav.state.value.stage)
 
-        // 3. Back from PROFILE_LOGIN yields to platform
+        // 2. Back from PROFILE_LOGIN yields to platform
         assertFalse(nav.handleBackPress(), "Back in PROFILE_LOGIN must yield to platform")
     }
 
@@ -87,10 +92,11 @@ class AppFlowNavigationTest {
         assertEquals("session-A1-1", nav.state.value.activeSessionId)
 
         // Switch to different server profile
+        // Switch to different server profile lands in Hub
         nav.onProfileAuthenticated("server-B")
         val stateB = nav.state.value
 
-        assertEquals(AppFlowStage.PROJECT_LIST, stateB.stage)
+        assertEquals(AppFlowStage.HUB, stateB.stage)
         assertEquals("server-B", stateB.activeProfileId)
         assertNull(stateB.activeProject, "Project from server-A must NOT leak to server-B")
         assertNull(stateB.activeSessionId, "Session from server-A must NOT leak to server-B")
@@ -151,7 +157,7 @@ class AppFlowNavigationTest {
         val nav = AppFlowNavigation()
         nav.onProfileAuthenticated("server-A")
         nav.selectProject("proj-1")
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
 
         var guardInvoked = false
         var deferredProceed: (() -> Unit)? = null
@@ -159,7 +165,7 @@ class AppFlowNavigationTest {
         nav.departureGuard = { request ->
             guardInvoked = true
             deferredProceed = request.onProceed
-            assertEquals(AppFlowStage.PROJECT_LIST, request.targetStage)
+            assertEquals(AppFlowStage.PROFILE_LOGIN, request.targetStage)
             true // Intercept!
         }
 
@@ -167,11 +173,11 @@ class AppFlowNavigationTest {
         val handled = nav.handleBackPress()
         assertTrue(handled)
         assertTrue(guardInvoked)
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage, "State must remain unchanged while intercepted")
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage, "State must remain unchanged while intercepted")
 
         // Invoking deferred callback must execute transition
         deferredProceed?.invoke()
-        assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
+        assertEquals(AppFlowStage.PROFILE_LOGIN, nav.state.value.stage)
     }
 
     @Test
@@ -184,7 +190,7 @@ class AppFlowNavigationTest {
 
         val handled = nav.handleBackPress()
         assertTrue(handled)
-        assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
+        assertEquals(AppFlowStage.PROFILE_LOGIN, nav.state.value.stage)
     }
 
     private fun workspaceNav(): AppFlowNavigation {
@@ -199,16 +205,16 @@ class AppFlowNavigationTest {
     fun testSettingsIsARetainedOverlayThatNeverMovesSelection() {
         val nav = workspaceNav()
         val before = nav.state.value
-        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL, panel = "EDITOR", document = "file:a.kt", sessionId = "term-7"))
+        nav.openSettings(SettingsOrigin(AppFlowStage.HUB, panel = "EDITOR", document = "file:a.kt", sessionId = "term-7"))
         val open = nav.state.value
-        assertEquals(AppFlowStage.TERMINAL, open.stage, "Settings is an overlay, not a stage")
+        assertEquals(AppFlowStage.HUB, open.stage, "Settings is an overlay, not a stage")
         assertEquals(before.activeProject, open.activeProject)
         assertEquals(before.activeSessionId, open.activeSessionId)
         assertEquals("EDITOR", open.settings?.origin?.panel)
         assertEquals("file:a.kt", open.settings?.origin?.document)
 
         // A second open never replaces the captured origin (the overlay never nests).
-        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL, panel = "FILES"))
+        nav.openSettings(SettingsOrigin(AppFlowStage.HUB, panel = "FILES"))
         assertEquals("EDITOR", nav.state.value.settings?.origin?.panel)
 
         nav.setSettingsSubSection("NOTIFICATIONS")
@@ -218,7 +224,7 @@ class AppFlowNavigationTest {
     @Test
     fun testBackClosesSettingsThenFeedThenUnwindsStagesAndReturnsTheOrigin() {
         val nav = workspaceNav()
-        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL, panel = "TERMINAL", sessionId = "term-7"))
+        nav.openSettings(SettingsOrigin(AppFlowStage.HUB, panel = "TERMINAL", sessionId = "term-7"))
         // Newer interceptors (e.g. the sidebar) must not swallow the Back meant for Settings.
         var interceptorCalls = 0
         nav.registerBackInterceptor { interceptorCalls++; true }
@@ -226,7 +232,7 @@ class AppFlowNavigationTest {
         assertTrue(nav.handleBackPress())
         assertNull(nav.state.value.settings)
         assertEquals(0, interceptorCalls)
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
         assertEquals("term-7", nav.state.value.activeSessionId, "exact session preserved")
 
         nav.toggleNotifications()
@@ -237,14 +243,14 @@ class AppFlowNavigationTest {
 
         assertTrue(nav.handleBackPress()) // now the interceptor owns it
         assertEquals(1, interceptorCalls)
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
     }
 
     @Test
     fun testCloseSettingsReturnsOriginAndIsIdempotent() {
         val nav = workspaceNav()
         assertNull(nav.closeSettings())
-        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL, panel = "FILES"))
+        nav.openSettings(SettingsOrigin(AppFlowStage.HUB, panel = "FILES"))
         assertEquals("FILES", nav.closeSettings()?.panel)
         assertNull(nav.closeSettings())
     }
@@ -252,12 +258,12 @@ class AppFlowNavigationTest {
     @Test
     fun testStageChangesDropTheOverlayBecauseItsOriginNoLongerExists() {
         val nav = workspaceNav()
-        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL))
+        nav.openSettings(SettingsOrigin(AppFlowStage.HUB))
         nav.navigateToProfiles()
         assertNull(nav.state.value.settings)
 
         nav.onProfileAuthenticated("server-A")
-        nav.openSettings(SettingsOrigin(AppFlowStage.PROJECT_LIST))
+        nav.openSettings(SettingsOrigin(AppFlowStage.HUB))
         nav.onProfileAuthenticated("server-B")
         assertNull(nav.state.value.settings)
         assertNull(nav.state.value.activeProject)
@@ -266,10 +272,10 @@ class AppFlowNavigationTest {
     @Test
     fun testConfirmedResetLeavesForWorkspaceSelectionWithoutKeepingStaleSelection() {
         val nav = workspaceNav()
-        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL))
+        nav.openSettings(SettingsOrigin(AppFlowStage.HUB))
         nav.completeResetToWorkspaceSelection()
         val state = nav.state.value
-        assertEquals(AppFlowStage.PROJECT_LIST, state.stage)
+        assertEquals(AppFlowStage.HUB, state.stage)
         assertEquals("server-A", state.activeProfileId)
         assertNull(state.activeProject)
         assertNull(state.activeSessionId)
@@ -341,7 +347,7 @@ class AppFlowNavigationTest {
             TerminalRouteGate.DEFERRED,
             nav.requestVerifiedTerminalRoute(route, { proceeded++ }, { cancelled++ }),
         )
-        assertEquals(AppFlowStage.TERMINAL, captured?.targetStage)
+        assertEquals(AppFlowStage.HUB, captured?.targetStage)
         assertEquals("proj-1", nav.state.value.activeProject, "a request never mutates the route")
         captured?.onProceed?.invoke()
         assertEquals(1, proceeded)
@@ -357,7 +363,7 @@ class AppFlowNavigationTest {
         val nav = workspaceNav()
         nav.commitVerifiedTerminalRoute(route)
         val state = nav.state.value
-        assertEquals(AppFlowStage.TERMINAL, state.stage)
+        assertEquals(AppFlowStage.HUB, state.stage)
         assertEquals("proj-2", state.activeProject)
         assertEquals("term-5", state.activeSessionId)
         assertFalse(state.notificationRouteActive)
@@ -422,13 +428,13 @@ class AppFlowNavigationTest {
     @Test
     fun testAgentSettingsOpenTheCapturedHostAgentsIntentAndReplaceItDeterministically() {
         val nav = workspaceNav()
-        val origin = SettingsOrigin(AppFlowStage.TERMINAL, panel = "TERMINAL", sessionId = "term-1")
+        val origin = SettingsOrigin(AppFlowStage.HUB, panel = "TERMINAL", sessionId = "term-1")
         nav.openAgentSettings(origin, "server-B")
         var overlay = nav.state.value.settings
         assertEquals("HOST", overlay?.subSection)
         assertEquals("AGENTS", overlay?.hostSection)
         assertEquals("server-B", overlay?.targetProfileId)
-        assertEquals(origin.copy(stage = AppFlowStage.TERMINAL), overlay?.origin)
+        assertEquals(origin.copy(stage = AppFlowStage.HUB), overlay?.origin)
         val firstIntent = overlay?.intent
 
         // A second open keeps the origin but advances the intent; the host section is remembered by name.
@@ -521,5 +527,42 @@ class AppFlowNavigationTest {
         assertTrue(result.isFailure)
         assertFalse(committed)
         assertEquals("proj-1", nav.state.value.activeProject)
+    }
+
+    @Test
+    fun testBackPrecedenceCapabilityToTerminalThenDeparture() {
+        val nav = workspaceNav()
+        var switchedToTerminal = false
+        // Register capability -> terminal interceptor
+        val unregister = nav.registerBackInterceptor {
+            switchedToTerminal = true
+            true
+        }
+        assertTrue(nav.handleBackPress(), "Capability interceptor must consume first Back")
+        assertTrue(switchedToTerminal)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
+
+        unregister()
+        // Next Back unwinds to PROFILE_LOGIN
+        assertTrue(nav.handleBackPress(), "Hub root Back unwinds to PROFILE_LOGIN")
+        assertEquals(AppFlowStage.PROFILE_LOGIN, nav.state.value.stage)
+    }
+
+    @Test
+    fun testNestedProjectPickerPrecedesSettingsAndDeparture() {
+        val nav = workspaceNav()
+        nav.openSettings(SettingsOrigin(AppFlowStage.HUB))
+        nav.openProjectPicker()
+        assertTrue(nav.state.value.projectPickerOpen)
+
+        // Back must close project picker first, leaving settings intact
+        assertTrue(nav.handleBackPress())
+        assertFalse(nav.state.value.projectPickerOpen)
+        assertNotNull(nav.state.value.settings)
+
+        // Next back closes settings
+        assertTrue(nav.handleBackPress())
+        assertNull(nav.state.value.settings)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
     }
 }

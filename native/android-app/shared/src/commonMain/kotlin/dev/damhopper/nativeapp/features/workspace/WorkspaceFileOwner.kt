@@ -37,6 +37,7 @@ data class WorkspaceFileOwner(
     fun matchesTarget(target: ProjectTargetRef): Boolean {
         if (target.profileId != null && target.profileId != profileId) return false
         if (project.isNotBlank() && project != "*" && target.project != project) return false
+        if (project == "*") return true
         val targetWorktree = normalizeWorktree(target.worktreePath)
         return targetWorktree == normalizedWorktreePath
     }

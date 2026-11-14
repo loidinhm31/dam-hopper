@@ -2,6 +2,8 @@ package dev.damhopper.nativeapp.features.settings
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -426,6 +428,7 @@ data class WorkbenchPreferences(
          * [cognito] applies the stricter Cognito rule (keyboard chord with a usable DOM code, no DoubleShift).
          */
         fun normalizeShortcut(value: String, default: String, cognito: Boolean = false): String {
+            if (value.isBlank()) return "" // explicitly unbound
             val valid = if (cognito) {
                 ShortcutGrammar.isValidCognitoBinding(value)
             } else {
@@ -618,8 +621,9 @@ fun WorkbenchPreferences.toUiPreferences(includePolicy: Boolean = false): UiPref
  * caller, delivery is suppressed for unsupported versions).
  */
 fun UiPreferences.applyTo(base: WorkbenchPreferences): WorkbenchPreferences {
-    fun shortcut(value: String?, current: String, cognito: Boolean = false): String {
-        if (value == null) return current
+    fun shortcut(key: String, value: String?, current: String, cognito: Boolean = false): String {
+        if (unboundFields.contains(key) || value == "") return "" // explicitly unbound remotely
+        if (value == null) return current // omitted remotely: keep current
         val valid = if (cognito) {
             ShortcutGrammar.isValidCognitoBinding(value)
         } else {
@@ -655,18 +659,18 @@ fun UiPreferences.applyTo(base: WorkbenchPreferences): WorkbenchPreferences {
             ?: base.mobileCustomKeyboardPadding,
         mobileCustomKeyboardRowGap = mobileCustomKeyboardRowGap?.let { WorkbenchPreferences.clampKeyboardRowGap(it) }
             ?: base.mobileCustomKeyboardRowGap,
-        searchTextShortcut = shortcut(searchTextShortcut, base.searchTextShortcut),
-        searchFilenameShortcut = shortcut(searchFilenameShortcut, base.searchFilenameShortcut),
-        terminalWorkspaceShortcut = shortcut(terminalWorkspaceShortcut, base.terminalWorkspaceShortcut),
-        terminalFilePanelShortcut = shortcut(terminalFilePanelShortcut, base.terminalFilePanelShortcut),
-        projectPanelShortcut = shortcut(projectPanelShortcut, base.projectPanelShortcut),
-        revealActiveFileShortcut = shortcut(revealActiveFileShortcut, base.revealActiveFileShortcut),
-        gitPanelShortcut = shortcut(gitPanelShortcut, base.gitPanelShortcut),
-        portsPanelShortcut = shortcut(portsPanelShortcut, base.portsPanelShortcut),
-        fleetTerminalShortcut = shortcut(fleetTerminalShortcut, base.fleetTerminalShortcut),
-        terminalFontSizeIncreaseShortcut = shortcut(terminalFontSizeIncreaseShortcut, base.terminalFontSizeIncreaseShortcut),
-        terminalFontSizeDecreaseShortcut = shortcut(terminalFontSizeDecreaseShortcut, base.terminalFontSizeDecreaseShortcut),
-        cognitoModeShortcut = shortcut(cognitoModeShortcut, base.cognitoModeShortcut, cognito = true),
+        searchTextShortcut = shortcut("searchTextShortcut", searchTextShortcut, base.searchTextShortcut),
+        searchFilenameShortcut = shortcut("searchFilenameShortcut", searchFilenameShortcut, base.searchFilenameShortcut),
+        terminalWorkspaceShortcut = shortcut("terminalWorkspaceShortcut", terminalWorkspaceShortcut, base.terminalWorkspaceShortcut),
+        terminalFilePanelShortcut = shortcut("terminalFilePanelShortcut", terminalFilePanelShortcut, base.terminalFilePanelShortcut),
+        projectPanelShortcut = shortcut("projectPanelShortcut", projectPanelShortcut, base.projectPanelShortcut),
+        revealActiveFileShortcut = shortcut("revealActiveFileShortcut", revealActiveFileShortcut, base.revealActiveFileShortcut),
+        gitPanelShortcut = shortcut("gitPanelShortcut", gitPanelShortcut, base.gitPanelShortcut),
+        portsPanelShortcut = shortcut("portsPanelShortcut", portsPanelShortcut, base.portsPanelShortcut),
+        fleetTerminalShortcut = shortcut("fleetTerminalShortcut", fleetTerminalShortcut, base.fleetTerminalShortcut),
+        terminalFontSizeIncreaseShortcut = shortcut("terminalFontSizeIncreaseShortcut", terminalFontSizeIncreaseShortcut, base.terminalFontSizeIncreaseShortcut),
+        terminalFontSizeDecreaseShortcut = shortcut("terminalFontSizeDecreaseShortcut", terminalFontSizeDecreaseShortcut, base.terminalFontSizeDecreaseShortcut),
+        cognitoModeShortcut = shortcut("cognitoModeShortcut", cognitoModeShortcut, base.cognitoModeShortcut, cognito = true),
         cognitoModeStyle = when (cognitoModeStyle) {
             "black-screen" -> CognitoModeStyle.BLACK_SCREEN
             "heavy-blur" -> CognitoModeStyle.HEAVY_BLUR
@@ -748,6 +752,45 @@ fun WorkbenchPreferences.dirtyUiPatch(
         terminalAgentNotifications = if (includePolicy) terminalAgentNotifications.toWireJson() else null,
     )
 }
+
+/**
+ * Explicit value container for sparse UI patch serialization.
+ * Distinguishes between:
+ * - [Unchanged]: omitted from the patch JSON payload.
+ * - [ExplicitNull]: serialized as JSON null (unbound nullable scalar/extra binding).
+ * - [Value]: serialized with the given value.
+ */
+sealed class PatchValue<out T> {
+    object Unchanged : PatchValue<Nothing>()
+    object ExplicitNull : PatchValue<Nothing>()
+    data class Value<T>(val value: T) : PatchValue<T>()
+
+    fun toNullable(): T? = when (this) {
+        is Value -> value
+        else -> null
+    }
+
+    fun isExplicitNull(): Boolean = this is ExplicitNull
+    fun isChanged(): Boolean = this !is Unchanged
+}
+
+/**
+ * Sparse UI patch payload matching POST /api/global-config/ui.
+ * Contains only explicitly changed fields, serializing JSON null for unbound keys and preserving unknown remote keys.
+ */
+@Serializable
+data class SparseUiConfigPatch(
+    @SerialName("ui")
+    val ui: Map<String, JsonElement?> = emptyMap(),
+)
+
+/**
+ * Raw document representation of global config preserving unknown fields during import/export.
+ */
+data class RawGlobalConfigDocument(
+    val rawToml: String,
+    val sha256: String? = null,
+)
 
 /** Reads a JSON boolean without accepting the string "true"/"false". */
 internal fun JsonObject.strictBoolean(key: String): Boolean? {

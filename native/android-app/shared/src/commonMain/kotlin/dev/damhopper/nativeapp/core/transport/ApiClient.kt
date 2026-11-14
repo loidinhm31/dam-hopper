@@ -47,6 +47,34 @@ interface RequestAdmissionGuard {
 /** The request was denied by local admission and never handed to the HTTP engine. */
 class RequestNotSubmittedError(message: String) : Exception(message)
 
+
+/**
+ * Response with headers for endpoints returning metadata headers (like x-file-identity or X-DamHopper-PTY-Epoch).
+ */
+data class HttpResponseWithHeaders(
+    val body: String,
+    val headers: Map<String, List<String>>,
+    val status: Int,
+) {
+    fun header(name: String): String? =
+        headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
+
+    val fileIdentityJson: String? get() = header("x-file-identity")
+}
+
+/**
+ * Bounded byte response with headers.
+ */
+data class HttpBytesWithHeaders(
+    val bytes: ByteArray,
+    val headers: Map<String, List<String>>,
+    val status: Int,
+) {
+    fun header(name: String): String? =
+        headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
+
+    val fileIdentityJson: String? get() = header("x-file-identity")
+}
 /**
  * Type-safe HTTP API client scoped to a single ConnectionRef.
  *
@@ -98,6 +126,28 @@ class ApiClient(
         }
 
         return handleResponse(response, "GET", fullUrl)
+    }
+
+    suspend fun getWithHeaders(
+        path: String,
+        queryParams: Map<String, String> = emptyMap(),
+        guard: RequestAdmissionGuard? = null,
+    ): HttpResponseWithHeaders {
+        assertActiveOwner("GET_HEADERS $path")
+        val fullUrl = buildFullUrl(path)
+        val token = authTokenProvider()
+
+        val response = dispatch("GET", "GET_HEADERS $path", fullUrl, guard) {
+            httpClient.prepareGet(fullUrl) {
+                if (shouldAttachBearerToken(token, fullUrl)) {
+                    header(HttpHeaders.Authorization, "Bearer $token")
+                }
+                queryParams.forEach { (k, v) -> parameter(k, v) }
+            }
+        }
+        val headerMap = response.headers.entries().associate { it.key to it.value }
+        val responseBody = handleResponse(response, "GET", fullUrl)
+        return HttpResponseWithHeaders(body = responseBody, headers = headerMap, status = response.status.value)
     }
 
     suspend fun getBytesBounded(
@@ -178,6 +228,85 @@ class ApiClient(
         }
     }
 
+    suspend fun getBytesBoundedWithHeaders(
+        path: String,
+        queryParams: Map<String, String> = emptyMap(),
+        maxBytes: Long = 5_242_880L,
+        guard: RequestAdmissionGuard? = null,
+    ): HttpBytesWithHeaders {
+        assertActiveOwner("GET_BOUNDED_HEADERS $path")
+        val fullUrl = buildFullUrl(path)
+        val token = authTokenProvider()
+
+        try {
+            val statement = httpClient.prepareGet(fullUrl) {
+                if (shouldAttachBearerToken(token, fullUrl)) {
+                    header(HttpHeaders.Authorization, "Bearer $token")
+                }
+                queryParams.forEach { (k, v) -> parameter(k, v) }
+            }
+            admitRequest(guard, "GET_BOUNDED_HEADERS $path")
+            return statement.execute { response ->
+                assertActiveOwner("GET_BOUNDED_HEADERS $path execution")
+                val status = response.status.value
+                val channel = response.bodyAsChannel()
+                if (!response.status.isSuccess()) {
+                    val errorBuf = ByteArray(8192)
+                    var errorRead = 0
+                    while (!channel.isClosedForRead && errorRead < errorBuf.size) {
+                        val read = channel.readAvailable(errorBuf, errorRead, errorBuf.size - errorRead)
+                        if (read <= 0) break
+                        errorRead += read
+                    }
+                    val responseText = errorBuf.decodeToString(0, errorRead)
+                    assertActiveOwner("GET_BOUNDED_HEADERS $path error completion")
+                    val retryAfterSeconds = response.headers[HttpHeaders.RetryAfter]?.toLongOrNull()
+                    val parsedError = parseServerError(responseText)
+                    val safeUrl = redactUrl(fullUrl)
+                    val message = parsedError.message ?: "HTTP $status error for GET_BOUNDED_HEADERS $safeUrl"
+                    throw ApiRequestError(
+                        message = message,
+                        status = status,
+                        code = parsedError.code,
+                        retryAfterSeconds = retryAfterSeconds,
+                        details = parsedError.details,
+                        rawBody = responseText,
+                    )
+                }
+
+                val chunks = mutableListOf<ByteArray>()
+                var totalBytes = 0L
+                val buffer = ByteArray(8192)
+                while (!channel.isClosedForRead) {
+                    val read = channel.readAvailable(buffer, 0, buffer.size)
+                    if (read <= 0) break
+                    totalBytes += read
+                    if (totalBytes > maxBytes) {
+                        throw IllegalStateException("Response body exceeded bounded limit of $maxBytes bytes")
+                    }
+                    chunks.add(buffer.copyOf(read))
+                }
+                assertActiveOwner("GET_BOUNDED_HEADERS $path post-body completion")
+                val result = ByteArray(totalBytes.toInt())
+                var offset = 0
+                for (c in chunks) {
+                    c.copyInto(result, offset)
+                    offset += c.size
+                }
+                val headerMap = response.headers.entries().associate { it.key to it.value }
+                HttpBytesWithHeaders(bytes = result, headers = headerMap, status = status)
+            }
+        } catch (e: Throwable) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is ConnectionOwnerError || e is ApiRequestError || e is IllegalStateException ||
+                e is RequestNotSubmittedError
+            ) {
+                throw e
+            }
+            throw wrapNetworkError(e, "GET_BOUNDED_HEADERS", fullUrl)
+        }
+    }
+
     suspend fun postJson(path: String, body: String, guard: RequestAdmissionGuard? = null): String {
         assertActiveOwner("POST $path")
         val fullUrl = buildFullUrl(path)
@@ -194,6 +323,29 @@ class ApiClient(
         }
 
         return handleResponse(response, "POST", fullUrl)
+    }
+
+    suspend fun postJsonWithHeaders(
+        path: String,
+        body: String,
+        guard: RequestAdmissionGuard? = null,
+    ): HttpResponseWithHeaders {
+        assertActiveOwner("POST_HEADERS $path")
+        val fullUrl = buildFullUrl(path)
+        val token = authTokenProvider()
+
+        val response = dispatch("POST", "POST_HEADERS $path", fullUrl, guard) {
+            httpClient.preparePost(fullUrl) {
+                contentType(ContentType.Application.Json)
+                if (shouldAttachBearerToken(token, fullUrl)) {
+                    header(HttpHeaders.Authorization, "Bearer $token")
+                }
+                setBody(body)
+            }
+        }
+        val headerMap = response.headers.entries().associate { it.key to it.value }
+        val responseBody = handleResponse(response, "POST", fullUrl)
+        return HttpResponseWithHeaders(body = responseBody, headers = headerMap, status = response.status.value)
     }
 
     suspend fun postToml(path: String, body: String, guard: RequestAdmissionGuard? = null): String {

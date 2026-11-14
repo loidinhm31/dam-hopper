@@ -1,6 +1,7 @@
 package dev.damhopper.nativeapp.features.files
 
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.features.editor.CloseDecision
 import dev.damhopper.nativeapp.features.editor.EditorDirtyGuardPort
 import dev.damhopper.nativeapp.features.editor.EditorTabsState
@@ -11,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.booleanOrNull
 
 /**
  * Retained record of an ambiguous/unresolved file mutation operation.
@@ -97,6 +100,25 @@ sealed interface ExplorerDialogState {
         val unknownOutcome: FileOperationOutcome.Unknown? = null,
         val capturedDirtyRevisions: Map<DocumentId, Long> = emptyMap(),
     ) : ExplorerDialogState
+
+    data class MarkProject(
+        override val actionId: Long,
+        val folderPath: String,
+        val draftName: String = "",
+        val target: FilesystemTargetRef = FilesystemTargetRef.Workspace(),
+        val isSubmitting: Boolean = false,
+        val errorMessage: String? = null,
+        val unknownOutcome: FileOperationOutcome.Unknown? = null,
+    ) : ExplorerDialogState
+
+    data class UnmarkProject(
+        override val actionId: Long,
+        val projectName: String,
+        val folderPath: String,
+        val isSubmitting: Boolean = false,
+        val errorMessage: String? = null,
+        val unknownOutcome: FileOperationOutcome.Unknown? = null,
+    ) : ExplorerDialogState
 }
 
 /**
@@ -106,15 +128,21 @@ sealed interface ExplorerDialogState {
  */
 class FileMutationCoordinator(
     private var repository: FileRepository,
-    private val treeState: FileTreeState,
+    val treeState: FileTreeState,
     private val dirtyGuardPort: EditorDirtyGuardPort? = null,
     val arbiter: FileOperationArbiter = repository.arbiter,
     val editorTabsState: EditorTabsState? = null,
 ) {
     private val effectiveDirtyGuard: EditorDirtyGuardPort?
         get() = dirtyGuardPort ?: editorTabsState
+    val isProjectTargetSelected: Boolean
+        get() = treeState.activeBrowsingTarget.value is FilesystemTargetRef.Project
+
     val target: ProjectTargetRef
-        get() = treeState.target
+        get() = when (val active = treeState.activeBrowsingTarget.value) {
+            is FilesystemTargetRef.Project -> active.toProjectTargetRef()
+            is FilesystemTargetRef.Workspace -> ProjectTargetRef(profileId = active.profileId ?: repository.owner.profileId, project = "*")
+        }
 
     val owner: WorkspaceFileOwner
         get() = FileWatchCoordinator.resolveEffectiveOwner(repository.owner, target)
@@ -219,6 +247,10 @@ class FileMutationCoordinator(
     // --- Retained Dialog Lifecycle ---
 
     fun openCreateFileDialog(parentPath: String? = null) {
+        if (!isProjectTargetSelected) {
+            _lastFeedbackNotice.value = "Mutations are not permitted while browsing whole workspace"
+            return
+        }
         val resolvedParent = parentPath?.let {
             try { sanitizePath(it) } catch (_: IllegalArgumentException) { "" }
         } ?: FileTreeHelpers.resolveCreateParentPath(treeState.root.value, treeState.selectedPath.value)
@@ -231,6 +263,10 @@ class FileMutationCoordinator(
     }
 
     fun openCreateDirectoryDialog(parentPath: String? = null) {
+        if (!isProjectTargetSelected) {
+            _lastFeedbackNotice.value = "Mutations are not permitted while browsing whole workspace"
+            return
+        }
         val resolvedParent = parentPath?.let {
             try { sanitizePath(it) } catch (_: IllegalArgumentException) { "" }
         } ?: FileTreeHelpers.resolveCreateParentPath(treeState.root.value, treeState.selectedPath.value)
@@ -243,6 +279,10 @@ class FileMutationCoordinator(
     }
 
     fun openRenameDialog(sourcePath: String? = treeState.selectedPath.value) {
+        if (!isProjectTargetSelected) {
+            _lastFeedbackNotice.value = "Mutations are not permitted while browsing whole workspace"
+            return
+        }
         val rawSource = sourcePath ?: return
         val cleanSource = try {
             sanitizePath(rawSource)
@@ -270,6 +310,10 @@ class FileMutationCoordinator(
         sourcePath: String? = treeState.selectedPath.value,
         initialDestDirPath: String? = null,
     ) {
+        if (!isProjectTargetSelected) {
+            _lastFeedbackNotice.value = "Mutations are not permitted while browsing whole workspace"
+            return
+        }
         val rawSource = sourcePath ?: return
         val cleanSource = try {
             sanitizePath(rawSource)
@@ -293,6 +337,10 @@ class FileMutationCoordinator(
     }
 
     fun openDeleteDialog(targetPath: String? = treeState.selectedPath.value) {
+        if (!isProjectTargetSelected) {
+            _lastFeedbackNotice.value = "Mutations are not permitted while browsing whole workspace"
+            return
+        }
         val rawPath = targetPath ?: return
         val cleanPath = try {
             sanitizePath(rawPath)
@@ -315,13 +363,37 @@ class FileMutationCoordinator(
         )
     }
 
+    fun openMarkProjectDialog(
+        folderPath: String,
+        defaultName: String = "",
+        target: dev.damhopper.nativeapp.core.model.FilesystemTargetRef = treeState.activeBrowsingTarget.value,
+    ) {
+        val cleanPath = try { sanitizePath(folderPath) } catch (_: IllegalArgumentException) { "" }
+        val name = defaultName.ifBlank { cleanPath.substringAfterLast('/').ifBlank { "project" } }
+        _dialogState.value = ExplorerDialogState.MarkProject(
+            actionId = allocateActionId(),
+            folderPath = cleanPath,
+            draftName = name,
+            target = target,
+        )
+    }
+    fun openUnmarkProjectDialog(projectName: String, folderPath: String = "") {
+        val cleanPath = try { sanitizePath(folderPath) } catch (_: IllegalArgumentException) { "" }
+        _dialogState.value = ExplorerDialogState.UnmarkProject(
+            actionId = allocateActionId(),
+            projectName = projectName,
+            folderPath = cleanPath,
+        )
+    }
+
     fun updateDialogDraft(draftValue: String) {
         _dialogState.value = when (val current = _dialogState.value) {
             is ExplorerDialogState.CreateFile -> if (current.isSubmitting || current.unknownOutcome != null) current else current.copy(draftName = draftValue, errorMessage = null)
             is ExplorerDialogState.CreateDirectory -> if (current.isSubmitting || current.unknownOutcome != null) current else current.copy(draftName = draftValue, errorMessage = null)
             is ExplorerDialogState.Rename -> if (current.isSubmitting || current.unknownOutcome != null) current else current.copy(draftNewName = draftValue, errorMessage = null)
             is ExplorerDialogState.Move -> if (current.isSubmitting || current.unknownOutcome != null) current else current.copy(draftDestDirPath = draftValue, errorMessage = null)
-            is ExplorerDialogState.DeleteConfirm, is ExplorerDialogState.None -> current
+            is ExplorerDialogState.MarkProject -> if (current.isSubmitting || current.unknownOutcome != null) current else current.copy(draftName = draftValue, errorMessage = null)
+            is ExplorerDialogState.UnmarkProject, is ExplorerDialogState.DeleteConfirm, is ExplorerDialogState.None -> current
         }
     }
 
@@ -332,7 +404,9 @@ class FileMutationCoordinator(
             current is ExplorerDialogState.CreateDirectory && current.isSubmitting ||
             current is ExplorerDialogState.Rename && current.isSubmitting ||
             current is ExplorerDialogState.Move && current.isSubmitting ||
-            current is ExplorerDialogState.DeleteConfirm && current.isSubmitting
+            current is ExplorerDialogState.DeleteConfirm && current.isSubmitting ||
+            current is ExplorerDialogState.MarkProject && current.isSubmitting ||
+            current is ExplorerDialogState.UnmarkProject && current.isSubmitting
         ) {
             return
         }
@@ -349,6 +423,8 @@ class FileMutationCoordinator(
             is ExplorerDialogState.Rename -> if (snapshot.isSubmitting || snapshot.unknownOutcome != null) return null else snapshot.copy(isSubmitting = true, errorMessage = null)
             is ExplorerDialogState.Move -> if (snapshot.isSubmitting || snapshot.unknownOutcome != null) return null else snapshot.copy(isSubmitting = true, errorMessage = null)
             is ExplorerDialogState.DeleteConfirm -> if (snapshot.isSubmitting || snapshot.unknownOutcome != null) return null else snapshot.copy(isSubmitting = true, errorMessage = null)
+            is ExplorerDialogState.MarkProject -> if (snapshot.isSubmitting || snapshot.unknownOutcome != null) return null else snapshot.copy(isSubmitting = true, errorMessage = null)
+            is ExplorerDialogState.UnmarkProject -> if (snapshot.isSubmitting || snapshot.unknownOutcome != null) return null else snapshot.copy(isSubmitting = true, errorMessage = null)
         }
         if (!_dialogState.compareAndSet(snapshot, submittingState)) {
             return null
@@ -362,6 +438,8 @@ class FileMutationCoordinator(
                 is ExplorerDialogState.Rename -> renameWithOutcome(snapshot.sourcePath, snapshot.draftNewName, expectedDirtyRevisions = snapshot.capturedDirtyRevisions, actionId = capturedActionId)
                 is ExplorerDialogState.Move -> moveWithOutcome(snapshot.sourcePath, snapshot.draftDestDirPath, expectedDirtyRevisions = snapshot.capturedDirtyRevisions, actionId = capturedActionId)
                 is ExplorerDialogState.DeleteConfirm -> deleteWithOutcome(snapshot.targetPath, confirmed = true, expectedDirtyRevisions = snapshot.capturedDirtyRevisions, actionId = capturedActionId)
+                is ExplorerDialogState.MarkProject -> submitMarkProjectInternal(snapshot, capturedActionId)
+                is ExplorerDialogState.UnmarkProject -> submitUnmarkProjectInternal(snapshot, capturedActionId)
             }
         } catch (e: CancellationException) {
             val current = _dialogState.value
@@ -414,6 +492,8 @@ class FileMutationCoordinator(
         is ExplorerDialogState.Rename -> state.copy(isSubmitting = false, errorMessage = errorMessage, unknownOutcome = unknown)
         is ExplorerDialogState.Move -> state.copy(isSubmitting = false, errorMessage = errorMessage, unknownOutcome = unknown)
         is ExplorerDialogState.DeleteConfirm -> state.copy(isSubmitting = false, errorMessage = errorMessage, unknownOutcome = unknown)
+        is ExplorerDialogState.MarkProject -> state.copy(isSubmitting = false, errorMessage = errorMessage, unknownOutcome = unknown)
+        is ExplorerDialogState.UnmarkProject -> state.copy(isSubmitting = false, errorMessage = errorMessage, unknownOutcome = unknown)
         is ExplorerDialogState.None -> state
     }
     private fun updateDialogSubmitting(
@@ -425,7 +505,99 @@ class FileMutationCoordinator(
         is ExplorerDialogState.Rename -> state.copy(isSubmitting = submitting)
         is ExplorerDialogState.Move -> state.copy(isSubmitting = submitting)
         is ExplorerDialogState.DeleteConfirm -> state.copy(isSubmitting = submitting)
+        is ExplorerDialogState.MarkProject -> state.copy(isSubmitting = submitting)
+        is ExplorerDialogState.UnmarkProject -> state.copy(isSubmitting = submitting)
         is ExplorerDialogState.None -> state
+    }
+
+    suspend fun submitMarkProjectInternal(
+        snapshot: ExplorerDialogState.MarkProject,
+        actionId: Long,
+    ): FileOperationOutcome<FsOpOutcome> {
+        val name = snapshot.draftName.trim()
+        if (name.isBlank()) {
+            return FileOperationOutcome.NotSubmitted("Project name cannot be blank")
+        }
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("name", name)
+                put("path", snapshot.folderPath)
+                put("target", snapshot.target.toServerJsonElement())
+            }.toString()
+            val text = repository.apiClient.postJson("/api/config/projects", body)
+            val obj = dev.damhopper.nativeapp.core.transport.ProtocolJson.decodeFromString(
+                kotlinx.serialization.json.JsonObject.serializer(), text
+            )
+            val ok = (obj["ok"] as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull == true
+            if (ok) {
+                _lastFeedbackNotice.value = "Project '$name' marked successfully"
+                try {
+                    val currentKnown = treeState.registeredProjects.value.toMutableList()
+                    if (!currentKnown.contains(name)) currentKnown.add(name)
+                    treeState.updateRegisteredProjects(currentKnown)
+                    treeState.refresh()
+                } catch (e: Throwable) {
+                    _lastFeedbackNotice.value = "Project marked successfully; refresh failed: ${e.message}"
+                }
+                FileOperationOutcome.Confirmed(FsOpOutcome(ok = true))
+            } else {
+                val msg = obj["error"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content } ?: "Server refused registration for project '$name'"
+                FileOperationOutcome.Rejected(code = "REGISTRATION_REFUSED", message = msg)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: dev.damhopper.nativeapp.core.transport.ApiRequestError) {
+            val msg = e.message?.ifBlank { "Request rejected (${e.status})" } ?: "Request rejected (${e.status})"
+            FileOperationOutcome.Rejected(code = e.code ?: "HTTP_${e.status}", message = msg)
+        } catch (e: Throwable) {
+            FileOperationOutcome.Unknown(
+                stage = OperationStage.AWAITING_RESULT,
+                opId = null,
+                message = e.message ?: "Unexpected failure during project registration",
+                cause = e,
+            )
+        }
+    }
+
+    suspend fun submitUnmarkProjectInternal(
+        snapshot: ExplorerDialogState.UnmarkProject,
+        actionId: Long,
+    ): FileOperationOutcome<FsOpOutcome> {
+        return try {
+            val encodedName = dev.damhopper.nativeapp.core.transport.ApiClient.encodePathSegment(snapshot.projectName)
+            val text = repository.apiClient.delete("/api/config/projects/$encodedName")
+            val obj = dev.damhopper.nativeapp.core.transport.ProtocolJson.decodeFromString(
+                kotlinx.serialization.json.JsonObject.serializer(), text
+            )
+            val ok = (obj["ok"] as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull == true
+            if (ok) {
+                _lastFeedbackNotice.value = "Project '${snapshot.projectName}' unmarked (files preserved)"
+                try {
+                    val currentKnown = treeState.registeredProjects.value.toMutableList()
+                    currentKnown.remove(snapshot.projectName)
+                    treeState.updateRegisteredProjects(currentKnown)
+                    treeState.refresh()
+                } catch (e: Throwable) {
+                    _lastFeedbackNotice.value = "Project unmarked; refresh failed: ${e.message}"
+                }
+                FileOperationOutcome.Confirmed(FsOpOutcome(ok = true))
+            } else {
+                val msg = obj["error"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content } ?: "Server refused unmarking project '${snapshot.projectName}'"
+                FileOperationOutcome.Rejected(code = "UNMARK_REFUSED", message = msg)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: dev.damhopper.nativeapp.core.transport.ApiRequestError) {
+            val msg = e.message?.ifBlank { "Request rejected (${e.status})" } ?: "Request rejected (${e.status})"
+            FileOperationOutcome.Rejected(code = e.code ?: "HTTP_${e.status}", message = msg)
+        } catch (e: Throwable) {
+            FileOperationOutcome.Unknown(
+                stage = OperationStage.AWAITING_RESULT,
+                opId = null,
+                message = e.message ?: "Unexpected failure during project unmarking",
+                cause = e,
+            )
+        }
     }
 
 

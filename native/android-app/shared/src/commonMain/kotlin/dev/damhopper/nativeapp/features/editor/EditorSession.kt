@@ -25,7 +25,12 @@ class EditorSession(
     var isFrozen: Boolean = false
     val isInputPermitted: Boolean get() = !isFrozen && isInputAllowed()
 
-    var serverMtime: Long? = initialMtime; private set
+    var serverMtime: Long? = initialMtime
+        get() {
+            val docMtime = try { document.serverMtime } catch (_: Throwable) { 0L }
+            return if (docMtime > 0L) docMtime else field
+        }
+        private set
     var submittedSnapshot: DocumentSaveSnapshot? = null; private set
     var submittedEpoch: Long? = null; private set
     var editEpoch: Long = 1L; private set
@@ -37,6 +42,7 @@ class EditorSession(
     var gutterDecorations: List<GutterDecoration> = emptyList(); private set
     var findReplaceState: FindReplaceState = FindReplaceState(); private set
 
+    var aliasLease: AliasLeaseToken? = null
     var isInputAllowed: () -> Boolean = { true }
     private var onContentChangeListener: ((text: String, modelVersion: Long, editEpoch: Long) -> Unit)? = null
 
@@ -95,13 +101,22 @@ class EditorSession(
         return Pair(snapshot.utf8Bytes.decodeToString(), editEpoch)
     }
 
-    fun snapshotSave(): DocumentSaveSnapshot? {
+    fun snapshotSave(aliasDocId: DocumentId? = null): DocumentSaveSnapshot? {
         checkNotDisposed()
         if (isReadOnly || !isDirty || !isInputAllowed()) return null
         val snapshot = document.snapshotForSave()
-        submittedSnapshot = snapshot
+        val effectiveDocId = aliasDocId ?: snapshot.id.copy(
+            owner = snapshot.id.owner.copy(
+                project = target.project,
+                worktreePath = target.worktreePath,
+            ),
+            relativePath = path,
+            tabIncarnation = sessionIncarnation,
+        )
+        val aliasSnapshot = snapshot.copy(id = effectiveDocId)
+        submittedSnapshot = aliasSnapshot
         submittedEpoch = editEpoch
-        return snapshot
+        return aliasSnapshot
     }
 
     fun completeSave(savedMtime: Long, submittedSnapshot: String) {
@@ -309,7 +324,8 @@ class EditorSession(
     override fun close() {
         if (isDisposed) return
         isDisposed = true
-        document.close()
+        aliasLease?.let { document.releaseAliasLease(it) }
+        aliasLease = null
         gutterDecorations = emptyList()
         onContentChangeListener = null
     }

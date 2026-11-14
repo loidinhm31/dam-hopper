@@ -2,8 +2,9 @@ package dev.damhopper.nativeapp.features.editor
 
 import androidx.compose.runtime.compositionLocalOf
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
-import kotlinx.serialization.Serializable
+import dev.damhopper.nativeapp.features.files.FileIdentityDto
 import dev.damhopper.nativeapp.features.workspace.DocumentId
+import kotlinx.serialization.Serializable
 
 /**
  * Position in a text document (1-indexed line and column).
@@ -115,6 +116,8 @@ data class EditorTab(
     val encryptedSessionRequired: Boolean = false,
     val diagnostics: List<Diagnostic> = emptyList(),
     val rangeWindow: BoundedRangeWindow? = null,
+    val fileIdentity: FileIdentityDto? = null,
+    val canonicalPath: String? = null,
 ) {
     val displayName: String
         get() = if (isDirty) "$name *" else name

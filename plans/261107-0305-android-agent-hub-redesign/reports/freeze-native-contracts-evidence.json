@@ -1,0 +1,39 @@
+{
+  "taskId": "freeze-native-contracts",
+  "phase": "P01",
+  "wave": "W01",
+  "status": "completed",
+  "timestamp": "2026-11-07T09:45:00Z",
+  "compilation": {
+    "command": "cmd.exe /c gradlew.bat :shared:compileKotlinJvm",
+    "exitCode": 0,
+    "status": "success"
+  },
+  "tests": [
+    {
+      "suite": "dev.damhopper.nativeapp.features.terminal.TerminalLifetimeContractTest",
+      "total": 5,
+      "passed": 5,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.workspace.AgentHubContractsTest",
+      "total": 7,
+      "passed": 7,
+      "failed": 0
+    }
+  ],
+  "contractsVerified": [
+    "FilesystemTargetRef",
+    "CanonicalDocumentKey",
+    "TerminateSessionRequest",
+    "TerminalTerminationOutcome",
+    "UncertainCreateRecord",
+    "SparseUiConfigPatch",
+    "PatchValue",
+    "AgentHubSnapshot",
+    "AgentHubAction",
+    "AliasLeaseToken",
+    "ViewLeaseToken"
+  ]
+}

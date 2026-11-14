@@ -1,5 +1,7 @@
 package dev.damhopper.nativeapp.features.files
 
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
+import dev.damhopper.nativeapp.core.model.ProfileId
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -59,6 +61,29 @@ data class FileIdentityDto(
 )
 
 /**
+ * Collision-safe tuple identifying a canonical document across aliases:
+ * (profileId, normalizedEndpoint, authenticatedAccount, workspaceId, workspaceEpoch, canonicalPath).
+ * Never fabricated from client paths; derived solely from server-authoritative file identity.
+ */
+data class CanonicalDocumentKey(
+    val profileId: ProfileId?,
+    val normalizedEndpoint: String,
+    val authenticatedAccount: String,
+    val workspaceId: String,
+    val workspaceEpoch: Long,
+    val canonicalPath: String,
+) {
+    init {
+        require(workspaceId.isNotBlank()) { "workspaceId cannot be blank" }
+        require(workspaceEpoch >= 0L) { "workspaceEpoch must be non-negative" }
+        require(canonicalPath.isNotBlank()) { "canonicalPath cannot be blank" }
+    }
+
+    val key: String
+        get() = """["${profileId.orEmpty()}","$normalizedEndpoint","$authenticatedAccount","$workspaceId",$workspaceEpoch,"$canonicalPath"]"""
+}
+
+/**
  * REST Stat response DTO for GET /api/fs/stat.
  */
 @Serializable
@@ -93,6 +118,7 @@ data class FsFileReadResult(
     val errorCode: String? = null,
     val workspaceEpoch: Long? = null,
     val fileIdentity: FileIdentityDto? = null,
+    val target: FilesystemTargetRef? = null,
 )
 
 /**

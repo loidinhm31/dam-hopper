@@ -1,5 +1,9 @@
 package dev.damhopper.nativeapp.features.terminal
-
+import androidx.compose.ui.unit.dp
+import dev.damhopper.nativeapp.core.model.ProfileId
+import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.ui.components.isAgentHubRailAdmitted
+import dev.damhopper.nativeapp.ui.components.isTerminalAgentsPinned
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -234,5 +238,54 @@ class TerminalAgentsProjectionTest {
         val first = projector.project(input, TerminalAgentsFilterSelection.All)
         val second = projector.project(input, TerminalAgentsFilterSelection.All)
         assertEquals(first, second)
+    }
+
+    @Test
+    fun projectorComposesProjectRowsWithZeroSessionsAndUnavailableTargets() {
+        val targetZero = ProjectTargetRef(profileId = "p1", project = "repo-zero")
+        val targetUnavail = ProjectTargetRef(profileId = "p1", project = "repo-offline")
+        val targetUnsupp = ProjectTargetRef(profileId = "p1", project = "repo-legacy")
+
+        val rows = projector.composeProjectRows(
+            openTargets = listOf(targetZero, targetUnavail, targetUnsupp),
+            unavailableTargets = setOf(targetUnavail),
+            unsupportedTargets = setOf(targetUnsupp),
+            isInventoryLoaded = true,
+            isConnected = true,
+        )
+
+        assertEquals(3, rows.size)
+        val zeroRow = rows.first { it.target == targetZero }
+        assertEquals("0 sessions", zeroRow.statusLabel)
+        assertTrue(zeroRow.isAvailable)
+        assertTrue(zeroRow.canDismiss)
+
+        val unavailRow = rows.first { it.target == targetUnavail }
+        assertEquals("Disconnected", unavailRow.statusLabel)
+        assertFalse(unavailRow.isAvailable)
+        assertFalse(unavailRow.canDismiss)
+
+        val unsuppRow = rows.first { it.target == targetUnsupp }
+        assertEquals("Unsupported", unsuppRow.statusLabel)
+        assertTrue(unsuppRow.isUnsupported)
+    }
+
+    @Test
+    fun widthAdmissionPredicateEnforces640dpBreakpoint() {
+        // 640dp: rail 280dp leaves 360dp stage => admitted
+        assertTrue(isAgentHubRailAdmitted(640.dp))
+        assertTrue(isTerminalAgentsPinned(640.dp))
+
+        // 639dp: rail 280dp leaves 359dp stage (<360dp) => refused
+        assertFalse(isAgentHubRailAdmitted(639.dp))
+        assertFalse(isTerminalAgentsPinned(639.dp))
+
+        // Phone width (360dp) => refused
+        assertFalse(isAgentHubRailAdmitted(360.dp))
+        assertFalse(isTerminalAgentsPinned(360.dp))
+
+        // Large tablet width (1024dp) => admitted
+        assertTrue(isAgentHubRailAdmitted(1024.dp))
+        assertTrue(isTerminalAgentsPinned(1024.dp))
     }
 }

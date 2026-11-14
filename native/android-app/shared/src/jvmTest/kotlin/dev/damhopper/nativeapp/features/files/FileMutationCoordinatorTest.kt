@@ -359,4 +359,94 @@ class FileMutationCoordinatorTest {
         val rejectedTraversal = coordinator.copyRemotePath("../outside/secret.txt")
         assertNull(rejectedTraversal)
     }
+
+    @Test
+    fun testMarkProjectConfirmedRegistersAndUpdatesInventory() = runTest {
+        var capturedBody: String? = null
+        server!!.createContext("/api/config/projects") { exchange ->
+            capturedBody = exchange.requestBody.bufferedReader().readText()
+            val json = """{"ok":true}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        val (_, _, coordinator) = createCoordinatorFixture()
+        coordinator.openMarkProjectDialog("packages/core", "core-pkg")
+        assertIs<ExplorerDialogState.MarkProject>(coordinator.dialogState.value)
+
+        val outcome = coordinator.submitCurrentDialog()
+        assertIs<FileOperationOutcome.Confirmed<FsOpOutcome>>(outcome)
+        assertIs<ExplorerDialogState.None>(coordinator.dialogState.value)
+        assertTrue(coordinator.lastFeedbackNotice.value?.contains("marked successfully") == true)
+        assertNotNull(capturedBody)
+        assertTrue(capturedBody!!.contains("\"target\":{\"type\":\"project\",\"project\":\"demo\"}"))
+        assertTrue(capturedBody!!.contains("\"name\":\"core-pkg\""))
+    }
+
+    @Test
+    fun testMarkProjectRefusedPreservesDialog() = runTest {
+        server!!.createContext("/api/config/projects") { exchange ->
+            val json = """{"ok":false,"error":"Duplicate project name"}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        val (_, _, coordinator) = createCoordinatorFixture()
+        coordinator.openMarkProjectDialog("packages/core", "core-pkg")
+
+        val outcome = coordinator.submitCurrentDialog()
+        assertIs<FileOperationOutcome.Rejected>(outcome)
+        val dialog = coordinator.dialogState.value
+        assertIs<ExplorerDialogState.MarkProject>(dialog)
+        assertFalse(dialog.isSubmitting)
+        assertTrue(dialog.errorMessage?.contains("Duplicate project name") == true)
+    }
+
+    @Test
+    fun testUnmarkProjectConfirmedRemovesRegistrationWithoutDeletingFiles() = runTest {
+        server!!.createContext("/api/config/projects/core-pkg") { exchange ->
+            val json = """{"ok":true}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        val (_, _, coordinator) = createCoordinatorFixture()
+        coordinator.openUnmarkProjectDialog("core-pkg", "packages/core")
+        assertIs<ExplorerDialogState.UnmarkProject>(coordinator.dialogState.value)
+
+        val outcome = coordinator.submitCurrentDialog()
+        assertIs<FileOperationOutcome.Confirmed<FsOpOutcome>>(outcome)
+        assertIs<ExplorerDialogState.None>(coordinator.dialogState.value)
+        assertTrue(coordinator.lastFeedbackNotice.value?.contains("unmarked (files preserved)") == true)
+    }
+
+    @Test
+    fun testMarkProjectHttp400RejectionClassifiedAsRejected() = runTest {
+        server!!.createContext("/api/config/projects") { exchange ->
+            val json = """{"ok":false,"error":"Invalid project name"}"""
+            exchange.sendResponseHeaders(400, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        val (_, _, coordinator) = createCoordinatorFixture()
+        coordinator.openMarkProjectDialog("packages/core", "core-pkg")
+
+        val outcome = coordinator.submitCurrentDialog()
+        val rej = assertIs<FileOperationOutcome.Rejected>(outcome)
+        assertEquals("HTTP_400", rej.code)
+        assertTrue(rej.message.contains("Invalid project name"))
+        val dialog = coordinator.dialogState.value
+        assertIs<ExplorerDialogState.MarkProject>(dialog)
+        assertFalse(dialog.isSubmitting)
+        assertNull(dialog.unknownOutcome)
+    }
+
+    @Test
+    fun testWorkspaceBrowsingBlocksMutations() = runTest {
+        val (_, _, coordinator) = createCoordinatorFixture()
+        coordinator.treeState.selectBrowsingTarget(dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Workspace())
+
+        coordinator.openCreateFileDialog()
+        assertIs<ExplorerDialogState.None>(coordinator.dialogState.value)
+        assertTrue(coordinator.lastFeedbackNotice.value?.contains("not permitted") == true)
+
+        coordinator.openDeleteDialog("README.md")
+        assertIs<ExplorerDialogState.None>(coordinator.dialogState.value)
+    }
 }

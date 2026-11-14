@@ -31,6 +31,7 @@ fun FileTreeNodeRow(
     onHoldNode: (node: FileTreeNode) -> Unit = {},
     modifier: Modifier = Modifier,
     isUnresolved: Boolean = false,
+    isProject: Boolean = false,
 ) {
     val bgColor = if (isSelected) DamHopperColors.SurfaceVariant else DamHopperColors.Surface
     val indent = (depth * 16).dp
@@ -94,6 +95,15 @@ fun FileTreeNodeRow(
             color = if (node.isDirectory) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
             modifier = Modifier.weight(1f),
         )
+
+        if (node.isDirectory && isProject) {
+            Text(
+                text = "[Project]",
+                style = DamHopperTypography.labelSmall,
+                color = DamHopperColors.Primary,
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+        }
 
         if (isUnresolved) {
             Text(

@@ -4,6 +4,7 @@ apps/web/public/browser-debug-extension/
 .env
 *.local
 .idea
+.openidea/
 server/target/
 native-app/crypto-bridge/target/
 native/android-app/crypto-bridge/target/

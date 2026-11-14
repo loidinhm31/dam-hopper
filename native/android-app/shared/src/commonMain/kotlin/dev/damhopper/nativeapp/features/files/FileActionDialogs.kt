@@ -351,3 +351,145 @@ fun DeleteConfirmDialog(
         }
     }
 }
+
+@Composable
+fun MarkProjectDialog(
+    folderPath: String,
+    draftName: String,
+    onDraftChange: (String) -> Unit,
+    isSubmitting: Boolean = false,
+    isUnresolved: Boolean = false,
+    errorMessage: String? = null,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var localName by remember(folderPath) { mutableStateOf(draftName) }
+    val effectiveName = if (draftName.isNotEmpty()) draftName else localName
+
+    Dialog(onDismissRequest = { if (!isSubmitting) onDismiss() }) {
+        Card(
+            shape = RoundedCornerShape(8.dp),
+            colors = CardDefaults.cardColors(containerColor = DamHopperColors.SurfaceVariant),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Mark as Project", style = DamHopperTypography.titleMedium, color = DamHopperColors.Primary)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Folder: ${folderPath.ifBlank { "Root" }}",
+                    style = DamHopperTypography.labelSmall,
+                    color = DamHopperColors.TextSecondary,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Registers this folder as a project in workspace configuration. This does NOT delete or move files on disk or terminate PTY sessions.",
+                    style = DamHopperTypography.bodySmall,
+                    color = DamHopperColors.TextSecondary,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = effectiveName,
+                    onValueChange = { updated ->
+                        localName = updated
+                        onDraftChange(updated)
+                    },
+                    enabled = !isSubmitting && !isUnresolved,
+                    label = { Text("Project Name") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = DamHopperColors.TextPrimary,
+                        unfocusedTextColor = DamHopperColors.TextPrimary,
+                        focusedBorderColor = DamHopperColors.Primary,
+                        unfocusedBorderColor = DamHopperColors.Border,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = errorMessage,
+                        style = DamHopperTypography.labelSmall,
+                        color = if (isUnresolved) DamHopperColors.Warning else DamHopperColors.Error,
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(
+                        onClick = onDismiss,
+                        enabled = !isSubmitting,
+                    ) {
+                        Text(if (isUnresolved) "Close" else "Cancel", color = DamHopperColors.TextSecondary)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { if (!isSubmitting && !isUnresolved && effectiveName.isNotBlank()) onConfirm() },
+                        enabled = !isSubmitting && !isUnresolved && effectiveName.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary),
+                    ) {
+                        Text(if (isSubmitting) "Registering..." else "Mark Project")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun UnmarkProjectDialog(
+    projectName: String,
+    folderPath: String,
+    isSubmitting: Boolean = false,
+    isUnresolved: Boolean = false,
+    errorMessage: String? = null,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = { if (!isSubmitting) onDismiss() }) {
+        Card(
+            shape = RoundedCornerShape(8.dp),
+            colors = CardDefaults.cardColors(containerColor = DamHopperColors.SurfaceVariant),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Unmark Project", style = DamHopperTypography.titleMedium, color = DamHopperColors.Warning)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Project: $projectName (${folderPath.ifBlank { "Root" }})",
+                    style = DamHopperTypography.labelSmall,
+                    color = DamHopperColors.TextSecondary,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Removes project registration from workspace configuration. This will NOT delete any files on disk or terminate PTY sessions. All file contents and terminal sessions remain intact.",
+                    style = DamHopperTypography.bodySmall,
+                    color = DamHopperColors.TextSecondary,
+                )
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = errorMessage,
+                        style = DamHopperTypography.labelSmall,
+                        color = if (isUnresolved) DamHopperColors.Warning else DamHopperColors.Error,
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(
+                        onClick = onDismiss,
+                        enabled = !isSubmitting,
+                    ) {
+                        Text(if (isUnresolved) "Close" else "Cancel", color = DamHopperColors.TextSecondary)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { if (!isSubmitting && !isUnresolved) onConfirm() },
+                        enabled = !isSubmitting && !isUnresolved,
+                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Warning),
+                    ) {
+                        Text(if (isSubmitting) "Unmarking..." else "Unmark Project")
+                    }
+                }
+            }
+        }
+    }
+}

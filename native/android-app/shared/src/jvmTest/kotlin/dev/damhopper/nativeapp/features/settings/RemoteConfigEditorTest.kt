@@ -301,10 +301,10 @@ class RemoteConfigEditorTest {
         assertTrue(editor.loadGlobalDefaults())
         assertEquals("/srv/default", editor.defaults.value.workspace)
 
-        assertTrue(editor.setGlobalDefaultWorkspace("/srv/other") is SettingsOutcome.Confirmed)
+        assertTrue(editor.setGlobalDefaultWorkspace("/srv/other", confirmed = false) is SettingsOutcome.NotSubmitted)
+        assertTrue(editor.setGlobalDefaultWorkspace("/srv/other", confirmed = true) is SettingsOutcome.Confirmed)
         assertEquals("""{"root":"/srv/other"}""", server.posts("/api/global-config/workspace")[0].body)
         assertEquals("/srv/other", editor.defaults.value.workspace)
-
         assertTrue(editor.setGlobalDefaultWorkspace("  ") is SettingsOutcome.NotSubmitted)
         assertEquals(1, server.posts("/api/global-config/workspace").size)
         assertEquals(0, server.count(path = "/api/workspace/known"), "the known registry is untouched")
@@ -344,5 +344,115 @@ class RemoteConfigEditorTest {
         editor.updateConfigDraft(serverConfig)
         assertFalse(editor.state.value.isDirty)
         assertNull(editor.structured.value.parseError)
+    }
+
+    @Test
+    fun unconfiguredWorkspaceRootProducesExplicitErrorWithoutDefaultsFallback() = runBlocking {
+        server.route("/api/global-config") { _ -> 200 to """{"workspace":null,"defaults":{"workspace":"/legacy/fallback"},"ui":{}}""" }
+        val editor = editor()
+        assertTrue(editor.loadGlobalDefaults())
+        assertNull(editor.defaults.value.workspace, "must not fall back to defaults.workspace")
+        assertEquals("Workspace root is unconfigured; no defaults.workspace fallback.", editor.defaults.value.error)
+
+        val invalidConfig = StructuredConfig(
+            workspaceName = "ws",
+            workspaceRoot = "",
+            projects = emptyList(),
+        )
+        val issues = validateStructuredConfig(invalidConfig)
+        val rootIssue = issues.firstOrNull { it.field == "workspace.root" }
+        assertNotNull(rootIssue)
+        assertTrue(rootIssue.message.contains("no defaults.workspace fallback"))
+        assertFalse(StructuredConfigState(invalidConfig, issues).canSave)
+    }
+
+    @Test
+    fun rootChangingOperationRequiresConfirmationAndDirtyGuardAndUncertainResultIsNotRetried() = runBlocking {
+        val editor = editor()
+        editor.load()
+
+        // 1. Refused without explicit confirmation:
+        val unconfirmed = editor.switchWorkspaceRoot("/srv/new-root", confirmed = false)
+        assertTrue(unconfirmed is SettingsOutcome.NotSubmitted)
+        assertTrue(unconfirmed.reasonOrNull!!.contains("confirmation is required"))
+
+        // 2. Refused when dirty guard cancels:
+        val dirtyCancelled = editor.switchWorkspaceRoot("/srv/new-root", confirmed = true, departureGuard = { false })
+        assertTrue(dirtyCancelled is SettingsOutcome.NotSubmitted)
+        assertTrue(dirtyCancelled.reasonOrNull!!.contains("dirty-state guard"))
+
+        // 3. Refused when editor has unsaved draft changes:
+        editor.updateConfigDraft("""{"workspace":{"name":"ws","root":"/srv/draft"}}""")
+        assertTrue(editor.state.value.isDirty)
+        val editorDirty = editor.switchWorkspaceRoot("/srv/new-root", confirmed = true)
+        assertTrue(editorDirty is SettingsOutcome.NotSubmitted)
+        assertTrue(editorDirty.reasonOrNull!!.contains("Unsaved configuration changes exist"))
+        editor.discardDraft()
+
+        // 4. Server returns updated: false (uncertain response) -> Unknown, never retried:
+        server.route("/api/global-config/workspace") { _ -> 200 to """{"updated":false}""" }
+        val postsBefore = server.posts("/api/global-config/workspace").size
+        val uncertain = editor.switchWorkspaceRoot("/srv/new-root", confirmed = true)
+        assertTrue(uncertain is SettingsOutcome.Unknown)
+        assertTrue(uncertain.reasonOrNull!!.contains("refresh status and confirm explicitly"))
+        assertEquals(postsBefore + 1, server.posts("/api/global-config/workspace").size, "must not retry uncertain result")
+
+        // 5. Successful confirmed switch reconciles base config and defaults:
+        server.route("/api/global-config/workspace") { _ -> 200 to """{"updated":true}""" }
+        val confirmed = editor.switchWorkspaceRoot("/srv/new-root", confirmed = true)
+        assertTrue(confirmed is SettingsOutcome.Confirmed)
+        assertEquals("/srv/new-root", editor.defaults.value.workspace)
+        val reconciledRoot = (parseRoot(editor.state.value.baseConfigJson)!!["workspace"] as JsonObject).string("root")
+        assertEquals("/srv/new-root", reconciledRoot, "base config reconciled to new root")
+
+        // Must not call Open Project / workspace switch endpoints:
+        assertEquals(0, server.count(path = "/api/workspace/switch"))
+        assertEquals(0, server.count(path = "/api/workspace/known"))
+    }
+
+    @Test
+    fun singleFieldEditAndRawSavePreserveUnrelatedServerAndProjectAndWebOnlyKeys() = runBlocking {
+        val richConfig = """
+            {"workspace":{"name":"ws","root":"/srv/ws","webProperty":"keepWeb"},
+             "server":{"telemetry":{"enabled":false,"endpoint":"https://telemetry.internal"}},
+             "projects":[{"name":"api","path":"/srv/ws/api","type":"cargo","envFile":".env","tags":["core"],
+               "services":[{"name":"svc","buildCommand":"cargo build","runCommand":"cargo run","port":8080}],
+               "commands":{"test":"cargo test","deploy":"./deploy.sh"},
+               "terminals":[{"name":"main","command":"bash","cwd":"/srv/ws/api","shell":"/bin/zsh"}],
+               "restartPolicy":"never","futureKey":{"x":1}}],
+             "features":{"experimental":true}}
+        """.trimIndent().replace("\n", "").replace("  ", "")
+
+        server.route("/api/config") { req ->
+            if (req.method == "PUT") 200 to """{"ok":true}""" else 200 to richConfig
+        }
+        val editor = editor()
+        editor.load()
+
+        // Edit one structured field:
+        editor.updateStructured { c ->
+            c.copy(projects = c.projects.map { it.copy(envFile = ".env.production") })
+        }
+        assertTrue(editor.saveFullConfig(confirmRootChange = false) is SettingsOutcome.Confirmed)
+
+        val putBody = Json.parseToJsonElement(server.requests.last { it.method == "PUT" }.body).jsonObject
+        // Unrelated workspace keys preserved:
+        assertEquals("keepWeb", putBody["workspace"]!!.jsonObject["webProperty"]!!.jsonPrimitive.content)
+        assertEquals("/srv/ws", putBody["workspace"]!!.jsonObject["root"]!!.jsonPrimitive.content)
+        // Unrelated server/features sections preserved:
+        assertEquals(JsonPrimitive(true), putBody["features"]!!.jsonObject["experimental"])
+        assertEquals(JsonPrimitive("https://telemetry.internal"), putBody["server"]!!.jsonObject["telemetry"]!!.jsonObject["endpoint"])
+        // Nested service/terminal/project unknown fields preserved:
+        val savedProject = putBody["projects"]!!.jsonArray.single().jsonObject
+        assertEquals(JsonPrimitive(".env.production"), savedProject["envFile"])
+        assertEquals(JsonPrimitive("never"), savedProject["restartPolicy"])
+        assertEquals(JsonPrimitive(8080), savedProject["services"]!!.jsonArray.single().jsonObject["port"])
+        assertEquals(JsonPrimitive("/bin/zsh"), savedProject["terminals"]!!.jsonArray.single().jsonObject["shell"])
+        assertEquals(JsonPrimitive("./deploy.sh"), savedProject["commands"]!!.jsonObject["deploy"])
+
+        // Raw full config save changing workspace root requires confirmation:
+        editor.updateConfigDraft(richConfig.replace("/srv/ws", "/srv/different-ws"))
+        assertTrue(editor.saveFullConfig(confirmRootChange = false) is SettingsOutcome.NotSubmitted)
+        assertTrue(editor.saveFullConfig(confirmRootChange = true) is SettingsOutcome.Confirmed)
     }
 }

@@ -19,7 +19,33 @@ fun GitPanelScreen(
     runtime: GitWorkspaceRuntime,
     state: GitWorkspaceState,
     modifier: Modifier = Modifier,
+    onMarkProject: (() -> Unit)? = null,
 ) {
+    if (!runtime.isRegisteredProjectTarget) {
+        Box(
+            modifier = modifier.fillMaxSize().background(DamHopperColors.Background).padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "Git is available only for registered project targets.\nWhole workspace and unmarked folders have zero Git dispatch.",
+                    style = DamHopperTypography.bodyMedium,
+                    color = DamHopperColors.TextSecondary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                Button(
+                    onClick = { onMarkProject?.invoke() },
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary),
+                ) {
+                    Text("Mark project", color = DamHopperColors.TextPrimary)
+                }
+            }
+        }
+        return
+    }
     val coroutineScope = rememberCoroutineScope()
     val activeSection by state.section.collectAsState()
     val activeRoute by state.route.collectAsState()
@@ -30,7 +56,21 @@ fun GitPanelScreen(
     val lastRewriteReceipt by runtime.rewrite.lastRewriteReceipt.collectAsState()
     val syncResults by runtime.sync.lastOpResults.collectAsState()
     val syncError by runtime.sync.error.collectAsState()
-
+    val opStatus by runtime.operationStatus.collectAsState()
+    val conflictSummary by runtime.conflictSummary.collectAsState()
+    if (currentScope == null) {
+        Box(
+            modifier = modifier.fillMaxSize().background(DamHopperColors.Background),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "Git runtime unavailable or revoked",
+                style = DamHopperTypography.bodyMedium,
+                color = DamHopperColors.TextSecondary
+            )
+        }
+        return
+    }
     Column(modifier = modifier.fillMaxSize().background(DamHopperColors.Background)) {
         // Top Toolbar
         Row(
@@ -173,6 +213,14 @@ fun GitPanelScreen(
                                 state.updateModal(GitModalState(showUndoCommitDialog = true, capturedScope = currentScope))
                             },
                             onMutationSuccess = { runtime.refresh(GitRefreshReason.MUTATION) },
+                            onOpenRecoveryTerminal = {
+                                val sc = currentScope
+                                if (sc != null) {
+                                    runtime.openRecoveryTerminal(sc)
+                                }
+                            },
+                            operationStatus = opStatus,
+                            conflictSummary = conflictSummary,
                         )
                         GitPanelSection.HISTORY -> GitHistoryView(
                             historyController = runtime.history,

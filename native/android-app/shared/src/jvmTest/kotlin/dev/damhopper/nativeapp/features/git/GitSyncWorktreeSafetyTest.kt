@@ -235,4 +235,134 @@ class GitSyncWorktreeSafetyTest {
         assertTrue(unavailRes!!.isFailure)
         assertTrue(unavailRes!!.exceptionOrNull()?.message!!.contains("unavailable"))
     }
+
+    @Test
+    fun testWorktreeRemovalWithTerminalBlockersRefusesDeletion() = runTest {
+        var removeDispatched = false
+        server!!.createContext("/api/git/test-proj/worktrees") { exchange ->
+            val json = """[{"path":"wt-blocked","repositoryPath":"/repo/wt-blocked","branch":"feat","commitHash":"abc","isMain":false,"isLocked":false,"isAvailable":true}]"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/git/test-proj/worktrees/remove") { exchange ->
+            removeDispatched = true
+            exchange.sendResponseHeaders(200, 2)
+            exchange.responseBody.use { it.write("{}".toByteArray()) }
+        }
+
+        val hostWithBlockers = object : GitHostPorts {
+            override suspend fun <T> withMutationGuard(scope: GitOperationScope, impact: GitMutationImpact, paths: List<String>, dispatch: suspend () -> T): Result<T> = Result.success(dispatch())
+            override suspend fun preflightRemoval(scope: GitOperationScope, worktree: ProjectWorktree): WorktreeRemovalPrecheck =
+                WorktreeRemovalPrecheck.Blocked(listOf("Worktree has Active terminal session (session term-live-1)"))
+            override suspend fun requestWorktreeSwitch(scope: GitOperationScope, target: ProjectTargetRef): Result<Unit> = Result.success(Unit)
+            override suspend fun openWorkspaceFile(scope: GitOperationScope, rootRelativePath: String): Result<Unit> = Result.success(Unit)
+            override fun onMutationOutcome(event: GitMutationEvent) {}
+            override fun refresh(reason: GitRefreshReason) {}
+            override fun openRecoveryTerminal(scope: GitOperationScope) {}
+        }
+
+        val repo = createRepository()
+        val controller = WorktreeMutationController(
+            repository = repo,
+            coroutineScope = this,
+            host = hostWithBlockers,
+        )
+        controller.updateScope(testScope())
+
+        val wt = ProjectWorktree(path = "wt-blocked", repositoryPath = "/repo/wt-blocked", branch = "feat", commitHash = "abc", isMain = false)
+        var result: Result<Boolean>? = null
+        controller.removeWorktree(wt) { result = it }.join()
+
+        assertNotNull(result)
+        assertTrue(result!!.isFailure)
+        assertTrue(result!!.exceptionOrNull()?.message!!.contains("Active terminal session (session term-live-1)"))
+        assertFalse(removeDispatched, "Server remove must not be dispatched when preflight is blocked")
+    }
+
+    @Test
+    fun testWorktreeRemovalSwitchesAwayFromActiveWorktreeSafely() = runTest {
+        var removeDispatched = false
+        server!!.createContext("/api/git/test-proj/worktrees") { exchange ->
+            if (exchange.requestMethod.equals("DELETE", ignoreCase = true)) {
+                removeDispatched = true
+                exchange.sendResponseHeaders(200, 11)
+                exchange.responseBody.use { it.write("""{"ok":true}""".toByteArray()) }
+            } else {
+                val json = """[
+                    {"path":"main-wt","repositoryPath":"/repo/main","branch":"main","commitHash":"m1","isMain":true,"isLocked":false,"isAvailable":true},
+                    {"path":"active-wt","repositoryPath":"/repo/active","branch":"active","commitHash":"a1","isMain":false,"isLocked":false,"isAvailable":true}
+                ]"""
+                exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+                exchange.responseBody.use { it.write(json.toByteArray()) }
+            }
+        }
+
+        var switchedTarget: ProjectTargetRef? = null
+        var switchFailed = false
+        val switchingHost = object : GitHostPorts {
+            override suspend fun <T> withMutationGuard(scope: GitOperationScope, impact: GitMutationImpact, paths: List<String>, dispatch: suspend () -> T): Result<T> = Result.success(dispatch())
+            override suspend fun preflightRemoval(scope: GitOperationScope, worktree: ProjectWorktree): WorktreeRemovalPrecheck = WorktreeRemovalPrecheck.Allowed
+            override suspend fun requestWorktreeSwitch(scope: GitOperationScope, target: ProjectTargetRef): Result<Unit> {
+                switchedTarget = target
+                return if (switchFailed) Result.failure(IllegalStateException("Switch rejected by guard")) else Result.success(Unit)
+            }
+            override suspend fun openWorkspaceFile(scope: GitOperationScope, rootRelativePath: String): Result<Unit> = Result.success(Unit)
+            override fun onMutationOutcome(event: GitMutationEvent) {}
+            override fun refresh(reason: GitRefreshReason) {}
+            override fun openRecoveryTerminal(scope: GitOperationScope) {}
+        }
+
+        val repo = createRepository()
+        val controller = WorktreeMutationController(repo, this, switchingHost)
+
+        // 1. Switch failure blocks removal
+        switchFailed = true
+        val activeOwner = testScope().owner.copy(worktreePath = "active-wt")
+        val activeScope = GitOperationScope(owner = activeOwner, generation = 1L)
+        controller.updateScope(activeScope)
+
+        val activeWt = ProjectWorktree(path = "active-wt", repositoryPath = "/repo/active", branch = "active", commitHash = "a1", isMain = false)
+        var failRes: Result<Boolean>? = null
+        controller.removeWorktree(activeWt) { failRes = it }.join()
+        assertTrue(failRes!!.isFailure)
+        assertTrue(failRes!!.exceptionOrNull()?.message!!.contains("Failed to switch away from active worktree"))
+        assertFalse(removeDispatched, "Worktree must not be deleted when switch fails")
+
+        // 2. Switch success proceeds
+        switchFailed = false
+        var successRes: Result<Boolean>? = null
+        controller.removeWorktree(activeWt) { successRes = it }.join()
+        assertTrue(successRes!!.isSuccess)
+        assertTrue(removeDispatched, "Worktree must be deleted after successful switch")
+        assertEquals("main-wt", switchedTarget?.worktreePath)
+    }
+
+    @Test
+    fun testUnregisteredProjectTargetRefusesWorktreeRemoval() = runTest {
+        val unmarkedOwner = WorkspaceFileOwner(
+            profileId = "test-profile",
+            baseUrl = "http://127.0.0.1:$serverPort",
+            accountUser = "test-user",
+            project = "workspace",
+            worktreePath = null,
+        )
+        val safety = WorkspaceGitSafety(
+            boundOwner = unmarkedOwner,
+            connectionGetter = { ConnectionRef("test-profile", 1L) },
+            fileRepositoryGetter = { null },
+            editorRepositoryGetter = { null },
+            terminalRepositoryGetter = { null },
+            workspaceStateGetter = { null },
+            retainedDirtyDocsProvider = { emptyList() },
+        )
+
+        val scope = GitOperationScope(unmarkedOwner, 1L)
+        var dispatched = false
+        val result = safety.withMutationGuard(scope, GitMutationImpact.TARGETS, listOf("some-wt")) {
+            dispatched = true
+        }
+        assertTrue(result.isFailure)
+        assertFalse(dispatched)
+        assertTrue(result.exceptionOrNull()?.message!!.contains("target 'workspace' is not a registered project"))
+    }
 }

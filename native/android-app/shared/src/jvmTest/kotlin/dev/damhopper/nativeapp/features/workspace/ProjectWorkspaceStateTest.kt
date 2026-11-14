@@ -2,8 +2,11 @@ package dev.damhopper.nativeapp.features.workspace
 
 import com.sun.net.httpserver.HttpServer
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.core.model.SocketInstanceRef
+import dev.damhopper.nativeapp.features.editor.AliasLeaseToken
+import dev.damhopper.nativeapp.features.editor.ViewLeaseToken
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.ClientMsg
 import dev.damhopper.nativeapp.core.transport.ServerMsg
@@ -21,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -32,6 +36,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 private class TestWorkspaceWsConnection(
@@ -44,7 +49,16 @@ private class TestWorkspaceWsConnection(
 
     override fun activeSocketRef(): SocketInstanceRef? = currentSocket
 
-    override suspend fun sendOnSocket(expectedSocketRef: SocketInstanceRef, msg: ClientMsg) {}
+    override suspend fun sendOnSocket(expectedSocketRef: SocketInstanceRef, msg: ClientMsg) {
+        if (msg is ClientMsg.FsWriteCommit) {
+            _boundFlow.emit(
+                SocketBoundMessage(
+                    socketRef = expectedSocketRef,
+                    message = ServerMsg.FsWriteResult(writeId = msg.writeId, ok = true, newMtime = 20L)
+                )
+            )
+        }
+    }
 
     @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
     override suspend fun requestOnSocket(
@@ -55,6 +69,7 @@ private class TestWorkspaceWsConnection(
     ): ServerMsg {
         return when (msg) {
             is ClientMsg.FsSubscribeTree -> ServerMsg.TreeSnapshot(reqId = reqId, subId = 1uL)
+            is ClientMsg.FsWriteBegin -> ServerMsg.FsWriteAck(reqId = reqId, writeId = 1uL)
             is ClientMsg.FsRead -> ServerMsg.FsReadResult(
                 reqId = reqId,
                 ok = true,
@@ -63,6 +78,7 @@ private class TestWorkspaceWsConnection(
                 mtime = 10L,
                 size = 25uL,
                 data = kotlin.io.encoding.Base64.encode("fun main() = println()\n".encodeToByteArray()),
+                fileIdentity = ServerMsg.FileIdentity("ws-1", 1L, "/Main.kt"),
             )
             else -> ServerMsg.FsOpResult(reqId = reqId, ok = true)
         }
@@ -85,12 +101,14 @@ class ProjectWorkspaceStateTest {
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":25,"mtime":10,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":25,"mtime":10,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/Main.kt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/Main.kt"}""")
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "fun main() = println()\n"
+            exchange.responseHeaders.set("X-File-Identity", """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/Main.kt"}""")
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -108,6 +126,8 @@ class ProjectWorkspaceStateTest {
         profileId: String = "prof-test",
         user: String = "alice",
         project: String = "demo-proj",
+        epoch: Long? = null,
+        registry: dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry? = null,
     ): ProjectWorkspaceState {
         val conn = ConnectionRef(profileId, 1L)
         val baseUrl = "http://127.0.0.1:$serverPort"
@@ -117,6 +137,7 @@ class ProjectWorkspaceStateTest {
             accountUser = user,
             project = project,
             worktreePath = null,
+            workspaceEpoch = epoch,
         )
         val target = owner.toProjectTargetRef()
         val arbiter = FileOperationArbiter()
@@ -133,6 +154,7 @@ class ProjectWorkspaceStateTest {
             editorRepository = editorRepo,
             documentFactory = docFactory,
             coroutineScope = testScope,
+            registry = registry,
         )
     }
 
@@ -258,5 +280,259 @@ class ProjectWorkspaceStateTest {
         state.applyVerifiedSelectionEffects()
         assertTrue(terminal.isPanelVisible)
         assertEquals("term-9", terminal.activeSessionId)
+    }
+
+    @Test
+    fun testGitGatedOnProjectSelected() = runTest {
+        val state = createWorkspaceState()
+        // Initial state is project target -> isProjectSelected is true
+        assertTrue(state.isProjectSelected)
+        state.selectPanel(WorkspacePanel.GIT)
+        assertEquals(WorkspacePanel.GIT, state.activePanel.value)
+
+        // Switch to whole workspace browsing -> isProjectSelected becomes false
+        state.selectBrowsingTarget(FilesystemTargetRef.Workspace(profileId = "prof-test"))
+        assertFalse(state.isProjectSelected)
+
+        // Switch to FILES first
+        state.selectPanel(WorkspacePanel.FILES)
+        assertEquals(WorkspacePanel.FILES, state.activePanel.value)
+
+        // Attempting to select GIT when whole workspace is selected must be refused
+        state.selectPanel(WorkspacePanel.GIT)
+        assertEquals(WorkspacePanel.FILES, state.activePanel.value, "GIT must not be entered when whole-workspace browsing is active")
+        state.close()
+    }
+
+    @Test
+    fun testCloseReleasesWorkspaceViewLeasesWithoutDisposingSurvivingAliases() = runTest {
+        val state = createWorkspaceState()
+        state.editorTabsState.openTab(state.target, "Main.kt")
+        val tab = state.editorTabsState.openTabs.value.first()
+        val doc = state.editorTabsState.getDocument(tab.id)
+        assertNotNull(doc)
+
+        // Acquire a second alias lease to simulate another workspace or tool retaining the document
+        val externalAliasLease = doc.acquireAliasLease("external-alias-99")
+        assertFalse(doc.canDispose)
+
+        // Acquire a workspace view lease through ProjectWorkspaceState
+        val canonicalKey = requireNotNull(tab.canonicalKey) { "tab.canonicalKey must not be null" }
+        val viewLease = state.acquireWorkspaceViewLease(canonicalKey, "editor-surface-1")
+        assertNotNull(viewLease)
+        assertFalse(doc.canDispose)
+
+        // Close the workspace: releases this workspace's alias and view leases
+        state.close()
+        assertTrue(state.isAuthorityRetired.value)
+        assertEquals(0, state.editorTabsState.tabs.value.size)
+
+        // The document must NOT be closed because externalAliasLease is still held!
+        assertFalse(doc.isClosed)
+        assertFalse(doc.canDispose)
+
+        // Releasing the final external alias lease permits disposal
+        doc.releaseAliasLease(externalAliasLease)
+        assertTrue(doc.canDispose)
+        doc.close()
+        assertTrue(doc.isClosed)
+    }
+
+    @Test
+    fun testOneFileSharesNativeBufferAcrossWorkspacesInSameOwner() = runTest {
+        val sharedRegistry = dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val ws1 = createWorkspaceState(project = "demo-proj", registry = sharedRegistry)
+        val ws2 = createWorkspaceState(project = "demo-proj", registry = sharedRegistry)
+
+        ws1.editorTabsState.openTab(ws1.target, "Main.kt")
+        ws2.editorTabsState.openTab(ws2.target, "Main.kt")
+
+        val tab1 = ws1.editorTabsState.activeTab!!
+        val tab2 = ws2.editorTabsState.activeTab!!
+
+        val session1 = ws1.editorTabsState.getSession(tab1.key)!!
+        val session2 = ws2.editorTabsState.getSession(tab2.key)!!
+
+        assertSame(session1.document, session2.document, "Cross-workspace aliases must share canonical document")
+
+        session1.setText("fun main() = println(\"hello\")\n")
+        assertTrue(session1.isDirty)
+        assertTrue(session2.isDirty)
+        assertEquals("fun main() = println(\"hello\")\n", session2.getText())
+
+        // Close Workspace 1: Workspace 2 survives with dirty edits
+        ws1.close()
+        assertTrue(ws1.isAuthorityRetired.value)
+        assertFalse(session2.document.isClosed, "Closing ws1 must not close document used by ws2")
+        assertTrue(session2.isDirty)
+        assertEquals("fun main() = println(\"hello\")\n", session2.getText())
+
+        session2.undo()
+        assertEquals("fun main() = println()\n", session2.getText())
+        assertFalse(session2.isDirty)
+    }
+
+    @Test
+    fun testAuthorityRetirementRetainsDraftsAndDisablesStaleSaves() = runTest {
+        val ws = createWorkspaceState(project = "demo-proj", epoch = 1L)
+        ws.editorTabsState.openTab(ws.target, "Main.kt")
+        val tab = ws.editorTabsState.activeTab!!
+        val session = ws.editorTabsState.getSession(tab.key)!!
+
+        session.setText("draft content\n")
+        assertTrue(session.isDirty)
+
+        // Revoke authority (auth loss or disconnect)
+        ws.revokeAuthority()
+        assertTrue(ws.isAuthorityRetired.value)
+
+        // In-memory drafts and undo chains are retained!
+        assertEquals(1, ws.editorTabsState.tabs.value.size)
+        assertEquals("draft content\n", session.getText())
+        assertTrue(session.isDirty)
+
+        // Saves are disabled while authority is retired
+        assertFalse(session.isInputPermitted)
+        val saveRes = ws.editorTabsState.saveTab(tab.key)
+        assertTrue(saveRes is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Error)
+
+        // Rebind with mismatched epoch refuses adoption
+        val mismatchedOwner = ws.owner.copy(workspaceEpoch = 999L)
+        val rebindEpochMismatch = ws.rebindAuthority(mismatchedOwner, ConnectionRef("prof-test", 2L))
+        assertFalse(rebindEpochMismatch, "Mismatched epoch must reject rebind")
+
+        // Rebind with mismatched account user refuses adoption
+        val mismatchedUser = ws.owner.copy(accountUser = "bob")
+        val rebindUserMismatch = ws.rebindAuthority(mismatchedUser, ConnectionRef("prof-test", 2L))
+        assertFalse(rebindUserMismatch, "Mismatched user must reject rebind")
+
+        // Exact authorized identity rebind succeeds
+        val freshConn = ConnectionRef("prof-test", 2L)
+        val rebindExact = ws.rebindAuthority(ws.owner, freshConn)
+        assertTrue(rebindExact, "Exact authorized owner permits rebind")
+        assertFalse(ws.isAuthorityRetired.value)
+
+        // Retained dirty document must be tracked in unauthorizedDirtyDocIds post-rebind
+        val dirtyDocId = ws.editorTabsState.getDocumentId(tab.key)
+        assertNotNull(dirtyDocId)
+        assertTrue(
+            ws.unauthorizedDirtyDocIds.value.contains(dirtyDocId),
+            "Retained dirty document must remain unauthorized after rebind until fresh server baseline verification"
+        )
+
+        // Actual save attempt MUST be rejected by saveGate
+        val saveAttempt = ws.editorTabsState.saveTab(tab.key)
+        assertTrue(saveAttempt is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Error)
+        assertTrue(
+            saveAttempt.message.contains("fresh server baseline reauthorization"),
+            "Save must be rejected with baseline reauthorization reason"
+        )
+
+        // Document dirty state and undo history remain strictly preserved
+        assertEquals("draft content\n", session.getText())
+        assertTrue(session.isDirty)
+
+        // Reauthorize retained documents against fresh server baseline
+        val reauthOk = ws.reauthorizeRetainedDocuments()
+        assertTrue(reauthOk, "Fresh baseline matching canonical identity must reauthorize documents")
+        assertTrue(
+            ws.unauthorizedDirtyDocIds.value.isEmpty(),
+            "Unauthorized document set must be cleared after successful reauthorization"
+        )
+    }
+
+    @Test
+    fun testCleanDocumentEditedAfterRebindWithoutServerStatReauthorizationFailsClosed() = runTest {
+        val sharedRegistry = dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val ws1 = createWorkspaceState(project = "demo-proj", registry = sharedRegistry, epoch = 1L)
+        val ws2 = createWorkspaceState(project = "demo-proj", registry = sharedRegistry, epoch = 1L)
+
+        ws1.editorTabsState.openTab(ws1.target, "Main.kt")
+        ws2.editorTabsState.openTab(ws2.target, "Main.kt")
+
+        val tab1 = ws1.editorTabsState.activeTab!!
+        val tab2 = ws2.editorTabsState.activeTab!!
+        val session1 = ws1.editorTabsState.getSession(tab1.key)!!
+        val session2 = ws2.editorTabsState.getSession(tab2.key)!!
+
+        // Both tabs share the exact same canonical document
+        assertSame(session1.document, session2.document, "Cross-workspace aliases must share canonical document")
+        assertFalse(session1.isDirty, "Document starts clean")
+        assertFalse(session2.isDirty, "Document starts clean")
+
+        // Revoke and rebind authority on ws1 with fresh connection
+        ws1.revokeAuthority()
+        assertTrue(ws1.isAuthorityRetired.value)
+
+        val freshConn = ConnectionRef("prof-test", 2L)
+        val rebindOk = ws1.rebindAuthority(ws1.owner, freshConn)
+        assertTrue(rebindOk)
+        assertFalse(ws1.isAuthorityRetired.value)
+
+        // Canonical key is unauthorized on ws1 post-rebind even though document was clean at rebind
+        val cKey = ws1.editorTabsState.resolveCanonicalKey(tab1)
+        assertTrue(
+            ws1.unauthorizedCanonicalKeys.value.contains(cKey),
+            "Retained document canonical key must remain unauthorized post-rebind even if clean"
+        )
+
+        // Edit clean document on ws1 (clean-to-dirty transition propagates to shared document)
+        session1.setText("post-rebind dirty edits\n")
+        assertTrue(session1.isDirty)
+        assertTrue(session2.isDirty)
+
+        // Save attempt on ws1 must fail closed because canonical identity has not been verified against new connection
+        val saveRes1 = ws1.editorTabsState.saveTab(tab1.key)
+        assertTrue(saveRes1 is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Error)
+        assertTrue(
+            saveRes1.message.contains("fresh server baseline reauthorization"),
+            "Clean-to-dirty edit post-rebind must fail closed without server stat reauthorization"
+        )
+
+        // Force overwrite on ws1 must also fail closed
+        val overwriteRes1 = ws1.editorTabsState.forceOverwriteTab(tab1.key)
+        assertTrue(overwriteRes1 is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Error)
+        assertTrue(
+            overwriteRes1.message.contains("fresh server baseline reauthorization"),
+            "Force overwrite on unauthorized canonical document must also fail closed"
+        )
+
+        // Reauthorize against fresh server baseline on ws1
+        val reauthOk = ws1.reauthorizeRetainedDocuments()
+        assertTrue(reauthOk, "Reauthorization must succeed when server stat baseline matches")
+        assertTrue(ws1.unauthorizedCanonicalKeys.value.isEmpty())
+        assertTrue(ws1.unauthorizedDirtyDocIds.value.isEmpty())
+        assertFalse(ws1.isAuthorityRetired.value)
+
+        // Post-reauthorization save now succeeds!
+        val postReauthSave = ws1.editorTabsState.saveTab(tab1.key)
+        assertTrue(postReauthSave is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Success, "Save must succeed after verified reauthorization")
+        assertFalse(session1.isDirty, "Session 1 must be clean after successful save")
+        assertFalse(session2.isDirty, "Shared session 2 must be clean after successful save")
+    }
+
+    @Test
+    fun testCoroutineScopeUsesSupervisorJobAndChildFailureDoesNotCancelScope() = runTest {
+        val state = createWorkspaceState()
+        val scope = state.coroutineScope
+        assertTrue(scope.coroutineContext[kotlinx.coroutines.Job] is kotlinx.coroutines.CompletableJob)
+
+        // Launch a failing child coroutine in the workspace scope with an exception handler
+        val handler = kotlinx.coroutines.CoroutineExceptionHandler { _, _ -> }
+        val failingJob = scope.launch(handler) {
+            throw RuntimeException("Child failure simulation")
+        }
+        failingJob.join()
+
+        // Sibling coroutine must still be launchable and active
+        var siblingExecuted = false
+        val siblingJob = scope.launch {
+            siblingExecuted = true
+        }
+        siblingJob.join()
+
+        assertTrue(siblingExecuted, "Sibling coroutine in workspaceScope must execute after child failure")
+        assertTrue(scope.coroutineContext[kotlinx.coroutines.Job]?.isActive == true, "Workspace scope must remain active")
+        state.close()
     }
 }

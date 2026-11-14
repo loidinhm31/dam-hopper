@@ -188,4 +188,42 @@ class NotificationSinkTest {
         assertEquals("Attention required", n.publicBody)
         assertTrue(n.copy(silent = true).silent)
     }
+
+    @Test
+    fun notificationTargetCarriesExactIdentityIncludingSocket() {
+        val target = NotificationTarget(
+            profileId = "prof-1",
+            generation = 3L,
+            serverEpoch = 42L,
+            terminalId = "term-alpha",
+            incarnation = 7L,
+            attentionRevision = 99L,
+            processInstanceId = "proc-pid-1",
+            endpoint = "https://server.test:8080",
+            accountId = "acc-owner-1",
+            project = "my-proj",
+            worktreePath = "/path/to/work",
+            agentSessionId = "sess-omp-1",
+            agentKind = "omp",
+            socketInstanceId = "ws-socket-instance-42",
+        )
+        assertEquals("prof-1", target.profileId)
+        assertEquals(3L, target.generation)
+        assertEquals(42L, target.serverEpoch)
+        assertEquals("term-alpha", target.terminalId)
+        assertEquals(7L, target.incarnation)
+        assertEquals(99L, target.attentionRevision)
+        assertEquals("proc-pid-1", target.processInstanceId)
+        assertEquals("https://server.test:8080", target.endpoint)
+        assertEquals("acc-owner-1", target.accountId)
+        assertEquals("my-proj", target.project)
+        assertEquals("/path/to/work", target.worktreePath)
+        assertEquals("sess-omp-1", target.agentSessionId)
+        assertEquals("omp", target.agentKind)
+        assertEquals("ws-socket-instance-42", target.socketInstanceId)
+
+        // socketInstanceId defaults to null for backward compatibility
+        val defaultTarget = NotificationTarget("prof-2", 1L)
+        assertNull(defaultTarget.socketInstanceId)
+    }
 }

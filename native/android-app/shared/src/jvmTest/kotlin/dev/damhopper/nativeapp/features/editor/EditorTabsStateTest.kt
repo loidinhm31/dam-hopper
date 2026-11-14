@@ -6,6 +6,7 @@ import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.WsConnection
 import dev.damhopper.nativeapp.features.files.FileRepository
+import dev.damhopper.nativeapp.features.workspace.DocumentId
 import kotlinx.coroutines.test.runTest
 import java.net.InetSocketAddress
 import kotlin.test.*
@@ -25,7 +26,12 @@ class EditorTabsStateTest {
     @AfterTest
     fun tearDown() { server?.stop(0) }
 
-    private fun createTabsState(project: String = "demo"): EditorTabsState {
+    private fun createTabsState(
+        project: String = "demo",
+        worktreePath: String? = null,
+        registry: CanonicalDocumentRegistry? = null,
+        epoch: Long? = 1L,
+    ): EditorTabsState {
         val conn = ConnectionRef("p1", 1L)
         val client = ApiClient(conn, "http://127.0.0.1:$serverPort", { "test-token" })
         val ws = WsConnection(conn, "http://127.0.0.1:$serverPort", { "test-token" })
@@ -34,10 +40,14 @@ class EditorTabsStateTest {
             baseUrl = "http://127.0.0.1:$serverPort",
             accountUser = "test-user",
             project = project,
+            worktreePath = worktreePath,
+            workspaceEpoch = epoch,
         )
         val fileRepo = FileRepository(owner, client, ws)
         val editorRepo = EditorRepository(fileRepo, profileId = "p1")
-        return EditorTabsState("p1", editorRepo, documentFactory = TestEditorDocumentFactory())
+        val factory = TestEditorDocumentFactory()
+        val effRegistry = registry ?: CanonicalDocumentRegistry(factory)
+        return EditorTabsState("p1", editorRepo, documentFactory = factory, registry = effRegistry)
     }
 
     @Test
@@ -76,13 +86,16 @@ class EditorTabsStateTest {
 
     @Test
     fun testIsDirtyFileSuppliesReplaceCoordinator() = runTest {
+        val identityHeader = """{"workspaceId":"ws-test","workspaceEpoch":1,"canonicalPath":"/foo.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":$identityHeader}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "hello world\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -101,13 +114,16 @@ class EditorTabsStateTest {
 
     @Test
     fun testCloseIntentGuardsDirtyTabs() = runTest {
+        val identityHeader = """{"workspaceId":"ws-test","workspaceEpoch":1,"canonicalPath":"/notes.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":$identityHeader}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "clean text\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -170,13 +186,16 @@ class EditorTabsStateTest {
 
     @Test
     fun testWatcherEventMarksDirtyTabStaleWithoutOverwriting() = runTest {
+        val identityHeader = """{"workspaceId":"ws-test","workspaceEpoch":1,"canonicalPath":"/doc.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":$identityHeader}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "remote v1\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -196,14 +215,17 @@ class EditorTabsStateTest {
     @Test
     fun testDiscardAndReloadTab() = runTest {
         var readCounter = 1
+        val identityHeader = """{"workspaceId":"ws-test","workspaceEpoch":1,"canonicalPath":"/doc.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":50,"mtime":${100 + readCounter},"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":50,"mtime":${100 + readCounter},"mime":"text/plain","isBinary":false,"fileIdentity":$identityHeader}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "server copy $readCounter\n"
             readCounter++
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -249,13 +271,16 @@ class EditorTabsStateTest {
 
     @Test
     fun testDiscardIntentProtectsNewerEdits() = runTest {
+        val identityHeader = """{"workspaceId":"ws-test","workspaceEpoch":1,"canonicalPath":"/protected.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":$identityHeader}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "original text\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -281,9 +306,11 @@ class EditorTabsStateTest {
     @Test
     fun testReloadAfterGrowthToLargeReplacesAuthorityWithReadOnlyPreview() = runTest {
         var large = false
+        val identityHeader = """{"workspaceId":"ws-test","workspaceEpoch":1,"canonicalPath":"/grow.log"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
             val size = if (large) 6_000_000L else 50L
-            val json = """{"kind":"file","size":$size,"mtime":${if (large) 200 else 100},"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":$size,"mtime":${if (large) 200 else 100},"mime":"text/plain","isBinary":false,"fileIdentity":$identityHeader}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
@@ -291,6 +318,7 @@ class EditorTabsStateTest {
             val len = Regex("len=(\\d+)").find(exchange.requestURI.query.orEmpty())?.groupValues?.get(1)?.toInt() ?: 0
             val text = if (large) "P".repeat(len) else "small\n"
             val bytes = text.toByteArray()
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }
         }
@@ -318,14 +346,17 @@ class EditorTabsStateTest {
     @Test
     fun testAuthorityReplaceOnTierChangeInvalidatesPriorCloseIntent() = runTest {
         var degraded = false
+        val identityHeader = """{"workspaceId":"ws-test","workspaceEpoch":1,"canonicalPath":"/tier.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
             val size = if (degraded) 2_000_000L else 50L
-            val json = """{"kind":"file","size":$size,"mtime":${if (degraded) 200 else 100},"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":$size,"mtime":${if (degraded) 200 else 100},"mime":"text/plain","isBinary":false,"fileIdentity":$identityHeader}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val bytes = (if (degraded) "D".repeat(2_000_000) else "small\n").toByteArray()
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }
         }
@@ -358,13 +389,16 @@ class EditorTabsStateTest {
 
     @Test
     fun testSaveDocumentPortDeniesEncryptedRequiredTabAndForceOverwriteHonorsPrivacy() = runTest {
+        val identityHeader = """{"workspaceId":"ws-test","workspaceEpoch":1,"canonicalPath":"/sec.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":10,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":10,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":$identityHeader}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val bytes = "secret\n".toByteArray()
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }
         }
@@ -387,14 +421,17 @@ class EditorTabsStateTest {
         assertTrue(ow is EditorSaveResult.Error)
     }
 
-    private fun serveFile(text: String) {
+    private fun serveFile(text: String, path: String = "/file.txt") {
         val bytes = text.toByteArray()
+        val idJson = """{"workspaceId":"ws-test","workspaceEpoch":1,"canonicalPath":"$path"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":${bytes.size},"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":${bytes.size},"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":$idJson}"""
+            exchange.responseHeaders.set("X-File-Identity", idJson)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
+            exchange.responseHeaders.set("X-File-Identity", idJson)
             exchange.sendResponseHeaders(200, bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }
         }
@@ -492,5 +529,381 @@ class EditorTabsStateTest {
         )
         val exact = buildPreviewSnapshot(docId, 1L, "x".repeat(PREVIEW_SNAPSHOT_MAX_CHARS), PREVIEW_SNAPSHOT_MAX_CHARS)
         assertFalse(exact.isTruncated)
+    }
+
+    @Test
+    fun testOneLogicalFileSharesOneNativeBufferAndUndoAcrossAliases() = runTest {
+        val identityHeader = """{"workspaceId":"ws-main","workspaceEpoch":10,"canonicalPath":"/shared/Common.kt"}"""
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":30,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-main","workspaceEpoch":10,"canonicalPath":"/shared/Common.kt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "val shared = 1\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+
+        val sharedRegistry = CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val state1 = createTabsState(project = "proj-a", registry = sharedRegistry)
+        val state2 = createTabsState(project = "proj-b", worktreePath = "worktree-1", registry = sharedRegistry)
+
+        val target1 = ProjectTargetRef(project = "proj-a")
+        val target2 = ProjectTargetRef(project = "proj-b", worktreePath = "worktree-1")
+
+        state1.openTab(target1, "Common.kt")
+        state2.openTab(target2, "nested/Common.kt")
+
+        val session1 = state1.getSession(state1.activeTab!!.key)!!
+        val session2 = state2.getSession(state2.activeTab!!.key)!!
+
+        // Must share the exact same underlying native EditorDocument authority!
+        assertSame(session1.document, session2.document, "Aliases must share single canonical document")
+        assertFalse(session1.isDirty)
+        assertFalse(session2.isDirty)
+
+        // Edit via Tab 1
+        session1.setText("val shared = 2\n")
+        assertTrue(session1.isDirty)
+        assertTrue(session2.isDirty, "Alias session 2 must observe dirty state immediately")
+        assertEquals("val shared = 2\n", session2.getText())
+
+        // Undo via Tab 2
+        assertTrue(session2.canUndo(), "Alias session 2 can undo shared edits")
+        session2.undo()
+        assertEquals("val shared = 1\n", session1.getText())
+        assertEquals("val shared = 1\n", session2.getText())
+        assertFalse(session1.isDirty)
+        assertFalse(session2.isDirty)
+
+        // Close Tab 1: Tab 2 survives and keeps document alive
+        state1.closeTab(state1.activeTab!!.key)
+        assertFalse(session2.document.isClosed, "Closing alias 1 must not close shared canonical document")
+        assertEquals(1, session2.document.activeAliasLeases.value.size)
+
+        // Tab 2 can still edit
+        session2.setText("val shared = 3\n")
+        assertTrue(session2.isDirty)
+        assertEquals("val shared = 3\n", session2.getText())
+    }
+
+    @Test
+    fun testSurvivingAliasPreservesDirtyEditsAndClosesWithoutPrompt() = runTest {
+        val identityHeader = """{"workspaceId":"ws-1","workspaceEpoch":5,"canonicalPath":"/src/Doc.kt"}"""
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":20,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "initial\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+
+        val registry = CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val state1 = createTabsState(project = "demo", registry = registry)
+        val state2 = createTabsState(project = "demo", worktreePath = "wt-alias", registry = registry)
+
+        val target1 = ProjectTargetRef(project = "demo")
+        val target2 = ProjectTargetRef(project = "demo", worktreePath = "wt-alias")
+
+        state1.openTab(target1, "Doc.kt")
+        val tab1Key = state1.activeTab!!.key
+        val tab1Id = state1.activeTabId.value!!
+
+        state2.openTab(target2, "Doc.kt")
+        val tab2Key = state2.activeTab!!.key
+        val tab2Id = state2.activeTabId.value!!
+
+        val session1 = state1.getSession(tab1Key)!!
+        session1.setText("dirty edit\n")
+        assertTrue(session1.isDirty)
+
+        // Closing Tab 1: Tab 2 survives! Returns null and closes Tab 1's lease without prompting
+        val intent1 = state1.requestCloseTab(tab1Id)
+        assertNull(intent1, "Surviving alias allows closing without dirty prompt")
+        assertEquals(0, state1.tabs.value.size)
+        assertNull(state1.getSession(tab1Key))
+
+        // Tab 2 is still dirty with uncommitted edits!
+        val session2 = state2.getSession(tab2Key)!!
+        assertTrue(session2.isDirty)
+        assertEquals("dirty edit\n", session2.getText())
+
+        // Closing Tab 2: now it IS the final dirty alias! Must prompt with CloseIntent
+        val intent2 = state2.requestCloseTab(tab2Id)
+        assertNotNull(intent2, "Final dirty alias must return CloseIntent")
+        assertEquals(CloseDecision.SAVE, intent2.decision)
+        assertEquals(1, state2.tabs.value.size) // Tab remains open until explicit decision
+    }
+
+    @Test
+    fun testCloseAndReloadIsBusyDuringSave() = runTest {
+        serveFile("data\n")
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "file.txt")
+        val key = state.activeTab!!.key
+
+        // Simulate save in flight
+        val reg = state.registry
+        val cKey = state.resolveCanonicalKey(state.activeTab!!)
+        reg.tryBeginSave(cKey)
+        assertTrue(reg.isSaveInProgress(cKey))
+
+        // reloadTab while save is in flight is busy and returns immediately
+        state.reloadTab(key)
+        assertFalse(state.activeTab!!.isLoading, "reloadTab must be busy and not trigger loading during save")
+
+        // closeTab while save is in flight is busy and returns without closing
+        state.closeTab(key)
+        assertEquals(1, state.tabs.value.size, "closeTab must be busy and not close while save in flight")
+
+        // Complete save unlocks
+        reg.completeSave(cKey)
+        assertFalse(reg.isSaveInProgress(cKey))
+    }
+
+    @Test
+    fun testAtomicTierReplacementUpdatesAllAliases() = runTest {
+        var fileBytes = "short text\n".toByteArray()
+        var fileMtime = 100L
+        var fileSize = fileBytes.size.toLong()
+        val identityHeader = """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/src/LargeOrSmall.txt"}"""
+
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":$fileSize,"mtime":$fileMtime,"mime":"text/plain","isBinary":false}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, fileBytes.size.toLong())
+            exchange.responseBody.use { it.write(fileBytes) }
+        }
+
+        val registry = CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val state1 = createTabsState(project = "demo", registry = registry)
+        val state2 = createTabsState(project = "demo", worktreePath = "branch-wt", registry = registry)
+
+        val targetA = ProjectTargetRef(project = "demo")
+        val targetB = ProjectTargetRef(project = "demo", worktreePath = "branch-wt")
+
+        state1.openTab(targetA, "LargeOrSmall.txt")
+        val keyA = state1.activeTab!!.key
+        state2.openTab(targetB, "LargeOrSmall.txt")
+        val keyB = state2.activeTab!!.key
+
+        assertEquals(FileTier.NORMAL, state1.tabs.value.find { it.key == keyA }?.tier)
+        assertEquals(FileTier.NORMAL, state2.tabs.value.find { it.key == keyB }?.tier)
+        val docBefore = state1.getSession(keyA)!!.document
+        assertSame(docBefore, state2.getSession(keyB)!!.document)
+
+        // Server file expands to 6 MiB (triggers LARGE tier)
+        fileSize = 6_000_000L
+        fileMtime = 200L
+        fileBytes = "first 64k chunk\n".toByteArray()
+
+        state1.reloadTab(keyA, forceDiscardLocal = true)
+
+        // BOTH states must be updated atomically to FileTier.LARGE and successor document
+        val tabA = state1.tabs.value.find { it.key == keyA }!!
+        val tabB = state2.tabs.value.find { it.key == keyB }!!
+        assertEquals(FileTier.LARGE, tabA.tier)
+        assertEquals(FileTier.LARGE, tabB.tier)
+
+        val docAfterA = state1.getSession(keyA)!!.document
+        val docAfterB = state2.getSession(keyB)!!.document
+        assertSame(docAfterA, docAfterB)
+        assertNotSame(docBefore, docAfterA, "Successor document must replace old tier document")
+    }
+
+    @Test
+    fun testDifferentEpochOrEndpointNeverSharesAuthority() = runTest {
+        val registry = CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val stateEpoch1 = createTabsState(project = "demo", registry = registry, epoch = 100L)
+        val stateEpoch2 = createTabsState(project = "demo", registry = registry, epoch = 200L)
+
+        val target = ProjectTargetRef(project = "demo")
+        val key1 = stateEpoch1.resolveCanonicalKey(null, "p1", target, "a.txt")
+        val key2 = stateEpoch2.resolveCanonicalKey(null, "p1", target, "a.txt")
+
+        // Mismatched epochs produce different canonical keys
+        assertNotEquals(key1, key2, "Different epochs must never share canonical document keys")
+
+        // Rebind repository with mismatched owner epoch fails
+        val conn = ConnectionRef("p1", 1L)
+        val client = ApiClient(conn, "http://127.0.0.1:$serverPort", { "token" })
+        val ws = WsConnection(conn, "http://127.0.0.1:$serverPort", { "token" })
+        val mismatchedOwner = dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner(
+            profileId = "p1",
+            baseUrl = "http://127.0.0.1:$serverPort",
+            accountUser = "test-user",
+            project = "demo",
+            workspaceEpoch = 999L,
+        )
+        val mismatchedRepo = EditorRepository(FileRepository(mismatchedOwner, client, ws), profileId = "p1")
+        val rebindResult = stateEpoch1.rebindRepository(mismatchedRepo)
+        assertFalse(rebindResult, "Mismatched owner epoch must refuse rebind")
+    }
+
+    @Test
+    fun testOpenAliasWhileCanonicalDocumentIsDirty() = runTest {
+        val identityHeader = """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/src/DirtyOpen.kt"}"""
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":20,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "original text\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+
+        val registry = CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val state1 = createTabsState(project = "demo", registry = registry)
+        val state2 = createTabsState(project = "demo", worktreePath = "alias-wt", registry = registry)
+        val target1 = ProjectTargetRef(project = "demo")
+        val target2 = ProjectTargetRef(project = "demo", worktreePath = "alias-wt")
+
+        state1.openTab(target1, "DirtyOpen.kt")
+        val tab1Key = state1.activeTab!!.key
+        val session1 = state1.getSession(tab1Key)!!
+        session1.setText("unsaved edits in tab 1\n")
+        assertTrue(session1.isDirty)
+
+        // Open alias Tab 2 for the same canonical file
+        state2.openTab(target2, "DirtyOpen.kt")
+        val tab2Key = state2.activeTab!!.key
+        val session2 = state2.getSession(tab2Key)!!
+        assertSame(session1.document, session2.document)
+        assertTrue(session2.isDirty, "Newly opened alias must adopt in-memory dirty state")
+        assertEquals("unsaved edits in tab 1\n", session2.getText(), "Newly opened alias must observe uncommitted edits")
+        assertTrue(session2.canUndo(), "Newly opened alias must retain shared undo chain")
+    }
+
+    @Test
+    fun testLateOldDetachSimulationCannotDamageSuccessorReceiptOrViewState() = runTest {
+        val doc = TestEditorDocument(
+            id = DocumentId(
+                owner = dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner("p1", "http://127.0.0.1", "user", "proj"),
+                relativePath = "Test.kt",
+                tabIncarnation = 1L
+            ),
+            initialText = "test",
+            initialMtime = 100L
+        )
+
+        val editor1 = Any()
+        val token1 = doc.acquireViewLease("surface-1")
+        doc.attachTestEditor(editor1, token1)
+        assertTrue(doc.hasActiveReceipt(editor1))
+
+        // Successor editor2 attaches
+        val editor2 = Any()
+        val token2 = doc.acquireViewLease("surface-2")
+        doc.attachTestEditor(editor2, token2)
+        assertTrue(doc.hasActiveReceipt(editor2))
+
+        // Set active view state
+        doc.captureViewState(DocumentViewState(cursorLine = 42))
+
+        // Late old detach occurs from superseded editor1
+        doc.detachTestEditor(editor1, token1, DocumentViewState(cursorLine = 1))
+        doc.releaseViewLease(token1)
+
+        // Successor editor2 must remain undamaged
+        assertTrue(doc.hasActiveReceipt(editor2), "Successor receipt must not be unsubscribed by late old detach")
+        assertEquals(42, doc.viewState.value.cursorLine, "Successor view state must not be overwritten by late old detach")
+
+        // Clean detach from active editor2
+        doc.detachTestEditor(editor2, token2, DocumentViewState(cursorLine = 88))
+        doc.releaseViewLease(token2)
+        assertEquals(88, doc.viewState.value.cursorLine)
+    }
+
+    @Test
+    fun testSaveAttemptOnDocumentWithMissingFileIdentityFailsClosed() = runTest {
+        val text = "data without identity\n"
+        val bytes = text.toByteArray()
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":${bytes.size},"mtime":100,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "unidentified.txt")
+        val key = state.activeTab!!.key
+        val session = state.getSession(key)!!
+        assertTrue(session.isReadOnly, "Document without verified identity must be published as read-only")
+        assertEquals(FileTier.LARGE, state.activeTab!!.tier, "Tab tier must be demoted to read-only LARGE")
+
+        // saveTab fails closed
+        val saveResult = state.saveTab(key)
+        assertTrue(saveResult is EditorSaveResult.Error, "saveTab must fail closed without verified FileIdentity")
+
+        // forceOverwriteTab fails closed
+        val overwriteResult = state.forceOverwriteTab(key)
+        assertTrue(overwriteResult is EditorSaveResult.Error, "forceOverwriteTab must fail closed without verified FileIdentity")
+
+        // saveDocument port fails closed
+        val docId = state.activeTabId.value!!
+        val outcome = state.editorRepository.saveDocument(docId)
+        assertTrue(outcome is dev.damhopper.nativeapp.features.files.FileOperationOutcome.NotSubmitted)
+
+        // reloadTab on unidentified file must also remain read-only
+        state.reloadTab(key)
+        val reloadedSession = state.getSession(key)!!
+        assertTrue(reloadedSession.isReadOnly, "Reloading document with missing identity must remain read-only")
+        assertEquals(FileTier.LARGE, state.activeTab!!.tier)
+    }
+
+    @Test
+    fun testPhysicalPreviewTiersImageVideoBinaryPreserveTheirRenderersWithoutDemotingToLarge() = runTest {
+        val imgBytes = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte())
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val path = exchange.requestURI.query.orEmpty()
+            val (size, mime, isBin) = when {
+                path.contains("photo.png") -> Triple(imgBytes.size.toLong(), "image/png", true)
+                path.contains("clip.mp4") -> Triple(1024L, "video/mp4", true)
+                else -> Triple(512L, "application/octet-stream", true)
+            }
+            val json = """{"kind":"file","size":$size,"mtime":100,"mime":"$mime","isBinary":$isBin}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val bytes = byteArrayOf(0x00, 0x01, 0x02, 0x03)
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+
+        // Open image: tier must stay IMAGE
+        state.openTab(target, "photo.png")
+        assertEquals(FileTier.IMAGE, state.activeTab!!.tier, "Image file must preserve IMAGE tier")
+        // Open video: tier must stay VIDEO
+        state.openTab(target, "clip.mp4")
+        assertEquals(FileTier.VIDEO, state.activeTab!!.tier, "Video file must preserve VIDEO tier")
+
+        // Open binary: tier must stay BINARY
+        state.openTab(target, "blob.bin")
+        assertEquals(FileTier.BINARY, state.activeTab!!.tier, "Binary file must preserve BINARY tier")
     }
 }

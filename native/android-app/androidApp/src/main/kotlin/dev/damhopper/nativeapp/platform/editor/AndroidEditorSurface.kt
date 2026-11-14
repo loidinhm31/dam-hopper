@@ -2,6 +2,7 @@ package dev.damhopper.nativeapp.platform.editor
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -95,6 +96,17 @@ fun AndroidEditorSurfaceView(
     modifier: Modifier = Modifier,
 ) {
     key(document) {
+        val viewToken = remember(document) {
+            document.acquireViewLease("surface-${System.identityHashCode(document)}")
+        }
+        DisposableEffect(document, viewToken) {
+            onDispose {
+                document.releaseViewLease(viewToken)
+                if (document.canDispose) {
+                    document.close()
+                }
+            }
+        }
         val languageGate = remember { EditorLanguageGate(document) }
         val appliedFontSize = remember { intArrayOf(-1) }
         LaunchedEffect(document) {
@@ -103,6 +115,7 @@ fun AndroidEditorSurfaceView(
             }
         }
         AndroidView(
+            modifier = modifier,
             factory = { context ->
                 CodeEditor(context).apply {
                     isUndoEnabled = true
@@ -118,7 +131,7 @@ fun AndroidEditorSurfaceView(
                     appliedFontSize[0] = fontSize
                     languageGate.editor = this
                     (document as? AndroidEditorDocument)?.let { androidDoc ->
-                        androidDoc.attachEditor(this, languageGate.initialLanguage())
+                        androidDoc.attachEditor(this, languageGate.initialLanguage(), viewToken)
                         androidDoc.restoreViewState(this)
                     }
                 }
@@ -148,9 +161,8 @@ fun AndroidEditorSurfaceView(
             },
             onRelease = { editor ->
                 languageGate.editor = null
-                (document as? AndroidEditorDocument)?.detachEditor(editor)
+                (document as? AndroidEditorDocument)?.detachEditor(editor, viewToken)
             },
-            modifier = modifier.fillMaxSize()
         )
     }
 }

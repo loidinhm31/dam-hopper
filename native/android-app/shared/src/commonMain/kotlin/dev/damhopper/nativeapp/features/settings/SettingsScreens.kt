@@ -35,6 +35,7 @@ import dev.damhopper.nativeapp.features.profiles.ServerProfile
 import dev.damhopper.nativeapp.features.terminal.AgentKind
 import dev.damhopper.nativeapp.features.terminal.IntegrationReadinessState
 import kotlinx.coroutines.launch
+import dev.damhopper.nativeapp.ui.flow.SettingsOrigin
 
 /** Sub-sections available within WorkbenchPanel.SETTINGS. */
 enum class SettingsSubSection(val label: String) {
@@ -88,21 +89,110 @@ fun SettingsScreens(
     onOpenAuth: ((profileId: String) -> Unit)? = null,
     initialHostSection: HostSettingsSection = HostSettingsSection.IDLE,
     onHostSectionChanged: (HostSettingsSection) -> Unit = {},
+    origin: SettingsOrigin? = null,
+    onCloseWithOrigin: ((SettingsOrigin?) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var activeSubSection by remember { mutableStateOf(initialSubSection) }
     val coroutineScope = rememberCoroutineScope()
     val sourceTarget by settingsRepository.sourceTargetState.collectAsState()
+    val syncState by settingsRepository.syncState.collectAsState()
+    val unsupportedPolicy by settingsRepository.unsupportedPolicy.collectAsState()
 
+    val handleBack: () -> Unit = {
+        if (onCloseWithOrigin != null) {
+            onCloseWithOrigin(origin)
+        } else {
+            onNavigateBack?.invoke()
+        }
+    }
     LaunchedEffect(activeSubSection) { onActiveSubSectionChanged(activeSubSection) }
 
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(modifier = Modifier.fillMaxSize()) {
+            val sourceAId = sourceTarget.preferencesProfileId
+            val sourceAProfile = availableProfiles.firstOrNull { it.id == sourceAId }
+            val sourceALabel = when {
+                sourceAId == null -> when (sourceTarget.preferencesStatus) {
+                    PreferenceSourceStatus.SOURCE_REMOVED -> "Source A: Removed"
+                    else -> "Source A: Local only"
+                }
+                sourceAProfile == null -> "Source A: Removed"
+                syncState.status == PreferenceSyncStatus.HYDRATE_FAILED -> "Source A: ${sourceAProfile.name} (Hydration failed)"
+                syncState.status == PreferenceSyncStatus.OFFLINE -> "Source A: ${sourceAProfile.name} (Offline)"
+                unsupportedPolicy != null -> "Source A: ${sourceAProfile.name} (Unsupported policy)"
+                syncState.status == PreferenceSyncStatus.HYDRATING -> "Source A: ${sourceAProfile.name} (Syncing\u2026)"
+                else -> "Source A: ${sourceAProfile.name}"
+            }
+
+            val targetBId = sourceTarget.settingsProfileId
+            val targetBProfile = availableProfiles.firstOrNull { it.id == targetBId }
+            val targetBServices = services.targetServices?.takeIf { it.owner.connection.profileId == targetBId }
+            val targetBStatus = targetBId?.let { authStatuses[it] }
+            val isTargetBDev = (targetBStatus as? AuthStatus.Authenticated)?.session?.devMode == true
+            val targetBLabel = when {
+                targetBId == null -> "Admin B: Unset"
+                targetBProfile == null -> "Admin B: Removed"
+                targetBServices == null -> "Admin B: ${targetBProfile.name} (Disconnected)"
+                isTargetBDev -> "Admin B: ${targetBProfile.name} (No-auth dev)"
+                targetBStatus is AuthStatus.Authenticated -> "Admin B: ${targetBProfile.name} (Active)"
+                targetBStatus == null -> "Admin B: ${targetBProfile.name} (Status unknown)"
+                else -> "Admin B: ${targetBProfile.name} (Sign-in required)"
+            }
+
+            val hubCLabel = activeProfileId?.let { id ->
+                val hubName = availableProfiles.firstOrNull { it.id == id }?.name ?: id
+                "Hub C: $hubName"
+            } ?: "Hub C: None"
+
+            // Top bar: back action and factual scope chips (This Device, Preference Source A, Admin Target B, Hub C context)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (onNavigateBack != null || onCloseWithOrigin != null) {
+                    FilterChip(
+                        selected = false,
+                        onClick = handleBack,
+                        label = { Text("\u2190 Back") },
+                        modifier = Modifier.defaultMinSize(minHeight = 40.dp),
+                    )
+                }
+                FilterChip(
+                    selected = true,
+                    onClick = {},
+                    label = { Text("This Device") },
+                    modifier = Modifier.defaultMinSize(minHeight = 40.dp),
+                )
+                FilterChip(
+                    selected = sourceAId != null,
+                    onClick = {},
+                    label = { Text(sourceALabel) },
+                    modifier = Modifier.defaultMinSize(minHeight = 40.dp),
+                )
+                FilterChip(
+                    selected = targetBId != null,
+                    onClick = {},
+                    label = { Text(targetBLabel) },
+                    modifier = Modifier.defaultMinSize(minHeight = 40.dp),
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = {},
+                    label = { Text(hubCLabel) },
+                    modifier = Modifier.defaultMinSize(minHeight = 40.dp),
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 SettingsSubSection.entries.forEach { subSection ->
@@ -135,16 +225,24 @@ fun SettingsScreens(
                         val targetId = sourceTarget.settingsProfileId
                         val targetStatus = targetId?.let { authStatuses[it] }
                         val authenticated = targetStatus as? AuthStatus.Authenticated
+                        val isDevMode = authenticated?.session?.devMode == true
                         val blocked = when {
                             targetId == null -> "Select a target server under Import / Export & Maintenance first."
-                            authenticated == null -> if (targetStatus == null) {
-                                "The sign-in status of the selected server is unknown; administration stays read-only."
-                            } else {
-                                "Sign in to the selected server to administer it."
+                            authenticated == null -> when (targetStatus) {
+                                null -> "The sign-in status of the selected server is unknown; administration stays read-only."
+                                is AuthStatus.LoginRequired -> "Sign in to the selected server to administer it."
+                                is AuthStatus.Unavailable -> "The selected server is unavailable (${targetStatus.error}); administration stays read-only."
+                                is AuthStatus.Incompatible -> "The selected server is incompatible (${targetStatus.reason}); administration stays read-only."
+                                else -> "Sign in to the selected server to administer it."
                             }
                             else -> null
                         }
-                        val noAuth = if (authenticated?.session?.devMode == true) {
+                        val adminWarning = if (isDevMode) {
+                            "This server runs in development mode without authentication. Administration is active without credential verification."
+                        } else {
+                            null
+                        }
+                        val noAuth = if (isDevMode) {
                             "This server runs without authentication; it does not accept idle-suspend changes."
                         } else {
                             null
@@ -157,6 +255,7 @@ fun SettingsScreens(
                             targetLabel = label,
                             sourceLabel = sourceLabel,
                             adminBlockedReason = blocked,
+                            adminWarning = adminWarning,
                             idleBlockedReason = noAuth,
                             initialSection = initialHostSection,
                             onSectionChanged = onHostSectionChanged,
@@ -190,7 +289,7 @@ fun SettingsScreens(
                                     }
                                 },
                                 onOpenAuth = { id -> onOpenAuth?.invoke(id) },
-                                onClose = { onNavigateBack?.invoke() },
+                                onClose = { handleBack() },
                             )
                         } else {
                             Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {

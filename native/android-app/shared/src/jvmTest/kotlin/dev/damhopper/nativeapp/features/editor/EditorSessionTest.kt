@@ -169,4 +169,42 @@ class EditorSessionTest {
         assertFalse(session.undo())
         assertFalse(session.redo())
     }
+
+    @Test
+    fun testSnapshotSaveCapturesAliasDocumentIdWhileTrackingSharedRevision() {
+        val session = createSession(
+            path = "sub/file.kt",
+            initialContent = "content",
+            projectTarget = ProjectTargetRef(project = "test-project", worktreePath = "feature-wt")
+        )
+        session.setText("modified")
+        val snapshot = session.snapshotSave()
+        assertNotNull(snapshot)
+        assertEquals("sub/file.kt", snapshot.id.relativePath)
+        assertEquals("feature-wt", snapshot.id.owner.normalizedWorktreePath)
+        assertEquals("test-project", snapshot.id.owner.project)
+        assertEquals(session.revision, snapshot.revision)
+    }
+
+    @Test
+    fun testServerMtimeSynchronizedWithCanonicalDocument() {
+        val session = createSession(initialContent = "abc", initialMtime = 100L)
+        assertEquals(100L, session.serverMtime)
+
+        // Another alias marks document saved at 250L
+        session.document.markSaved(session.revision, 250L)
+        assertEquals(250L, session.serverMtime, "Session serverMtime must reflect canonical document mtime")
+    }
+
+    @Test
+    fun testSessionCloseReleasesAliasLeaseWithoutDisposingDocument() {
+        val session = createSession(initialContent = "abc")
+        val lease = session.document.acquireAliasLease("alias-token")
+        session.aliasLease = lease
+
+        assertEquals(1, session.document.activeAliasLeases.value.size)
+        session.close()
+        assertEquals(0, session.document.activeAliasLeases.value.size)
+        assertFalse(session.document.isClosed, "Closing session must not close shared document")
+    }
 }

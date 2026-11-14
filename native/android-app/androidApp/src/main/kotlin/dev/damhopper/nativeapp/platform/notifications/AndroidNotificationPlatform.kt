@@ -125,19 +125,25 @@ class AndroidNotificationPlatform(context: Context) : NotificationPlatformPort {
     }
 
     override fun openChannelSettings(channel: NotificationChannelId) {
-        val channelIntent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-            .putExtra(Settings.EXTRA_APP_PACKAGE, appContext.packageName)
-            .putExtra(Settings.EXTRA_CHANNEL_ID, channel.id)
+        val channelIntent = channelSettingsIntent(channel)
         if (!launch(channelIntent)) openAppNotificationSettings()
     }
+
+    internal fun channelSettingsIntent(channel: NotificationChannelId): Intent =
+        Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, appContext.packageName)
+            .putExtra(Settings.EXTRA_CHANNEL_ID, channel.id)
+
+    internal fun appNotificationSettingsIntent(): Intent =
+        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, appContext.packageName)
 
     override fun refreshStatus() {
         _status.value = readStatus()
     }
 
     private fun openAppNotificationSettings() {
-        val appIntent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-            .putExtra(Settings.EXTRA_APP_PACKAGE, appContext.packageName)
+        val appIntent = appNotificationSettingsIntent()
         if (launch(appIntent)) return
         launch(
             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)

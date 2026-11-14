@@ -122,4 +122,27 @@ class WorkspaceRepository(
         }
         return ok
     }
+
+    /**
+     * Marks a folder as a registered project in server config (POST /api/config/projects).
+     */
+    suspend fun markProject(name: String, path: String, guard: RequestAdmissionGuard? = null): Boolean {
+        val body = buildJsonObject {
+            put("name", name)
+            put("path", path)
+        }.toString()
+        val text = apiClient.postJson("/api/config/projects", body, guard)
+        val obj = ProtocolJson.decodeFromString(JsonObject.serializer(), text)
+        return obj["ok"]?.jsonPrimitive?.booleanOrNull == true
+    }
+
+    /**
+     * Unmarks a registered project in server config (DELETE /api/config/projects/:name).
+     */
+    suspend fun unmarkProject(name: String, guard: RequestAdmissionGuard? = null): Boolean {
+        val encodedName = ApiClient.encodePathSegment(name)
+        val text = apiClient.delete("/api/config/projects/$encodedName", guard = guard)
+        val obj = ProtocolJson.decodeFromString(JsonObject.serializer(), text)
+        return obj["ok"]?.jsonPrimitive?.booleanOrNull == true
+    }
 }

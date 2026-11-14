@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.features.files.SearchRepository
@@ -58,6 +59,7 @@ fun WorkspaceSearchView(
     onOpen: (path: String) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    fsTarget: FilesystemTargetRef? = null,
 ) {
     var query by remember(mode, target, apiClient) { mutableStateOf("") }
     var hits by remember(mode, target, apiClient) { mutableStateOf<List<SearchHit>>(emptyList()) }
@@ -68,7 +70,14 @@ fun WorkspaceSearchView(
 
     LaunchedEffect(mode, target, apiClient) { focus.requestFocus() }
 
-    LaunchedEffect(mode, query, target, apiClient) {
+    LaunchedEffect(mode, query, target, apiClient, fsTarget) {
+        if (target.project.isBlank() && (fsTarget is FilesystemTargetRef.Workspace || fsTarget == null)) {
+            hits = emptyList()
+            truncated = false
+            error = "Search requires a selected registered project target."
+            searching = false
+            return@LaunchedEffect
+        }
         val trimmed = query.trim()
         if (trimmed.length < mode.minQueryLength) {
             hits = emptyList()

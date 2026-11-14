@@ -2,11 +2,11 @@
 
 package dev.damhopper.nativeapp.core.transport
 
+import dev.damhopper.nativeapp.core.model.ServerFsTarget
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
-
 /**
  * Inbound messages sent from client to server over WebSocket.
  * Discriminator is "kind" in the JSON envelope.
@@ -45,7 +45,8 @@ sealed class ClientMsg {
     data class FsSubscribeTree(
         @SerialName("req_id")
         val reqId: ULong,
-        val project: String,
+        val target: ServerFsTarget? = null,
+        val project: String? = null,
         @SerialName("worktree_path")
         val worktreePath: String? = null,
         val path: String,
@@ -66,7 +67,8 @@ sealed class ClientMsg {
     data class FsRead(
         @SerialName("req_id")
         val reqId: ULong,
-        val project: String,
+        val target: ServerFsTarget? = null,
+        val project: String? = null,
         @SerialName("worktree_path")
         val worktreePath: String? = null,
         val path: String,
@@ -82,7 +84,8 @@ sealed class ClientMsg {
     data class FsWriteBegin(
         @SerialName("req_id")
         val reqId: ULong,
-        val project: String,
+        val target: ServerFsTarget? = null,
+        val project: String? = null,
         @SerialName("worktree_path")
         val worktreePath: String? = null,
         val path: String,
@@ -126,7 +129,8 @@ sealed class ClientMsg {
         @SerialName("req_id")
         val reqId: ULong,
         val op: String,
-        val project: String,
+        val target: ServerFsTarget? = null,
+        val project: String? = null,
         @SerialName("worktree_path")
         val worktreePath: String? = null,
         val path: String,
@@ -146,7 +150,8 @@ sealed class ClientMsg {
         val reqId: ULong,
         @SerialName("upload_id")
         val uploadId: String,
-        val project: String,
+        val target: ServerFsTarget? = null,
+        val project: String? = null,
         @SerialName("worktree_path")
         val worktreePath: String? = null,
         val dir: String,
@@ -223,7 +228,8 @@ sealed class ClientMsg {
         val uploadId: String,
         @SerialName("session_id")
         val sessionId: String,
-        val project: String,
+        val target: ServerFsTarget? = null,
+        val project: String? = null,
         @SerialName("worktree_path")
         val worktreePath: String? = null,
         val dir: String,

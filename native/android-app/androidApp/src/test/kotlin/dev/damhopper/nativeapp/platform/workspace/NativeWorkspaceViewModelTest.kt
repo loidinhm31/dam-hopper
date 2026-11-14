@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.onSubscription
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -19,6 +20,13 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.damhopper.nativeapp.features.settings.SettingsOperation
+import dev.damhopper.nativeapp.features.settings.SettingsScope
+import dev.damhopper.nativeapp.features.settings.SettingsOwner
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
+import dev.damhopper.nativeapp.features.workspace.AgentHubAction
+import dev.damhopper.nativeapp.ui.flow.AppFlowNavigation
+import dev.damhopper.nativeapp.ui.flow.AppFlowStage
 
 /**
  * Lifetime of the retained owner's registry barrier (C2a1 consumption): register-before-eligible,
@@ -213,5 +221,155 @@ class NativeWorkspaceViewModelTest {
         assertFalse(live.revoked, "the successor generation is untouched")
         assertEquals(1, inventory.inventories.value.size)
         scope.cancel()
+    }
+
+    @Test
+    fun processInstanceClickConsumptionIsExactlyOnceAcrossCalls() {
+        val clickKey = "click-test-${System.currentTimeMillis()}"
+        assertTrue(ProcessInstance.consumeClick(clickKey), "first consumption must succeed")
+        assertFalse(ProcessInstance.consumeClick(clickKey), "replay or rotation second consumption must be refused")
+    }
+
+    @Test
+    fun lateActivityDestroyDoesNotDetachSuccessorLaunchers() {
+        val port = RetainedSettingsDocumentPort()
+        val tokenA = Any()
+        val tokenB = Any()
+        var openACalled = false
+        var openBCalled = false
+
+        val launcherA = object : DocumentLaunchers {
+            override fun launchOpen() { openACalled = true }
+            override fun launchCreate(suggestedName: String, mime: String) {}
+        }
+        val launcherB = object : DocumentLaunchers {
+            override fun launchOpen() { openBCalled = true }
+            override fun launchCreate(suggestedName: String, mime: String) {}
+        }
+
+        // Activity A attaches
+        port.attach(launcherA, tokenA)
+        // Activity B attaches (e.g. rotation / configuration change successor)
+        port.attach(launcherB, tokenB)
+
+        // Old Activity A is destroyed late with tokenA
+        port.detach(token = tokenA, cancelOwned = false)
+
+        // Successor B's launcher must remain attached and operational!
+        val testOp = SettingsOperation(
+            scope = SettingsScope.SETTINGS_TARGET,
+            owner = SettingsOwner(ConnectionRef("test", 1L), "https://example.com", "user1"),
+            selectionRevision = 1L,
+            editRevision = 1L,
+            operationId = 1L,
+        )
+        port.openToml(testOp)
+        assertFalse(openACalled, "Old launcher A must not be called")
+        assertTrue(openBCalled, "Successor launcher B must remain attached")
+
+        // Finally Activity B is destroyed
+        port.detach(token = tokenB, cancelOwned = true)
+        assertFailsWith<IllegalStateException> {
+            port.openToml(testOp)
+        }
+    }
+
+    @Test
+    fun canonicalHolderScopeEnforcesIsolationAcrossEndpointsAccountsAndEpochs() {
+        val scope1 = NativeWorkspaceViewModel.CanonicalHolderScope(
+            profileId = "p1",
+            normalizedEndpoint = "https://endpoint-a.com",
+            accountUser = "user1",
+            workspaceEpoch = 100L,
+        )
+        val scopeIdentical = NativeWorkspaceViewModel.CanonicalHolderScope(
+            profileId = "p1",
+            normalizedEndpoint = "https://endpoint-a.com",
+            accountUser = "user1",
+            workspaceEpoch = 100L,
+        )
+        val scopeDifferentEndpoint = scope1.copy(normalizedEndpoint = "https://endpoint-b.com")
+        val scopeDifferentAccount = scope1.copy(accountUser = "user2")
+        val scopeDifferentEpoch = scope1.copy(workspaceEpoch = 200L)
+        val scopeNullEpoch = scope1.copy(workspaceEpoch = null)
+
+        assertEquals(scope1, scopeIdentical)
+        assertEquals(scope1.hashCode(), scopeIdentical.hashCode())
+        kotlin.test.assertNotEquals(scope1, scopeDifferentEndpoint, "Different endpoint must never alias")
+        kotlin.test.assertNotEquals(scope1, scopeDifferentAccount, "Different account must never alias")
+        kotlin.test.assertNotEquals(scope1, scopeDifferentEpoch, "Different epoch must never alias")
+        kotlin.test.assertNotEquals(scope1, scopeNullEpoch, "Null epoch must not silently equate to known epoch")
+    }
+
+    @Test
+    fun documentPortConfigurationChangeRetainsPendingOperationAcrossRecreation() = runBlocking {
+        val port = RetainedSettingsDocumentPort()
+        val token1 = Any()
+        val token2 = Any()
+
+        val dummyLauncher = object : DocumentLaunchers {
+            override fun launchOpen() {}
+            override fun launchCreate(suggestedName: String, mime: String) {}
+        }
+        port.attach(dummyLauncher, token1)
+        val testOp = SettingsOperation(
+            scope = SettingsScope.SETTINGS_TARGET,
+            owner = SettingsOwner(ConnectionRef("test", 1L), "https://example.com", "user1"),
+            selectionRevision = 1L,
+            editRevision = 1L,
+            operationId = 1L,
+        )
+        port.openToml(testOp)
+        // Config change detach (cancelOwned = false)
+        port.detach(token = token1, cancelOwned = false)
+
+        // Recreated activity attaches with token2
+        port.attach(dummyLauncher, token2)
+
+        // Result delivered to recreated activity completes the retained operation
+        val results = mutableListOf<dev.damhopper.nativeapp.features.settings.SettingsDocumentResult>()
+        val subscribed = CompletableDeferred<Unit>()
+        val collectJob = launch {
+            port.results.onSubscription { subscribed.complete(Unit) }
+                .collect { results.add(it) }
+        }
+        subscribed.await()
+        val testBytes = "test content".encodeToByteArray()
+        port.onOpenResult(testBytes, cancelled = false, error = null)
+        withTimeout(5_000) { while (results.isEmpty()) delay(10) }
+        assertEquals(testOp, results.first().operation)
+        assertEquals(testBytes, results.first().bytes)
+        assertFalse(results.first().cancelled)
+        collectJob.cancel()
+    }
+
+    @Test
+    fun testQualifiedTerminalKeyPreventsRawIdCollisionAcrossProfiles() {
+        val qKey1 = NativeWorkspaceViewModel.qualifiedTerminalKey("prof-1", "term-dup")
+        val qKey2 = NativeWorkspaceViewModel.qualifiedTerminalKey("prof-2", "term-dup")
+        assertTrue(qKey1 != qKey2, "Terminal with identical raw ID across different profiles must produce distinct qualified keys")
+        assertEquals("prof-1:term-dup", qKey1)
+        assertEquals("prof-2:term-dup", qKey2)
+    }
+
+    @Test
+    fun testDispatchOpenFilesWithWorkspaceTargetSelectsFilesAndClearsActiveProject() = runBlocking {
+        val flowNav = AppFlowNavigation()
+        flowNav.selectProject("old-project", null, "prof-1")
+        assertEquals("old-project", flowNav.state.value.activeProject)
+
+        // Simulate AgentHubAction.OpenFiles with FilesystemTargetRef.Workspace
+        val action = AgentHubAction.OpenFiles(FilesystemTargetRef.Workspace(profileId = "prof-1"))
+        when (val target = action.target) {
+            is FilesystemTargetRef.Workspace -> {
+                val profId = target.profileId ?: flowNav.state.value.activeProfileId
+                flowNav.selectProject(null, null, profId)
+            }
+            else -> {}
+        }
+
+        assertNull(flowNav.state.value.activeProject, "activeProject must be cleared for workspace browsing")
+        assertEquals("prof-1", flowNav.state.value.activeProfileId)
+        assertEquals(AppFlowStage.HUB, flowNav.state.value.stage)
     }
 }

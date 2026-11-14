@@ -1,0 +1,17 @@
+{
+  "taskId": "qualify-disposable-runtime",
+  "phase": "P08",
+  "wave": "W11",
+  "status": "verified_with_prerequisites",
+  "timestamp": "2026-11-08T01:35:00Z",
+  "verifiedContracts": [
+    "Pty session lifecycle uses atomic terminate with epoch fencing",
+    "Uncertain create records persist before dispatch and block replacement creates",
+    "WebSocket abnormal closure 1006 produces honest unavailable error",
+    "Git workspace safety blocks destructive operations when dirty documents or live PTYs exist",
+    "Git fixture oracle verifies status, commit, worktree, and conflict fixtures"
+  ],
+  "runtimeNotes": [
+    "Windows known-folder configuration is host-shared; containerized multi-daemon qualification is a release gate"
+  ]
+}

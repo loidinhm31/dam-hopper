@@ -22,6 +22,8 @@ import dev.damhopper.nativeapp.features.terminal.TerminalReadingStates
 import dev.damhopper.nativeapp.features.terminal.TerminalRepository
 import dev.damhopper.nativeapp.features.terminal.TerminalSessionController
 import dev.damhopper.nativeapp.features.terminal.TerminalSessionDetailed
+import dev.damhopper.nativeapp.features.terminal.TerminalQualifiedKey
+import dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord
 import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -91,6 +93,9 @@ class ProjectTerminalState(
     val destroyingSessionIds: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val failedRecords: SnapshotStateList<FailedCommandRecord> = mutableStateListOf()
     val sessionDrafts: SnapshotStateMap<String, String> = mutableStateMapOf()
+    val hiddenSessions: SnapshotStateList<TerminalQualifiedKey> = mutableStateListOf()
+    val pinnedSessions: SnapshotStateList<TerminalQualifiedKey> = mutableStateListOf()
+    val uncertainCreates: SnapshotStateList<UncertainCreateRecord> = mutableStateListOf()
 
     val writeChannel: Channel<QueuedWrite> = Channel(capacity = 64)
 
@@ -213,7 +218,143 @@ class ProjectTerminalState(
             !_inputSuspended &&
             sessionId == activeSessionId &&
             destroyingSessionIds[sessionId] != true &&
+            hiddenSessions.none { it.profileId == connectionRef.profileId && it.terminalId == sessionId && (it.incarnation == 0uL || it.incarnation == (controllers[sessionId]?.incarnation ?: 0uL)) } &&
             !coverPredicate()
+    }
+
+    fun isSessionHidden(session: TerminalSessionDetailed): Boolean =
+        hiddenSessions.any { it.matchesSession(connectionRef.profileId, session) }
+
+    fun isSessionIdHidden(sessionId: String): Boolean =
+        hiddenSessions.any { it.profileId == connectionRef.profileId && it.terminalId == sessionId }
+
+    fun hideSession(session: TerminalSessionDetailed): Boolean {
+        if (isSessionPinned(session)) return false
+        val key = TerminalQualifiedKey(
+            profileId = connectionRef.profileId,
+            project = session.project ?: projectName,
+            worktreePath = session.worktreePath,
+            terminalId = session.id,
+            serverPtyEpoch = session.serverPtyEpoch,
+            incarnation = session.incarnation,
+        )
+        if (!hiddenSessions.contains(key)) {
+            hiddenSessions.add(key)
+        }
+        activeSessionEpoch++
+        if (activeSessionId == session.id) {
+            val nextSession = controllers.keys.firstOrNull { id ->
+                id != session.id &&
+                    destroyingSessionIds[id] != true &&
+                    hiddenSessions.none { it.profileId == connectionRef.profileId && it.terminalId == id }
+            }
+            selectSession(nextSession)
+        } else {
+            updateAllControllersInputPolicy()
+        }
+        return true
+    }
+
+    fun hideSessionById(sessionId: String, serverPtyEpoch: String? = null, incarnation: ULong = 0uL): Boolean {
+        if (pinnedSessions.any { it.profileId == connectionRef.profileId && it.terminalId == sessionId }) return false
+        val ctrl = controllers[sessionId]
+        val key = TerminalQualifiedKey(
+            profileId = connectionRef.profileId,
+            project = projectName,
+            worktreePath = null,
+            terminalId = sessionId,
+            serverPtyEpoch = serverPtyEpoch,
+            incarnation = if (incarnation > 0uL) incarnation else (ctrl?.incarnation ?: 0uL),
+        )
+        if (!hiddenSessions.contains(key)) {
+            hiddenSessions.add(key)
+        }
+        activeSessionEpoch++
+        if (activeSessionId == sessionId) {
+            val nextSession = controllers.keys.firstOrNull { id ->
+                id != sessionId &&
+                    destroyingSessionIds[id] != true &&
+                    hiddenSessions.none { it.profileId == connectionRef.profileId && it.terminalId == id }
+            }
+            selectSession(nextSession)
+        } else {
+            updateAllControllersInputPolicy()
+        }
+        return true
+    }
+
+    fun reopenSession(key: TerminalQualifiedKey, availableSessions: List<TerminalSessionDetailed>): Boolean {
+        val matching = availableSessions.find { key.matchesSession(connectionRef.profileId, it) } ?: return false
+        hiddenSessions.remove(key)
+        activeSessionEpoch++
+        selectSession(matching.id)
+        return true
+    }
+
+    fun isSessionPinned(session: TerminalSessionDetailed): Boolean =
+        pinnedSessions.any { it.matchesSession(connectionRef.profileId, session) }
+
+    fun isSessionIdPinned(sessionId: String): Boolean =
+        pinnedSessions.any { it.profileId == connectionRef.profileId && it.terminalId == sessionId }
+
+    fun pinSession(session: TerminalSessionDetailed) {
+        val key = TerminalQualifiedKey(
+            profileId = connectionRef.profileId,
+            project = session.project ?: projectName,
+            worktreePath = session.worktreePath,
+            terminalId = session.id,
+            serverPtyEpoch = session.serverPtyEpoch,
+            incarnation = session.incarnation,
+        )
+        if (!pinnedSessions.contains(key)) {
+            pinnedSessions.add(key)
+        }
+    }
+
+    fun pinSessionById(sessionId: String, serverPtyEpoch: String? = null, incarnation: ULong = 0uL) {
+        val ctrl = controllers[sessionId]
+        val key = TerminalQualifiedKey(
+            profileId = connectionRef.profileId,
+            project = projectName,
+            worktreePath = null,
+            terminalId = sessionId,
+            serverPtyEpoch = serverPtyEpoch,
+            incarnation = if (incarnation > 0uL) incarnation else (ctrl?.incarnation ?: 0uL),
+        )
+        if (!pinnedSessions.contains(key)) {
+            pinnedSessions.add(key)
+        }
+    }
+
+    fun unpinSession(session: TerminalSessionDetailed) {
+        pinnedSessions.removeAll { it.matchesSession(connectionRef.profileId, session) }
+    }
+
+    fun unpinSessionById(sessionId: String) {
+        pinnedSessions.removeAll { it.profileId == connectionRef.profileId && it.terminalId == sessionId }
+    }
+
+    fun prunePinsAgainstAuthoritativeInventory(authoritativeSessions: List<TerminalSessionDetailed>) {
+        val currentProfileId = connectionRef.profileId
+        pinnedSessions.removeAll { pin ->
+            pin.profileId == currentProfileId && authoritativeSessions.none { pin.matchesSession(currentProfileId, it) }
+        }
+    }
+
+    fun syncUncertainCreates(records: List<UncertainCreateRecord>) {
+        uncertainCreates.clear()
+        uncertainCreates.addAll(records.filter { it.profileId == connectionRef.profileId && (it.project == null || it.project == projectName) })
+    }
+
+    fun totalRetainedSessionCount(
+        authoritativeSessions: List<TerminalSessionDetailed>,
+        restartPendingCount: Int = 0,
+    ): Int {
+        val projectSessions = authoritativeSessions.filter { isSessionForProject(it) }
+        val liveIds = projectSessions.map { it.id }.toSet()
+        val hiddenIds = hiddenSessions.filter { it.profileId == connectionRef.profileId }.map { it.terminalId }.toSet()
+        val uncertainIds = uncertainCreates.map { it.terminalId }.toSet()
+        return (liveIds + hiddenIds + uncertainIds).size + restartPendingCount
     }
 
     /**
@@ -298,7 +439,13 @@ class ProjectTerminalState(
     }
 
     fun isSessionSelectable(session: TerminalSessionDetailed): Boolean {
-        return isSessionForProject(session) && destroyingSessionIds[session.id] != true
+        return isSessionForProject(session) &&
+            destroyingSessionIds[session.id] != true &&
+            !isSessionHidden(session)
+    }
+
+    fun isSessionVisible(session: TerminalSessionDetailed): Boolean {
+        return isSessionForProject(session) && !isSessionHidden(session)
     }
 
     fun detachWidgets() {
@@ -322,6 +469,9 @@ class ProjectTerminalState(
         destroyingSessionIds.clear()
         failedRecords.clear()
         sessionDrafts.clear()
+        hiddenSessions.clear()
+        pinnedSessions.clear()
+        uncertainCreates.clear()
     }
 }
 

@@ -31,6 +31,11 @@ data class TerminalSessionMeta(
     val restartPolicy: String = "never",
     @SerialName("targetUnavailable")
     val targetUnavailable: Boolean = false,
+    @SerialName("incarnationExact")
+    val incarnationExact: String? = null,
+    @SerialName("terminationState")
+    val terminationState: String? = null,
+    val serverPtyEpoch: String? = null,
 ) {
     val displayName: String
         get() = name?.takeIf { it.isNotBlank() } ?: id
@@ -66,6 +71,11 @@ data class TerminalSessionDetailed(
     val targetUnavailable: Boolean = false,
     @SerialName("buffer_bytes")
     val bufferBytes: Long = 0L,
+    @SerialName("incarnationExact")
+    val incarnationExact: String? = null,
+    @SerialName("terminationState")
+    val terminationState: String? = null,
+    val serverPtyEpoch: String? = null,
 ) {
     val displayName: String
         get() = name?.takeIf { it.isNotBlank() } ?: id
@@ -86,6 +96,9 @@ data class TerminalSessionDetailed(
         lastExitAt = lastExitAt,
         restartPolicy = restartPolicy,
         targetUnavailable = targetUnavailable,
+        incarnationExact = incarnationExact,
+        terminationState = terminationState,
+        serverPtyEpoch = serverPtyEpoch,
     )
 }
 
@@ -120,6 +133,93 @@ data class RenameSessionRequest(
 @Serializable
 data class TerminalBufferResponse(
     val buffer: String,
+)
+
+/**
+ * Header names defined for terminal termination protocol.
+ */
+const val TERMINATION_HEADER_VERSION = "X-DamHopper-Termination-Version"
+const val TERMINATION_HEADER_PTY_EPOCH = "X-DamHopper-PTY-Epoch"
+
+/**
+ * Request payload for POST /api/terminal/:id/terminate.
+ * Must be <= 512 bytes on wire.
+ */
+@Serializable
+data class TerminateSessionRequest(
+    val version: Int = 1,
+    val expectedServerEpoch: String, // lowercase UUID
+    val expectedIncarnation: String, // positive decimal u64 string
+) {
+    companion object {
+        private val UUID_REGEX = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        private val POSITIVE_U64_REGEX = Regex("^[1-9][0-9]*$")
+
+        fun isValidEpoch(epoch: String?): Boolean =
+            epoch != null && UUID_REGEX.matches(epoch)
+
+        fun isValidIncarnation(incarnation: String?): Boolean =
+            incarnation != null && POSITIVE_U64_REGEX.matches(incarnation) && incarnation.toULongOrNull() != null
+    }
+
+    init {
+        require(version == 1) { "version must be 1" }
+        require(isValidEpoch(expectedServerEpoch)) { "expectedServerEpoch must be a valid lowercase UUID: $expectedServerEpoch" }
+        require(isValidIncarnation(expectedIncarnation)) { "expectedIncarnation must be a positive decimal u64 string: $expectedIncarnation" }
+    }
+}
+
+/**
+ * Outcome of a guarded termination request.
+ */
+@Serializable
+data class TerminalTerminationOutcome(
+    val id: String,
+    val requested: Boolean, // 202 terminationRequested
+    val restartCancelled: Boolean = false, // 200 restartCancelled
+    val statusCode: Int,
+    val message: String? = null,
+)
+
+/**
+ * Final guarded outcome of terminal creation.
+ */
+@Serializable
+data class TerminalCreateOutcome(
+    val id: String,
+    val incarnation: ULong,
+    val ptyEpoch: String, // from X-DamHopper-PTY-Epoch header
+    val alive: Boolean = true,
+)
+
+/**
+ * Persistence status for uncertain terminal create intents across process death.
+ */
+@Serializable
+enum class UncertainCreateStatus {
+    @SerialName("pending")
+    PENDING,
+    @SerialName("confirmed")
+    CONFIRMED,
+    @SerialName("refused")
+    REFUSED,
+}
+
+/**
+ * Minimal nonsecret persistence record for uncertain terminal creation.
+ * Never contains command, password, token, or terminal output.
+ */
+@Serializable
+data class UncertainCreateRecord(
+    val intentId: String, // UUID per explicit intent
+    val profileId: String,
+    val terminalId: String,
+    val project: String? = null,
+    val worktreePath: String? = null,
+    val createdAtEpochMs: Long,
+    val status: UncertainCreateStatus = UncertainCreateStatus.PENDING,
+    val endpoint: String? = null,
+    val accountUser: String? = null,
 )
 
 // ---------------------------------------------------------------------------

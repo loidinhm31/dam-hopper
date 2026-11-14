@@ -305,6 +305,214 @@ class TerminalPresentationPolicyTest {
         ctrl.close()
     }
 
+    @Test
+    fun testViewportHeightAndVisibleRowsMeasurement() {
+        val hTerminal = calculateTerminalViewportHeight(
+            usableHeightPx = 1000f,
+            actualChromeHeightPx = 120f,
+            accessoryHeightPx = 96f,
+            bannerHeightPx = 40f,
+        )
+        assertEquals(744f, hTerminal)
+        val rows = calculateTerminalVisibleRows(terminalHeightPx = hTerminal, lineHeightPx = 30f)
+        assertEquals(24, rows) // floor(744 / 30) = 24
+
+        // Extremely short / constrained space
+        val hZero = calculateTerminalViewportHeight(100f, 80f, 50f, 20f)
+        assertEquals(0f, hZero)
+        val minRows = calculateTerminalVisibleRows(terminalHeightPx = hZero, lineHeightPx = 30f)
+        assertEquals(1, minRows) // clamped to at least 1 row
+    }
+
+    @Test
+    fun testAccessoryCollapseModePolicy() {
+        // Ample height: 800px > (3 * 30 + 104 = 194) -> EXPANDED
+        assertEquals(
+            AccessoryCollapseMode.EXPANDED,
+            resolveAccessoryCollapseMode(
+                contentHeightPx = 800f,
+                lineHeightPx = 30f,
+                singleRowAccessoryHeightPx = 52f,
+                doubleRowAccessoryHeightPx = 104f,
+                minTerminalRows = 3,
+            )
+        )
+
+        // Constrained height: 160px: less than 194px (double row) but >= 142px (single row: 3 * 30 + 52) -> COLLAPSED_SINGLE_ROW
+        assertEquals(
+            AccessoryCollapseMode.COLLAPSED_SINGLE_ROW,
+            resolveAccessoryCollapseMode(
+                contentHeightPx = 160f,
+                lineHeightPx = 30f,
+                singleRowAccessoryHeightPx = 52f,
+                doubleRowAccessoryHeightPx = 104f,
+                minTerminalRows = 3,
+            )
+        )
+
+        // Critical height: 100px < 142px -> HIDDEN
+        assertEquals(
+            AccessoryCollapseMode.HIDDEN,
+            resolveAccessoryCollapseMode(
+                contentHeightPx = 100f,
+                lineHeightPx = 30f,
+                singleRowAccessoryHeightPx = 52f,
+                doubleRowAccessoryHeightPx = 104f,
+                minTerminalRows = 3,
+            )
+        )
+
+        // Zero or negative height -> HIDDEN
+        assertEquals(
+            AccessoryCollapseMode.HIDDEN,
+            resolveAccessoryCollapseMode(0f, 30f, 52f, 104f)
+        )
+    }
+
+    @Test
+    fun testEvaluateCloseGuardRefusalAndProtocolEnforcement() {
+        val validEpoch = "3f8c7b6a-9123-4567-890a-bcdef0123456"
+        val validIncarnation = "1"
+
+        // 1. Pinned session refuses local close and destructive end
+        val pinnedTarget = CapturedTerminationTarget(
+            profileId = "prof-1",
+            connectionGeneration = 1L,
+            terminalId = "term-1",
+            serverPtyEpoch = validEpoch,
+            incarnationExact = validIncarnation,
+            isPinned = true,
+        )
+        val pinnedGuard = evaluateCloseGuard(pinnedTarget)
+        assertFalse(pinnedGuard.canCloseViewLocally, "Pinned close must be refused")
+        assertFalse(pinnedGuard.canEndSessionDestructively, "Pinned end must be refused")
+        assertTrue(pinnedGuard.destructiveDisabledReason?.contains("pinned") == true)
+
+        // 2. Unpinned session with missing serverPtyEpoch: local close ALLOWED, destructive end DISABLED
+        val missingEpochTarget = CapturedTerminationTarget(
+            profileId = "prof-1",
+            connectionGeneration = 1L,
+            terminalId = "term-1",
+            serverPtyEpoch = null,
+            incarnationExact = validIncarnation,
+            isPinned = false,
+        )
+        val missingEpochGuard = evaluateCloseGuard(missingEpochTarget)
+        assertTrue(missingEpochGuard.canCloseViewLocally, "Missing protocol disables End, not local Close View")
+        assertFalse(missingEpochGuard.canEndSessionDestructively, "Destructive end disabled without verified epoch")
+        assertEquals("Cannot end session: missing verified server PTY epoch", missingEpochGuard.destructiveDisabledReason)
+
+        // 3. Unpinned session with missing incarnationExact: local close ALLOWED, destructive end DISABLED
+        val missingIncarnationTarget = CapturedTerminationTarget(
+            profileId = "prof-1",
+            connectionGeneration = 1L,
+            terminalId = "term-1",
+            serverPtyEpoch = validEpoch,
+            incarnationExact = null,
+            isPinned = false,
+        )
+        val missingIncarnationGuard = evaluateCloseGuard(missingIncarnationTarget)
+        assertTrue(missingIncarnationGuard.canCloseViewLocally, "Missing protocol disables End, not local Close View")
+        assertFalse(missingIncarnationGuard.canEndSessionDestructively, "Destructive end disabled without exact incarnation")
+        assertEquals("Cannot end session: missing verified server PTY incarnation", missingIncarnationGuard.destructiveDisabledReason)
+
+        // 4. Valid protocol: both local close and destructive end permitted
+        val validTarget = CapturedTerminationTarget(
+            profileId = "prof-1",
+            connectionGeneration = 1L,
+            terminalId = "term-1",
+            serverPtyEpoch = validEpoch,
+            incarnationExact = validIncarnation,
+            isPinned = false,
+        )
+        val validGuard = evaluateCloseGuard(validTarget)
+        assertTrue(validGuard.canCloseViewLocally)
+        assertTrue(validGuard.canEndSessionDestructively)
+        assertEquals(null, validGuard.destructiveDisabledReason)
+    }
+
+    @Test
+    fun testCanDismissWorkspaceStrictPredicate() {
+        val live = listOf(
+            TerminalSessionDetailed(
+                id = "term-1",
+                command = "sh",
+                cwd = "/repo",
+            )
+        )
+        val hidden = listOf(
+            TerminalQualifiedKey(
+                profileId = "prof-1",
+                project = "proj-1",
+                terminalId = "term-hidden",
+                serverPtyEpoch = "3f8c7b6a-9123-4567-890a-bcdef0123456",
+                incarnation = 1uL,
+            )
+        )
+        val pendingCreate = listOf(
+            UncertainCreateRecord(
+                intentId = "intent-1",
+                profileId = "prof-1",
+                terminalId = "term-pending",
+                createdAtEpochMs = 123456L,
+                status = UncertainCreateStatus.PENDING,
+            )
+        )
+
+        // Disconnected or unauthoritative inventory blocks dismissal
+        assertFalse(canDismissWorkspace(false, true, emptyList(), emptyList(), emptySet(), emptyList()))
+        assertFalse(canDismissWorkspace(true, false, emptyList(), emptyList(), emptySet(), emptyList()))
+
+        // Live session blocks dismissal
+        assertFalse(canDismissWorkspace(true, true, live, emptyList(), emptySet(), emptyList()))
+
+        // Hidden session blocks dismissal
+        assertFalse(canDismissWorkspace(true, true, emptyList(), hidden, emptySet(), emptyList()))
+
+        // Restart pending blocks dismissal
+        assertFalse(canDismissWorkspace(true, true, emptyList(), emptyList(), setOf("term-restarting"), emptyList()))
+
+        // Admitted / uncertain create blocks dismissal
+        assertFalse(canDismissWorkspace(true, true, emptyList(), emptyList(), emptySet(), pendingCreate))
+
+        // Truly zero sessions allows dismissal
+        assertTrue(canDismissWorkspace(true, true, emptyList(), emptyList(), emptySet(), emptyList()))
+    }
+
+    @Test
+    fun testTerminalQualifiedKeyExactMatching() {
+        val key = TerminalQualifiedKey(
+            profileId = "prof-1",
+            project = "dam-hopper",
+            worktreePath = "/wt",
+            terminalId = "term-10",
+            serverPtyEpoch = "3f8c7b6a-9123-4567-890a-bcdef0123456",
+            incarnation = 1uL,
+        )
+
+        val matching = TerminalSessionDetailed(
+            id = "term-10",
+            project = "dam-hopper",
+            command = "sh",
+            cwd = "/wt",
+            worktreePath = "/wt",
+            incarnation = 1uL,
+            serverPtyEpoch = "3f8c7b6a-9123-4567-890a-bcdef0123456",
+        )
+        assertTrue(key.matchesSession("prof-1", matching))
+
+        // New incarnation MUST NOT match (new incarnation clears hidden state)
+        val restarted = matching.copy(incarnation = 2uL)
+        assertFalse(key.matchesSession("prof-1", restarted))
+
+        // Different profile MUST NOT match
+        assertFalse(key.matchesSession("prof-2", matching))
+
+        // Different terminal ID MUST NOT match
+        val differentId = matching.copy(id = "term-11")
+        assertFalse(key.matchesSession("prof-1", differentId))
+    }
+
     private fun controller(
         id: String = "session",
         owner: String = "profile",

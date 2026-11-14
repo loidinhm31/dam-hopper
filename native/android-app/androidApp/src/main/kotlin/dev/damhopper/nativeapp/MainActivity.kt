@@ -63,13 +63,14 @@ import kotlinx.coroutines.launch
  */
 class MainActivity : ComponentActivity() {
     val viewModel: NativeWorkspaceViewModel by viewModels()
-
+    private val activityToken = Any()
     private val documentStorage by lazy { AndroidDocumentStorage(applicationContext.contentResolver) }
 
     private val lifecycleCoordinator by lazy {
         AndroidLifecycleCoordinator(
             coordinator = viewModel.lifecycleCoordinator,
-            onDetach = { viewModel.onActivityDestroy(isChangingConfigurations) },
+            activityToken = activityToken,
+            onDetach = { viewModel.onActivityDestroy(activityToken, isChangingConfigurations) },
             onResumed = { viewModel.notificationPlatform.refreshStatus() },
             isChangingConfigurations = { isChangingConfigurations },
         )
@@ -142,8 +143,8 @@ class MainActivity : ComponentActivity() {
                     lifecycleScope.launch {
                         try {
                             val ws = activeWorkspaceState ?: return@launch
-                            if (ws.fileTreeState.target != pending.second) {
-                                Toast.makeText(this@MainActivity, "Upload cancelled: active workspace changed", Toast.LENGTH_LONG).show()
+                            if (ws.fileTreeState.target != pending.second || ws.isAuthorityRetired.value) {
+                                Toast.makeText(this@MainActivity, "Upload cancelled: active workspace changed or authority retired", Toast.LENGTH_LONG).show()
                                 return@launch
                             }
                             val descriptor = documentStorage.queryMetadata(uri)
@@ -184,6 +185,11 @@ class MainActivity : ComponentActivity() {
                 if (uri != null) {
                     lifecycleScope.launch {
                         try {
+                            val ws = activeWorkspaceState ?: return@launch
+                            if (ws.isAuthorityRetired.value) {
+                                Toast.makeText(this@MainActivity, "Download save cancelled: workspace authority retired", Toast.LENGTH_LONG).show()
+                                return@launch
+                            }
                             documentStorage.writeBytes(uri, pending.third)
                             Toast.makeText(this@MainActivity, "Downloaded ${pending.first}", Toast.LENGTH_SHORT).show()
                         } catch (e: Exception) {
@@ -254,6 +260,7 @@ class MainActivity : ComponentActivity() {
      * [AndroidLifecycleCoordinator]'s detach (called on destroy) drops them.
      */
     private fun attachPlatformPorts() {
+        viewModel.onActivityAttach(activityToken)
         viewModel.documentPort.attach(
             object : DocumentLaunchers {
                 override fun launchOpen() {
@@ -264,6 +271,7 @@ class MainActivity : ComponentActivity() {
                     if (mime == "application/json") createJsonDocument.launch(suggestedName) else createTomlDocument.launch(suggestedName)
                 }
             },
+            activityToken,
         )
         viewModel.notificationPlatform.bindLaunchers(
             requestPermission = { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) },

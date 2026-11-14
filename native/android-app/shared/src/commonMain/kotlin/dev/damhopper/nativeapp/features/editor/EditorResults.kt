@@ -1,5 +1,7 @@
 package dev.damhopper.nativeapp.features.editor
 
+import dev.damhopper.nativeapp.features.files.FileIdentityDto
+
 /**
  * Result types for editor save operations.
  */
@@ -26,6 +28,8 @@ sealed class EditorLoadResult {
         val isEof: Boolean = true,
         val bytesRead: Int = 0,
         val rangeWindow: BoundedRangeWindow? = null,
+        val fileIdentity: FileIdentityDto? = null,
+        val canonicalPath: String? = null,
     ) : EditorLoadResult()
 
     data class TargetUnavailable(val message: String) : EditorLoadResult()

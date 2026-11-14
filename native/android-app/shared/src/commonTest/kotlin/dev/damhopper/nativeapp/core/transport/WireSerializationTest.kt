@@ -2,6 +2,7 @@ package dev.damhopper.nativeapp.core.transport
 
 import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.core.model.ServerFsTarget
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -15,8 +16,7 @@ class WireSerializationTest {
     fun testClientMsgSerialization() {
         val msg = ClientMsg.FsSubscribeTree(
             reqId = 100UL,
-            project = "test-proj",
-            worktreePath = "sub/tree",
+            target = ServerFsTarget(type = "project", project = "test-proj", worktreePath = "sub/tree"),
             path = "src",
             watchOnly = true,
         )
@@ -24,7 +24,10 @@ class WireSerializationTest {
 
         assertTrue(json.contains(""""kind":"fs:subscribe_tree""""))
         assertTrue(json.contains(""""req_id":100"""))
-        assertTrue(json.contains(""""worktree_path":"sub/tree""""))
+        assertTrue(json.contains(""""target":{"""))
+        assertTrue(json.contains(""""type":"project""""))
+        assertTrue(json.contains(""""project":"test-proj""""))
+        assertTrue(json.contains(""""worktreePath":"sub/tree""""))
         assertTrue(json.contains(""""watchOnly":true"""))
     }
 

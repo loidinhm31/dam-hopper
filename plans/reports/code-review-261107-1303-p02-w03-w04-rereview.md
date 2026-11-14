@@ -1,0 +1,54 @@
+# P02/W03–W04 Re-review
+
+## Score: 6/10
+
+**Disposition: substantial improvement; terminal-lifetime acceptance still blocked.** Production persistence wiring, epoch/lifecycle separation, Restart refusal handling, and inbound scalar-null hydration are implemented. Two safety-contract defects remain.
+
+## Scope and evidence
+
+Reviewed relevant sections of all 17 requested production/test files, plus `core/transport/ApiClient.kt`, `shared/build.gradle.kts`, server termination handlers, project standards/PDR, P02 acceptance requirements and C5/C6 contracts. Source and plan state unchanged; this report is the only authored artifact. No builds, tests, linters or smoke executed by this reviewer.
+
+Main reports JVM compilation, Android debug compilation and **43 targeted regressions passing**. Accepted as supplied execution evidence, not independently rerun. Live-smoke limitations are detailed below.
+
+Path shorthand: `common/` = `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/`; `tests/` = `native/android-app/shared/src/jvmTest/kotlin/dev/damhopper/nativeapp/`; `android/` = `native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/`.
+
+Inspected requested targets: `common/features/terminal/{TerminalRepository,TerminalModels}.kt`; `common/ui/screens/{ProjectTerminalScreen,WorkbenchScreen,DamHopperMobileApp}.kt`; `common/features/settings/{SettingsModels,SettingsRepository,RemoteConfigModels,RemoteConfigRepository,PreferencesStore}.kt`; `common/features/workspace/ProjectWorkspaceState.kt`; `android/platform/storage/AndroidPreferencesStore.kt`; `android/platform/workspace/NativeWorkspaceViewModel.kt`; `tests/features/terminal/{TerminalLifetimeContractTest,TerminalRepositoryIntegrationTest,LiveDaemonSmokeTest}.kt`; `tests/features/settings/SettingsRepositoryTest.kt`.
+
+## Critical issues list
+
+1. **End still clears/retargets a row on HTTP 202 acknowledgement.** `common/ui/screens/ProjectTerminalScreen.kt:1661-1676` treats both `requested` and `restartCancelled` as permission to close the controller/surface, remove the row and select a sibling. A 202 does not establish process exit; C6 explicitly forbids clearing/retargeting from acknowledgement (`phase-02-atomic-api-cutover.md:193`). If the subsequent inventory refresh fails, the pending terminal remains hidden while its process can still be alive. **Correction:** retain the original row/controller/selection with termination-pending status; retire only from authoritative lifecycle evidence or a separate explicit local-close action. Add a production-handler regression with 202 followed by failed/still-live inventory. **Confidence: high; static branch evidence.**
+
+2. **The create barrier is check-then-save, not atomic across concurrent callers.** `common/features/terminal/TerminalRepository.kt:70-85,106-121,133-142` loads pending records separately from saving its reservation. Android synchronizes each individual store method (`android/platform/storage/AndroidPreferencesStore.kt:133-161`), not that transaction. Two concurrent creates can both read an empty set, durably save different IDs in the same project, then both POST. Production creates run on `Dispatchers.Default` (`ProjectTerminalScreen.kt:1510-1518,1625-1629`), so confinement is not a guarantee. **Correction:** make project/worktree-scoped check-and-durable-reservation atomic in the shared storage/retained-owner boundary, covering every repository instance and both create methods. A per-repository lock alone is insufficient. Add a deterministic concurrent-create test asserting one POST and one retained reservation. **Confidence: high for the race; runtime interleaving not exercised here.**
+
+## Warnings list
+
+1. **High — known non-submission/refusal permanently poisons the project gate.** Both creates persist PENDING before calling the transport; neither settles a proven pre-dispatch rejection or authoritative refusal (`TerminalRepository.kt:70-100,106-130`). For example, owner retirement before `ApiClient.postJsonWithHeaders` admission sends nothing but leaves the record blocking the next connected generation. No production reconciliation/REFUSED transition was found; only successful create paths remove records. **Correction:** use the existing request-local admission receipt and classify proven non-submission/refusal separately from transport-unknown. Preserve genuinely unknown records; do not clear from timeout, cancellation, list absence or retirement alone.
+
+2. **Medium — create settlement is not verified as claimed.** `TerminalRepository.kt:85-89,121-129` removes the reservation after decoding any successful body, without requiring 201, matching returned ID, positive incarnation or valid original epoch. `createSessionGuarded` even returns an empty epoch when absent. The removed record is the only durable intent evidence; no retained create-identity settlement/rebinding is implemented in these paths. **Correction:** settle only a verified matching original create response; retain the original epoch/incarnation through fresh exact-inventory binding. Use a UUID per explicit intent rather than the current timestamp-derived ID (`:71,108`).
+
+3. **Medium — the requested canonical validators are incomplete.** `TerminalModels.kt:155-168` tests the lowercased epoch, so uppercase UUIDs are accepted by the DTO. The incarnation regex accepts `18446744073709551616` and arbitrarily longer positive decimals, not just u64. Production lowercases the epoch before dispatch, but overflow still reaches the server. **Correction:** match the original lowercase UUID and additionally require successful positive `toULongOrNull()` parsing. Extend tests with uppercase, max+1, leading-zero and long-decimal cases.
+
+4. **High — live smoke is included in ordinary JVM tests and assumes a mutable external daemon.** `shared/build.gradle.kts:77-88` excludes only `*LiveSmoke.class`; `LiveDaemonSmokeTest.class` does not match. Its tests unconditionally contact `http://127.0.0.1:4899`, spawn a PTY and mutate remote preferences without restoring them (`LiveDaemonSmokeTest.kt:23-45,105-130`). Thus an ordinary full JVM run depends on that daemon and can alter whichever service occupies the port. Main additionally confirms the smoke daemon opened ambient `~/.config/dam-hopper/sessions.db`, not an isolated database. **Correction:** explicit opt-in smoke task, fixture-owned daemon with fully isolated session/config/workspace storage, and deterministic teardown/restoration.
+
+5. **High — live termination success and UI outcome behavior remain unverified.** Main confirms the live PTY test passed only after accepting HTTP 500, `OS process signal dispatch failed`. The test explicitly permits 500 (`LiveDaemonSmokeTest.kt:82-88`), never proves observed exit, and does not invoke screen handlers. This establishes repository typed-failure handling, not successful live 200/202 termination or UI retention/no-replacement behavior. Keep Windows successful-termination qualification open. The integration fixture covers 200/202/409 repository outcomes, not End/Restart UI branches (`TerminalRepositoryIntegrationTest.kt:140-208`).
+
+6. **Medium — additional C6 caller semantics remain incomplete.** Local Remove only filters the current list (`ProjectTerminalScreen.kt:1308-1314`); the next refresh restores every inventory row (`:688`), with no separate qualified hidden-view/reopen state. Dormant `WorkbenchScreen.kt:1111-1120` still ignores the returned termination outcome, so refusal is silently refreshed rather than surfaced. Inventory methods capture epoch but do not check `X-DamHopper-Termination-Version` (`TerminalRepository.kt:41-55`), despite the missing-protocol disable-End contract.
+
+7. **Evidence boundary — Settings preservation has two different meanings.** The live test proves preservation of server-known web field `defaultWindowPlacement` (`LiveDaemonSmokeTest.kt:99-130`), not arbitrary unmodeled server fields. The mock test proves arbitrary unknown keys are omitted from the client request (`SettingsRepositoryTest.kt:306-318`); its handler does not perform a storage round trip. Do not merge those into a claim of arbitrary unknown-key server persistence. The added null test exercises repository decode plus `applyTo`, not provider recreation; extra-binding behavior is not covered by these new regressions.
+
+## Suggestions list
+
+1. Fix atomic create reservation and acknowledgement-only End handling first; then have Main exercise concurrent admission, 202/still-live inventory, 409/500 retention, dropped responses, pre-admission cancellation/retirement, and real Android store recreation. Do not weaken a success oracle to classify a live 500 as successful termination.
+2. Consolidate the duplicate create flows and sparse field enumerations. `toPatchObject`/`toSparsePatch` repeat the same fields; `SettingsRepository` separately enumerates shortcut unbind keys. Remove unused `PatchValue`/`RawGlobalConfigDocument` and obsolete `updateGlobalDefaults` only after confirming consumers; do not leave alternative obsolete contracts advertised.
+3. Correct completion receipts: `cutover-terminal-lifetime-completion.md:11,15,19` overstates verified-201 settlement, canonical validation and unchanged controller preservation. Keep implementation findings distinct from passing regressions and pending device/live gates.
+
+## Confirmed improvements
+
+- Android creates share the real checked-commit store through ViewModel, root UI and retained workspace rebinding (`NativeWorkspaceViewModel.kt:980,1040-1042,1110-1117,1392-1402`; `DamHopperMobileApp.kt:276`; `ProjectWorkspaceState.kt:272,533`). Existing persisted named-project pending records block subsequent sequential create dispatch; both create methods invoke the gate.
+- Inventory and create responses now put the header epoch in `serverPtyEpoch`, without overwriting `terminationState` (`TerminalRepository.kt:41-55,85-89`; `TerminalModels.kt:34-38,74-101`). Lifecycle and manager identity are no longer conflated.
+- Restart retains the original on refusal and returns without creating a replacement on 202 (`ProjectTerminalScreen.kt:1253-1260`). End retains the original on refusal (`:1668-1669`).
+- Scalar shortcut inbound null now survives as `unboundFields`; `applyTo` clears explicit null while omission keeps the current shortcut (`RemoteConfigRepository.kt:46-51`; `SettingsModels.kt:623-633,662-673`). Sparse production saves still send explicit JsonNull for unbinds and omit unrelated fields (`SettingsRepository.kt:365-395`).
+
+## Unresolved evidence
+
+Successful guarded termination/observed exit against the Windows daemon; full process-death/Android durable-store recreation; dropped-create/dropped-terminate production behavior; concurrent create admission; UI outcome regressions; fully isolated live session storage. No unresolved product-design question prevents the corrections above.

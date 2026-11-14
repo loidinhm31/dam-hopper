@@ -2,6 +2,7 @@ package dev.damhopper.nativeapp.features.files
 
 import com.sun.net.httpserver.HttpServer
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.FsEventDto
@@ -243,5 +244,109 @@ class FileTreeStateTest {
         }
         manager.dispose()
         scope.cancel()
+    }
+
+    @Test
+    fun testWholeWorkspaceVsProjectTargetBrowsingSelection() = runTest {
+        val repo = createRepository()
+        val target = ProjectTargetRef(profileId = "test-profile", project = "demo")
+        val state = FileTreeState(target, repo)
+        state.updateRegisteredProjects(listOf("demo", "nested-proj"))
+
+        // Initial target is Project
+        assertTrue(state.activeBrowsingTarget.value is FilesystemTargetRef.Project)
+        assertEquals(TargetBrowseStatus.CONFIGURED, state.targetBrowseStatus.value)
+
+        // Switch to whole workspace
+        val wsTarget = FilesystemTargetRef.Workspace(profileId = "test-profile", workspaceEpoch = 10L)
+        val res = state.selectBrowsingTarget(wsTarget)
+        assertEquals(TargetBrowseStatus.CONFIGURED, res.status)
+        assertTrue(state.activeBrowsingTarget.value is FilesystemTargetRef.Workspace)
+        assertEquals("Workspace Root", state.root.value.name)
+        state.dispose()
+    }
+
+    @Test
+    fun testTargetBrowsingErrorStatusesAndNoFallback() = runTest {
+        val repo = createRepository()
+        val target = ProjectTargetRef(profileId = "test-profile", project = "demo")
+        val state = FileTreeState(target, repo)
+        state.updateRegisteredProjects(listOf("demo"))
+
+        // 1. UNCONFIGURED: unregistered project must return UNCONFIGURED, set error, and NOT fallback
+        val unconfigured = FilesystemTargetRef.Project(profileId = "test-profile", project = "unregistered-app")
+        val unconfRes = state.selectBrowsingTarget(unconfigured)
+        assertEquals(TargetBrowseStatus.UNCONFIGURED, unconfRes.status)
+        assertEquals(TargetBrowseStatus.UNCONFIGURED, state.targetBrowseStatus.value)
+        assertTrue(state.targetBrowseError.value?.contains("not configured") == true)
+        // Must not adopt unconfigured target as active
+        assertFalse((state.activeBrowsingTarget.value as? FilesystemTargetRef.Project)?.project == "unregistered-app")
+
+        // 2. UNAVAILABLE: mismatched profile authority
+        val unavailable = FilesystemTargetRef.Project(profileId = "wrong-profile", project = "demo")
+        val unavailRes = state.selectBrowsingTarget(unavailable)
+        assertEquals(TargetBrowseStatus.UNAVAILABLE, unavailRes.status)
+        assertEquals(TargetBrowseStatus.UNAVAILABLE, state.targetBrowseStatus.value)
+
+        // 3. UNSUPPORTED: empty project name
+        assertFailsWith<IllegalArgumentException> {
+            FilesystemTargetRef.Project(profileId = "test-profile", project = "   ")
+        }
+        state.dispose()
+    }
+
+    @Test
+    fun testPreserveAbsoluteWorktreePathWithoutStripping() = runTest {
+        val repo = createRepository()
+        val target = ProjectTargetRef(profileId = "test-profile", project = "demo")
+        val state = FileTreeState(target, repo)
+        state.updateRegisteredProjects(listOf("demo"))
+
+        // Absolute worktreePath must NOT have leading slash stripped
+        val wtTarget = FilesystemTargetRef.Project(
+            profileId = "test-profile",
+            project = "demo",
+            worktreePath = "/var/workspace/worktrees/feature-1"
+        )
+        val res = state.selectBrowsingTarget(wtTarget)
+        assertEquals(TargetBrowseStatus.CONFIGURED, res.status)
+        val active = state.activeBrowsingTarget.value as FilesystemTargetRef.Project
+        assertEquals("/var/workspace/worktrees/feature-1", active.worktreePath)
+
+        val queryParams = wtTarget.toQueryParams().toMap()
+        assertEquals("project", queryParams["targetType"])
+        assertEquals("demo", queryParams["project"])
+        assertEquals("/var/workspace/worktrees/feature-1", queryParams["worktreePath"])
+        state.dispose()
+    }
+
+    @Test
+    fun testWorkspaceSecondaryConstructorMapsToWildcardProject() {
+        val repo = createRepository()
+        val wsTarget = FilesystemTargetRef.Workspace(profileId = "test-profile", workspaceEpoch = 42L)
+        val state = FileTreeState(wsTarget, repo)
+
+        assertEquals("test-profile", state.target.profileId)
+        assertEquals("*", state.target.project)
+        assertTrue(state.activeBrowsingTarget.value is FilesystemTargetRef.Workspace)
+        assertEquals(42L, (state.activeBrowsingTarget.value as FilesystemTargetRef.Workspace).workspaceEpoch)
+
+        state.dispose()
+    }
+
+    @Test
+    fun testBrowsingTargetSwitchRebindsWatchCoordinatorTarget() = runTest {
+        val repo = createRepository()
+        val wsTarget = FilesystemTargetRef.Workspace(profileId = "test-profile")
+        val state = FileTreeState(wsTarget, repo)
+        assertEquals("*", state.watchCoordinator.target.project)
+
+        state.updateRegisteredProjects(listOf("demo"))
+        val projTarget = FilesystemTargetRef.Project(profileId = "test-profile", project = "demo")
+        val res = state.selectBrowsingTarget(projTarget)
+
+        assertEquals(TargetBrowseStatus.CONFIGURED, res.status)
+        assertEquals("demo", state.watchCoordinator.target.project)
+        state.dispose()
     }
 }

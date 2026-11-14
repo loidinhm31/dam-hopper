@@ -122,8 +122,10 @@ class HardwareShortcutRegistry(thresholdMs: Long = DOUBLE_SHIFT_MAX_INTERVAL_MS)
             }
             val matched = detector.onShiftDown(input.timeMs, repeat, input.composing, input.ctrl, input.alt, input.meta)
             if (!matched) return ShortcutOutcome.PassThrough
-            val action = ShortcutAction.entries.firstOrNull { ShortcutGrammar.parse(it.read(prefs))?.kind == ShortcutKind.DOUBLE_SHIFT }
-                ?: return ShortcutOutcome.PassThrough
+            val action = ShortcutAction.entries.firstOrNull {
+                val b = it.read(prefs)
+                b.isNotBlank() && ShortcutGrammar.parse(b)?.kind == ShortcutKind.DOUBLE_SHIFT
+            } ?: return ShortcutOutcome.PassThrough
             return outcomeFor(action)
         }
 
@@ -162,7 +164,9 @@ class HardwareShortcutRegistry(thresholdMs: Long = DOUBLE_SHIFT_MAX_INTERVAL_MS)
             alt: Boolean,
             shift: Boolean,
         ): ShortcutAction? = ShortcutAction.entries.firstOrNull { action ->
-            val parsed = ShortcutGrammar.parse(action.read(prefs)) ?: return@firstOrNull false
+            val binding = action.read(prefs)
+            if (binding.isBlank()) return@firstOrNull false
+            val parsed = ShortcutGrammar.parse(binding) ?: return@firstOrNull false
             ShortcutGrammar.matches(parsed, code, ctrl, meta, alt, shift)
         }
 
@@ -171,9 +175,13 @@ class HardwareShortcutRegistry(thresholdMs: Long = DOUBLE_SHIFT_MAX_INTERVAL_MS)
             val entries = ShortcutAction.entries
             val out = ArrayList<Pair<ShortcutAction, ShortcutAction>>()
             for (i in entries.indices) {
-                val a = ShortcutGrammar.parse(entries[i].read(prefs)) ?: continue
+                val b1 = entries[i].read(prefs)
+                if (b1.isBlank()) continue
+                val a = ShortcutGrammar.parse(b1) ?: continue
                 for (j in i + 1 until entries.size) {
-                    if (shortcutsCollide(a, ShortcutGrammar.parse(entries[j].read(prefs)))) out += entries[i] to entries[j]
+                    val b2 = entries[j].read(prefs)
+                    if (b2.isBlank()) continue
+                    if (shortcutsCollide(a, ShortcutGrammar.parse(b2))) out += entries[i] to entries[j]
                 }
             }
             return out

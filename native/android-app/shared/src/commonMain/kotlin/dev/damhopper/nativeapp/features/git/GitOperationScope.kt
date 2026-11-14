@@ -21,6 +21,15 @@ data class GitOperationScope(
     val project get() = owner.project
     val worktreePath get() = owner.worktreePath
     val targetRef get() = owner.toProjectTargetRef()
+    fun isRegisteredProjectTarget(registeredProjects: List<String>? = null): Boolean {
+        if (owner.project.isBlank() || owner.project == "*" || owner.project.equals("workspace", ignoreCase = true)) {
+            return false
+        }
+        if (registeredProjects != null && registeredProjects.isNotEmpty() && !registeredProjects.contains(owner.project)) {
+            return false
+        }
+        return true
+    }
 
     fun matches(other: GitOperationScope?): Boolean =
         other != null && owner == other.owner && generation == other.generation && root == other.root

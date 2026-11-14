@@ -1,5 +1,7 @@
 package dev.damhopper.nativeapp.features.editor
 
+import dev.damhopper.nativeapp.features.files.FileIdentityDto
+
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.features.workspace.DocumentId
@@ -24,6 +26,8 @@ data class EditorTabMetadata(
     val isLoading: Boolean = false,
     val error: String? = null,
     val rangeWindow: BoundedRangeWindow? = null,
+    val fileIdentity: FileIdentityDto? = null,
+    val canonicalKey: String? = null,
 )
 
 /**
@@ -125,4 +129,13 @@ interface EditorRangeRequestPort {
  */
 interface EditorSavePort {
     suspend fun saveDocument(id: DocumentId, explicitOverwrite: Boolean = false): FileOperationOutcome<Long>
+}
+
+/**
+ * Port for accessing canonical documents across aliases and view attachments.
+ */
+interface EditorCanonicalDocumentPort {
+    fun getCanonicalDocument(canonicalKey: String): EditorDocument?
+    fun acquireCanonicalLease(canonicalKey: String, aliasId: String): AliasLeaseToken?
+    fun releaseCanonicalLease(canonicalKey: String, token: AliasLeaseToken)
 }

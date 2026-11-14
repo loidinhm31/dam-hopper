@@ -695,7 +695,7 @@ export function TraditionalTerminalProjectsDisplay({
                 projectsOpenerRef.current.focus();
               }
             }}
-            className="safe-area-inline safe-area-bottom fixed inset-x-0 bottom-0 top-auto left-0 z-50 max-h-[calc(var(--app-viewport-height)*0.75)] w-full max-w-none translate-x-0 translate-y-0 gap-0 rounded-t-2xl border-x-0 border-b-0 p-0 [&>button]:flex [&>button]:min-h-11 [&>button]:min-w-11 [&>button]:items-center [&>button]:justify-center data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:rounded-t-2xl"
+            className="safe-area-inline safe-area-bottom fixed inset-x-0 bottom-0 top-auto left-0 z-50 max-h-[calc(var(--app-viewport-height)*0.75)] min-w-0 w-full max-w-none grid-cols-[minmax(0,1fr)] translate-x-0 translate-y-0 gap-0 rounded-t-2xl border-x-0 border-b-0 p-0 [&>button]:flex [&>button]:min-h-11 [&>button]:min-w-11 [&>button]:items-center [&>button]:justify-center data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:rounded-t-2xl"
           >
             <DialogHeader className="border-b border-[var(--color-border)] py-3 pl-4 pr-16 text-left">
               <DialogTitle className="text-sm">Projects + Agents</DialogTitle>

@@ -39,10 +39,11 @@ fun ImportTomlConfirmDialog(
         title = { Text("Import workspace TOML?") },
         text = {
             Column {
-                Text("Target server: $targetLabel ($targetEndpoint)", style = MaterialTheme.typography.bodyMedium)
+                Text("Admin Target B: $targetLabel ($targetEndpoint)", style = MaterialTheme.typography.bodyMedium)
                 Text("File size: $payloadBytes bytes", style = MaterialTheme.typography.labelSmall)
                 Text(
-                    "The server validates the file, writes a timestamped backup and replaces the active workspace configuration. " +
+                    "The server validates the file, writes a timestamped backup and replaces the active workspace configuration on Admin Target B. " +
+                        "This operation targets only the selected administration server ($targetLabel); if active Hub C uses this same server, its configuration may also be affected. " +
                         "If the answer is lost or unclear the result is shown as unknown; nothing is retried automatically.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 8.dp),
@@ -66,8 +67,8 @@ fun ClearCacheConfirmDialog(
         title = { Text("Revalidate server cache?") },
         text = {
             Text(
-                "Asks '$targetLabel' to reload its configuration and drops its cached query data. Open terminals stay connected; " +
-                    "only this server's cached data is refetched.",
+                "Asks Admin Target B '$targetLabel' to reload its configuration and drops its cached query data. Open terminals stay connected; " +
+                    "only this server's cached data is refetched. If active Hub C uses this same server, its cached queries are also reloaded.",
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
@@ -93,10 +94,11 @@ fun NuclearResetConfirmDialog(
         title = { Text("Reset server runtime state?", color = MaterialTheme.colorScheme.error) },
         text = {
             Column {
-                Text("Target server: $targetLabel ($targetEndpoint)", style = MaterialTheme.typography.bodyMedium)
+                Text("Admin Target B: $targetLabel ($targetEndpoint)", style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    "This ends every running terminal process and clears the live runtime workspace state on that server. " +
-                        "Your saved preferences and stored credentials are NOT reset. It cannot be undone; if the answer is lost " +
+                    "This ends every running terminal process and clears the live runtime workspace state on Admin Target B. " +
+                        "Your saved preferences and stored credentials are NOT reset. This operation targets only the selected administration server ($targetLabel); " +
+                        "if active Hub C uses this same server, its running terminals and runtime state are also reset. It cannot be undone; if the answer is lost " +
                         "the result is unknown and the reset is never repeated automatically.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 8.dp),
@@ -133,5 +135,37 @@ fun DiagnosticsExportConfirmDialog(
         },
         confirmButton = { TextButton(onClick = onConfirm) { Text("Choose file") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** Destructive confirmation before changing workspace root. */
+@Composable
+fun ConfirmRootChangeDialog(
+    targetRoot: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Change workspace root?", color = MaterialTheme.colorScheme.error) },
+        text = {
+            Column {
+                Text("Selected target root: $targetRoot", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Changing the workspace root terminates all running remote terminal processes (PTYs) on this server. " +
+                        "This operation cannot be undone automatically.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Confirm & Switch", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
     )
 }

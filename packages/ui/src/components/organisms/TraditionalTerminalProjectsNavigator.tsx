@@ -170,12 +170,12 @@ export function TraditionalTerminalProjectsNavigator({
       aria-label="Terminal projects and agents"
       style={width ? { width } : undefined}
       className={cn(
-        "flex min-h-0 w-56 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]",
-        touchOptimized && "w-full border-r-0",
+        "flex min-h-0 min-w-0 w-56 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]",
+        touchOptimized && "w-full max-w-full shrink border-r-0",
         className,
       )}
     >
-      <section aria-labelledby={projectsHeadingId} className="flex min-h-0 flex-1 flex-col">
+      <section aria-labelledby={projectsHeadingId} className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
           <h2
             id={projectsHeadingId}
@@ -213,7 +213,7 @@ export function TraditionalTerminalProjectsNavigator({
           role="tablist"
           aria-label="Open terminal projects"
           aria-orientation="vertical"
-          className="min-h-0 flex-1 overflow-y-auto py-1"
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto py-1"
         >
           {profileSections.map((section) => {
             const isExpanded = !collapsedProfiles.has(section.profileId);
@@ -221,7 +221,7 @@ export function TraditionalTerminalProjectsNavigator({
             const headerId = `profile-header-${section.profileId}`;
 
             return (
-              <div key={section.profileId} className="flex flex-col">
+              <div key={section.profileId} className="flex min-w-0 flex-col">
                 <button
                   id={headerId}
                   type="button"
@@ -245,7 +245,7 @@ export function TraditionalTerminalProjectsNavigator({
                   </span>
                 </button>
                 {isExpanded ? (
-                  <div id={sectionId} role="group" aria-labelledby={headerId} className="flex flex-col">
+                  <div id={sectionId} role="group" aria-labelledby={headerId} className="flex min-w-0 flex-col">
                     {section.groups.map((group) => {
                       const visibleIndex = visibleGroups.findIndex((g) => g.id === group.id);
                       return (
@@ -278,7 +278,7 @@ export function TraditionalTerminalProjectsNavigator({
           })}
         </div>
       </section>
-      <section aria-labelledby={agentsHeadingId} className="flex min-h-0 flex-1 flex-col border-t border-[var(--color-border)]">
+      <section aria-labelledby={agentsHeadingId} className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-[var(--color-border)]">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 border-b border-[var(--color-border)] px-4 py-2">
           <h2 id={agentsHeadingId} className="text-2xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
             agents
@@ -292,7 +292,7 @@ export function TraditionalTerminalProjectsNavigator({
             </Link>
           ) : null}
         </div>
-        <div className="w-full shrink-0 border-b border-[var(--color-border)] p-2">
+        <div className="w-full min-w-0 shrink-0 border-b border-[var(--color-border)] p-2">
           <TraditionalTerminalAgentFilter
             value={selectedFilter}
             onValueChange={handleFilterChange}

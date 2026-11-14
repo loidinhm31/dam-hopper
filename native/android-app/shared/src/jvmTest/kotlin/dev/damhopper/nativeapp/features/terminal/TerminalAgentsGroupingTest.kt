@@ -1,5 +1,8 @@
 package dev.damhopper.nativeapp.features.terminal
 
+import dev.damhopper.nativeapp.core.model.ProfileId
+import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.features.workspace.HubTerminalRow
 import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -216,5 +219,251 @@ class TerminalAgentsGroupingTest {
         val projector = DefaultTerminalAgentsProjector()
         assertEquals(b.target, projector.nextTarget(merged, a.target.instance))
         assertEquals(a.target, projector.nextTarget(merged, b.target.instance))
+    }
+
+    @Test
+    fun zeroSessionOpenProjectsCoexistWithObservedGroups() {
+        val targetZero = ProjectTargetRef(profileId = "p1", project = "zero-session-proj")
+        val targetActive = ProjectTargetRef(profileId = "p1", project = "alpha")
+        val activeRow = row(alpha, "t1", TerminalAgentsStatus.WORKING)
+        val groups = TerminalAgentsGrouping.group(listOf(activeRow))
+
+        val composed = TerminalAgentsGrouping.composeProjectRows(
+            openTargets = listOf(targetZero, targetActive),
+            observedGroups = groups,
+            terminalRows = listOf(
+                HubTerminalRow(
+                    id = "t1",
+                    displayName = "t1",
+                    command = "bash",
+                    projectTarget = targetActive,
+                ),
+            ),
+            isInventoryLoaded = true,
+            isConnected = true,
+        )
+
+        assertEquals(2, composed.size)
+        val zeroRow = composed.first { it.target == targetZero }
+        assertEquals("zero-session-proj", zeroRow.projectLabel)
+        assertEquals(0, zeroRow.sessionCount)
+        assertEquals(0, zeroRow.agentCount)
+        assertEquals("0 sessions", zeroRow.statusLabel)
+        assertTrue(zeroRow.canDismiss) // Zero sessions + authoritative loaded => dismiss enabled
+
+        val activeProjRow = composed.first { it.target == targetActive }
+        assertEquals("alpha", activeProjRow.projectLabel)
+        assertEquals(1, activeProjRow.sessionCount)
+        assertEquals(1, activeProjRow.agentCount)
+        assertFalse(activeProjRow.canDismiss) // Active session => dismiss blocked
+    }
+
+    @Test
+    fun multiProfileProjectsDisambiguatedByBadges() {
+        val p1 = "profile-prod"
+        val p2 = "profile-dev"
+        val targetProd = ProjectTargetRef(profileId = p1, project = "dam-hopper")
+        val targetDev = ProjectTargetRef(profileId = p2, project = "dam-hopper")
+
+        val composed = TerminalAgentsGrouping.composeProjectRows(
+            openTargets = listOf(targetProd, targetDev),
+            profileLabels = mapOf(p1 to "Production", p2 to "Development"),
+            isInventoryLoaded = true,
+            isConnected = true,
+        )
+
+        assertEquals(2, composed.size)
+        val prodRow = composed.first { it.target.profileId == p1 }
+        val devRow = composed.first { it.target.profileId == p2 }
+        assertEquals("Production", prodRow.profileLabel)
+        assertEquals("Development", devRow.profileLabel)
+        assertEquals("dam-hopper", prodRow.projectLabel)
+        assertEquals("dam-hopper", devRow.projectLabel)
+    }
+
+    @Test
+    fun unavailableOwnersRetainPinsAndSelectionsWithoutPruning() {
+        val targetPinned = ProjectTargetRef(profileId = "p1", project = "pinned-offline")
+        val targetSelected = ProjectTargetRef(profileId = "p1", project = "selected-offline")
+
+        val composed = TerminalAgentsGrouping.composeProjectRows(
+            openTargets = emptyList(), // Not in openTargets
+            observedGroups = emptyList(), // Not in observed groups
+            selectedTarget = targetSelected,
+            pinnedTargets = setOf(targetPinned),
+            unavailableTargets = setOf(targetPinned, targetSelected),
+            isInventoryLoaded = false,
+            isConnected = false,
+        )
+
+        assertEquals(2, composed.size)
+        val pinnedRow = composed.first { it.target == targetPinned }
+        assertTrue(pinnedRow.isPinned)
+        assertFalse(pinnedRow.isAvailable)
+        assertEquals("Disconnected", pinnedRow.statusLabel)
+        assertFalse(pinnedRow.canDismiss) // Unavailable => cannot dismiss
+
+        val selectedRow = composed.first { it.target == targetSelected }
+        assertTrue(selectedRow.isSelected)
+        assertFalse(selectedRow.isAvailable)
+        assertEquals("Disconnected", selectedRow.statusLabel)
+        assertFalse(selectedRow.canDismiss)
+    }
+
+    @Test
+    fun dismissalPredicateEvaluatesAuthoritativeInventoryAndActiveRefs() {
+        // Authoritative loaded and 0 refs => dismiss enabled
+        assertTrue(
+            TerminalAgentsGrouping.canDismissProjectTarget(
+                isInventoryAuthoritativeLoaded = true,
+                isConnected = true,
+                terminals = emptyList(),
+                hiddenTerminalIds = emptySet(),
+                pendingCreateIntents = emptyList(),
+            )
+        )
+
+        // Not loaded => fail closed
+        assertFalse(
+            TerminalAgentsGrouping.canDismissProjectTarget(
+                isInventoryAuthoritativeLoaded = false,
+                isConnected = true,
+                terminals = emptyList(),
+            )
+        )
+
+        // Disconnected => fail closed
+        assertFalse(
+            TerminalAgentsGrouping.canDismissProjectTarget(
+                isInventoryAuthoritativeLoaded = true,
+                isConnected = false,
+                terminals = emptyList(),
+            )
+        )
+
+        // Live terminal => blocked
+        assertFalse(
+            TerminalAgentsGrouping.canDismissProjectTarget(
+                isInventoryAuthoritativeLoaded = true,
+                isConnected = true,
+                terminals = listOf(
+                    HubTerminalRow(id = "live-1", displayName = "live", command = "sh", alive = true),
+                ),
+            )
+        )
+
+        // Hidden terminal in terminals => blocked
+        assertFalse(
+            TerminalAgentsGrouping.canDismissProjectTarget(
+                isInventoryAuthoritativeLoaded = true,
+                isConnected = true,
+                terminals = listOf(
+                    HubTerminalRow(id = "hidden-1", displayName = "hidden", command = "sh", alive = false, isHidden = true),
+                ),
+            )
+        )
+
+        // Hidden terminal in hidden IDs => blocked
+        assertFalse(
+            TerminalAgentsGrouping.canDismissProjectTarget(
+                isInventoryAuthoritativeLoaded = true,
+                isConnected = true,
+                hiddenTerminalIds = setOf("hidden-2"),
+            )
+        )
+
+        // Pending create intent => blocked
+        assertFalse(
+            TerminalAgentsGrouping.canDismissProjectTarget(
+                isInventoryAuthoritativeLoaded = true,
+                isConnected = true,
+                pendingCreateIntents = listOf(
+                    UncertainCreateRecord(
+                        intentId = "intent-1",
+                        profileId = "p1",
+                        terminalId = "term-1",
+                        project = "proj",
+                        createdAtEpochMs = 1000L,
+                    ),
+                ),
+            )
+        )
+
+        // Active agent group without terminalRows => blocked
+        assertFalse(
+            TerminalAgentsGrouping.canDismissProjectTarget(
+                isInventoryAuthoritativeLoaded = true,
+                isConnected = true,
+                agentGroups = listOf(TerminalAgentsGrouping.group(listOf(row(alpha, "t1", TerminalAgentsStatus.WORKING))).single()),
+            )
+        )
+
+        // Target restartPending => blocked
+        assertFalse(
+            TerminalAgentsGrouping.canDismissProjectTarget(
+                isInventoryAuthoritativeLoaded = true,
+                isConnected = true,
+                terminals = listOf(HubTerminalRow(id = "r1", displayName = "r1", command = "sh", alive = false)),
+                restartPendingTerminalIds = setOf("r1"),
+            )
+        )
+
+        // Raw inventory restartPending => blocked
+        assertFalse(
+            TerminalAgentsGrouping.canDismissOwnerInventory(
+                isInventoryAuthoritativeLoaded = true,
+                isConnected = true,
+                sessions = listOf(
+                    TerminalSessionDetailed(
+                        id = "restart-1",
+                        command = "sh",
+                        cwd = "/tmp",
+                        alive = false,
+                        terminationState = "restartPending",
+                    ),
+                ),
+            )
+        )
+
+        // Deduplicated refs: same terminal both live and in hidden set still blocks dismissal
+        assertFalse(
+            TerminalAgentsGrouping.canDismissProjectTarget(
+                isInventoryAuthoritativeLoaded = true,
+                isConnected = true,
+                terminals = listOf(
+                    HubTerminalRow(id = "dup-1", displayName = "dup", command = "sh", alive = true),
+                ),
+                hiddenTerminalIds = setOf("dup-1"),
+            )
+        )
+    }
+
+    @Test
+    fun composeProjectRowsPreservesWorkspaceFileOwnerAndHandlesDuplicateProfileLabels() {
+        val p1 = "p1"
+        val p2 = "p2"
+        val owner1 = f.owner(profileId = "p1", project = "proj", worktree = "feat")
+        val target1 = ProjectTargetRef(profileId = p1, project = "proj", worktreePath = "feat")
+        val target2 = ProjectTargetRef(profileId = p2, project = "proj", worktreePath = "feat")
+
+        // Both profiles configured with the same visible label string "Shared Server"
+        val rows = TerminalAgentsGrouping.composeProjectRows(
+            openTargets = listOf(target1, target2),
+            openOwners = listOf(owner1),
+            profileLabels = mapOf(p1 to "Shared Server", p2 to "Shared Server"),
+            isInventoryLoaded = true,
+            isConnected = true,
+        )
+
+        assertEquals(2, rows.size)
+        val r1 = rows.first { it.target == target1 }
+        val r2 = rows.first { it.target == target2 }
+        // Captured owner faithfully preserved on r1
+        assertEquals(owner1, r1.owner)
+        assertEquals(owner1.baseUrl, r1.owner?.baseUrl)
+        assertEquals(owner1.accountUser, r1.owner?.accountUser)
+        // Identical labels disambiguated with profileId
+        assertEquals("Shared Server (p1)", r1.profileLabel)
+        assertEquals("Shared Server (p2)", r2.profileLabel)
     }
 }

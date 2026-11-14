@@ -4,6 +4,9 @@ import io.github.rosemoe.sora.lang.Language
 import dev.damhopper.nativeapp.features.editor.DocumentBudgetMetrics
 import dev.damhopper.nativeapp.features.editor.DocumentEvent
 import dev.damhopper.nativeapp.features.editor.DocumentSaveSnapshot
+import dev.damhopper.nativeapp.features.editor.AliasLeaseToken
+import dev.damhopper.nativeapp.features.editor.ViewLeaseToken
+import dev.damhopper.nativeapp.features.files.FileIdentityDto
 import dev.damhopper.nativeapp.features.editor.DocumentViewState
 import dev.damhopper.nativeapp.features.editor.EditorDocument
 import dev.damhopper.nativeapp.features.editor.EditorDocumentFactory
@@ -47,7 +50,8 @@ class AndroidEditorDocument(
     private var nextRev = 1L
     private var stackIndex = 0
     private var savedRev = 1L
-    private var serverMtime: Long = initialMtime
+    override var serverMtime: Long = initialMtime
+        private set
     private val revStack = ArrayList<Long>().apply { add(1L) }
     private val payloadBytes = ArrayList<Int>().apply { add(0) }
     private var suppressDelta = false
@@ -55,9 +59,88 @@ class AndroidEditorDocument(
     private var batchPushed = false
     private var pendingReplaceDeleteChars = 0
     private var attachedEditor: CodeEditor? = null
-    private var receipt: SubscriptionReceipt<ContentChangeEvent>? = null
-    private var isClosed = false
+    private var activeViewReceipt: SubscriptionReceipt<ContentChangeEvent>? = null
+    private var activeViewToken: ViewLeaseToken? = null
+    private var leaseSeq: Long = 0L
+    private val _inFlightSaveCount = MutableStateFlow(0)
+    val inFlightSaveCount: StateFlow<Int> = _inFlightSaveCount.asStateFlow()
+    override var isClosed: Boolean = false
+        private set
     var isInputAllowed: () -> Boolean = { true }
+    override var fileIdentity: FileIdentityDto? = null
+    override var canonicalPath: String? = null
+
+    private val _activeAliasLeases = MutableStateFlow<Set<AliasLeaseToken>>(emptySet())
+    override val activeAliasLeases: StateFlow<Set<AliasLeaseToken>> = _activeAliasLeases.asStateFlow()
+
+    private val _activeViewLeases = MutableStateFlow<Set<ViewLeaseToken>>(emptySet())
+    override val activeViewLeases: StateFlow<Set<ViewLeaseToken>> = _activeViewLeases.asStateFlow()
+
+    override var isDiscarded: Boolean = false
+
+    override fun markDiscarded() {
+        isDiscarded = true
+    }
+    override var onDisposalEligible: (() -> Unit)? = null
+
+    override val canDispose: Boolean
+        get() = _activeAliasLeases.value.isEmpty() &&
+                _activeViewLeases.value.isEmpty() &&
+                (!_isDirty.value || isDiscarded) &&
+                _inFlightSaveCount.value == 0
+
+    override fun beginSaveTracking(): () -> Unit {
+        _inFlightSaveCount.value++
+        var released = false
+        return {
+            if (!released) {
+                released = true
+                _inFlightSaveCount.value = maxOf(0, _inFlightSaveCount.value - 1)
+                if (canDispose) {
+                    onDisposalEligible?.invoke()
+                    if (isDiscarded) {
+                        close()
+                    }
+                }
+            }
+        }
+    }
+
+    override fun acquireAliasLease(aliasId: String): AliasLeaseToken {
+        checkNotClosed()
+        val seq = ++leaseSeq
+        val token = AliasLeaseToken("alias-${id.owner.profileId.orEmpty()}-$aliasId-$seq", aliasId, _revision.value)
+        _activeAliasLeases.value = _activeAliasLeases.value + token
+        return token
+    }
+
+    override fun releaseAliasLease(token: AliasLeaseToken) {
+        _activeAliasLeases.value = _activeAliasLeases.value - token
+        if (canDispose) {
+            onDisposalEligible?.invoke()
+            if (isDiscarded) {
+                close()
+            }
+        }
+    }
+
+    override fun acquireViewLease(surfaceId: String): ViewLeaseToken {
+        checkNotClosed()
+        val seq = ++leaseSeq
+        val token = ViewLeaseToken("view-${id.owner.profileId.orEmpty()}-$surfaceId-$seq", surfaceId)
+        _activeViewLeases.value = _activeViewLeases.value + token
+        return token
+    }
+
+    override fun releaseViewLease(token: ViewLeaseToken) {
+        _activeViewLeases.value = _activeViewLeases.value - token
+        if (canDispose) {
+            onDisposalEligible?.invoke()
+            if (isDiscarded) {
+                close()
+            }
+        }
+    }
 
     /** Exact UTF-8 size of the content, maintained incrementally from content listener callbacks. */
     private var utf8Bytes: Long = utf8Size(initialText)
@@ -440,7 +523,9 @@ class AndroidEditorDocument(
             id = id,
             revision = _revision.value,
             utf8Bytes = snapshotBytes(),
-            mtime = serverMtime
+            mtime = serverMtime,
+            fileIdentity = fileIdentity,
+            canonicalPath = canonicalPath,
         )
     }
 
@@ -466,19 +551,24 @@ class AndroidEditorDocument(
     }
 
     /** Attaches [editor] with the legacy Java/empty language choice; prefer the [Language] overload. */
-    fun attachEditor(editor: CodeEditor, useJavaSyntax: Boolean = false) {
-        attachEditor(editor, if (useJavaSyntax) JavaLanguage() else EmptyLanguage())
+    fun attachEditor(editor: CodeEditor, useJavaSyntax: Boolean = false, leaseToken: ViewLeaseToken? = null) {
+        attachEditor(editor, if (useJavaSyntax) JavaLanguage() else EmptyLanguage(), leaseToken)
     }
 
     /** Attaches [editor]; [language] is installed before the text so the analyzer resets on empty content. */
-    fun attachEditor(editor: CodeEditor, language: Language) {
+    fun attachEditor(editor: CodeEditor, language: Language, leaseToken: ViewLeaseToken? = null) {
         check(!isClosed) { "Cannot attach closed document $id" }
+        if (attachedEditor != null && attachedEditor !== editor) {
+            activeViewReceipt?.unsubscribe()
+            activeViewReceipt = null
+        }
         attachedEditor = editor
+        activeViewToken = leaseToken
         check(editor.isUndoEnabled) { "CodeEditor undoEnabled must be true before setText" }
         editor.setEditorLanguage(language)
         editor.isEditable = !_isReadOnly.value
         editor.setText(content, true, null)
-        receipt = editor.subscribeEvent(ContentChangeEvent::class.java) { ev, _ ->
+        activeViewReceipt = editor.subscribeEvent(ContentChangeEvent::class.java) { ev, _ ->
             if (ev.action == ContentChangeEvent.ACTION_SET_NEW_TEXT) return@subscribeEvent
         }
     }
@@ -492,26 +582,34 @@ class AndroidEditorDocument(
         editor.eventHandler.scrollBy(0f, 0f)
     }
 
-    fun detachEditor(editor: CodeEditor) {
-        if (editor.hasComposingText()) editor.restartInput()
-        content.resetBatchEdit()
-        val cur = editor.cursor
-        _viewState.value = DocumentViewState(
-            cursorLine = cur.leftLine,
-            cursorColumn = cur.leftColumn,
-            selectionStart = cur.leftColumn,
-            selectionEnd = cur.rightColumn,
-            scrollX = editor.offsetX,
-            scrollY = editor.offsetY
-        )
-        receipt?.unsubscribe()
-        receipt = null
+    fun detachEditor(editor: CodeEditor, leaseToken: ViewLeaseToken? = null) {
         if (attachedEditor === editor) {
+            if (leaseToken != null && activeViewToken != null && leaseToken != activeViewToken) {
+                return
+            }
+            if (editor.hasComposingText()) editor.restartInput()
+            content.resetBatchEdit()
+            val cur = editor.cursor
+            _viewState.value = DocumentViewState(
+                cursorLine = cur.leftLine,
+                cursorColumn = cur.leftColumn,
+                selectionStart = cur.leftColumn,
+                selectionEnd = cur.rightColumn,
+                scrollX = editor.offsetX,
+                scrollY = editor.offsetY
+            )
+            activeViewReceipt?.unsubscribe()
+            activeViewReceipt = null
             attachedEditor = null
+            activeViewToken = null
+            editor.hideSoftInput()
+            editor.clearFocus()
+            editor.release()
+        } else {
+            editor.hideSoftInput()
+            editor.clearFocus()
+            editor.release()
         }
-        editor.hideSoftInput()
-        editor.clearFocus()
-        editor.release()
     }
 
     override fun detachView() {
@@ -522,8 +620,8 @@ class AndroidEditorDocument(
         if (isClosed) return
         isClosed = true
         detachView()
-        receipt?.unsubscribe()
-        receipt = null
+        activeViewReceipt?.unsubscribe()
+        activeViewReceipt = null
         content.removeContentListener(this)
         content.setUndoEnabled(false)
         _events.tryEmit(DocumentEvent.Closed(id))

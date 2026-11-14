@@ -6,29 +6,36 @@ import androidx.compose.runtime.setValue
 import dev.damhopper.nativeapp.core.lifecycle.LifecycleAware
 import dev.damhopper.nativeapp.core.lifecycle.LifecycleCoordinator
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.features.editor.CloseIntent
 import dev.damhopper.nativeapp.features.editor.EditorDocumentFactory
 import dev.damhopper.nativeapp.features.editor.EditorRepository
 import dev.damhopper.nativeapp.features.editor.EditorTabsState
+import dev.damhopper.nativeapp.features.editor.ViewLeaseToken
 import dev.damhopper.nativeapp.features.files.FileMutationCoordinator
 import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.features.files.FileRepository
 import dev.damhopper.nativeapp.features.files.FileTreeState
+import dev.damhopper.nativeapp.features.files.TargetBrowseResult
+import dev.damhopper.nativeapp.features.files.TargetBrowseStatus
 import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
 import dev.damhopper.nativeapp.features.git.GitWorkspaceState
 import dev.damhopper.nativeapp.features.git.GitWorkspaceRuntime
 import dev.damhopper.nativeapp.features.git.GitRefreshReason
 import dev.damhopper.nativeapp.features.settings.SettingsOwner
+import dev.damhopper.nativeapp.features.settings.PreferencesStore
 import dev.damhopper.nativeapp.ui.screens.ObservableCommandHistory
 import dev.damhopper.nativeapp.ui.screens.PreferenceAccess
 import dev.damhopper.nativeapp.ui.screens.ProjectTerminalState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
@@ -85,9 +92,10 @@ class ProjectWorkspaceState(
     val fileTreeState: FileTreeState,
     val fileMutationCoordinator: FileMutationCoordinator,
     val terminalState: ProjectTerminalState? = null,
-    val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate),
+    val coroutineScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     var lifecycleCoordinator: LifecycleCoordinator? = null,
 ) : LifecycleAware {
+    var preferencesStore: PreferencesStore? = null
 
     val gitState: GitWorkspaceState = GitWorkspaceState()
     var gitRuntime: GitWorkspaceRuntime? = null
@@ -104,6 +112,40 @@ class ProjectWorkspaceState(
     var editorRepository: EditorRepository = initialEditorRepository
         private set
 
+    val browsingTarget: StateFlow<FilesystemTargetRef>
+        get() = fileTreeState.activeBrowsingTarget
+
+    val targetBrowseStatus: StateFlow<TargetBrowseStatus>
+        get() = fileTreeState.targetBrowseStatus
+
+    val isProjectSelected: Boolean
+        get() = fileTreeState.activeBrowsingTarget.value is FilesystemTargetRef.Project
+
+    fun selectBrowsingTarget(newTarget: FilesystemTargetRef): TargetBrowseResult {
+        val result = fileTreeState.selectBrowsingTarget(newTarget)
+        if (result.status == TargetBrowseStatus.CONFIGURED && newTarget is FilesystemTargetRef.Workspace) {
+            if (_activePanel.value == WorkspacePanel.GIT) {
+                selectPanel(WorkspacePanel.FILES)
+            }
+        }
+        return result
+    }
+
+    private val ownedViewLeases = mutableSetOf<Pair<String, ViewLeaseToken>>()
+
+    fun acquireWorkspaceViewLease(canonicalKey: String, surfaceId: String): ViewLeaseToken? {
+        val doc = editorTabsState.getCanonicalDocument(canonicalKey) ?: return null
+        val token = doc.acquireViewLease(surfaceId)
+        ownedViewLeases.add(canonicalKey to token)
+        return token
+    }
+
+    fun releaseWorkspaceViewLease(canonicalKey: String, token: ViewLeaseToken) {
+        if (ownedViewLeases.remove(canonicalKey to token)) {
+            editorTabsState.getCanonicalDocument(canonicalKey)?.releaseViewLease(token)
+        }
+    }
+
     var isSavingDeparture: Boolean by mutableStateOf(false)
         internal set
     var departureError: String? by mutableStateOf(null)
@@ -118,6 +160,9 @@ class ProjectWorkspaceState(
     private val _isAuthorityRetired = MutableStateFlow(false)
     val isAuthorityRetired: StateFlow<Boolean> = _isAuthorityRetired.asStateFlow()
 
+    /** Retained dirty documents whose save authority is suspended pending fresh canonical verification. */
+    val unauthorizedDirtyDocIds = MutableStateFlow<Set<DocumentId>>(emptySet())
+    val unauthorizedCanonicalKeys = MutableStateFlow<Set<String>>(emptySet())
     /** Whether the editor-panel file-tree sidebar is open (split view when wide, slide-over when compact). */
     val isEditorSidebarOpen = MutableStateFlow(false)
 
@@ -132,17 +177,27 @@ class ProjectWorkspaceState(
         isEditorSidebarOpen.value = open
     }
 
+    private val _inputSuspended = MutableStateFlow(false)
+
+    /** True while Settings/history/privacy covers the workspace: widget input is hidden, nothing is closed. */
+    val isInputSuspended: StateFlow<Boolean> = _inputSuspended.asStateFlow()
+
     private val _pendingDeparture = MutableStateFlow<WorkspaceDepartureIntent?>(null)
     val pendingDeparture: StateFlow<WorkspaceDepartureIntent?> = _pendingDeparture.asStateFlow()
 
     init {
+        editorTabsState.unauthorizedDirtyDocIdsProvider = { unauthorizedDirtyDocIds.value }
+        editorTabsState.unauthorizedCanonicalKeysProvider = { unauthorizedCanonicalKeys.value }
         updateInputGate()
     }
-
     /**
      * Switches the active focused panel.
      */
     fun selectPanel(panel: WorkspacePanel) {
+        if (panel == WorkspacePanel.GIT && !isProjectSelected) {
+            // Whole workspace browsing cannot enter Git or dispatch Git operations
+            return
+        }
         _activePanel.value = panel
         terminalState?.setPanelVisible(panel == WorkspacePanel.TERMINAL)
         if (panel == WorkspacePanel.GIT) {
@@ -183,7 +238,7 @@ class ProjectWorkspaceState(
                 fileTreeState.resumeWatching()
             } catch (_: Throwable) {}
         }
-        if (_activePanel.value == WorkspacePanel.GIT) {
+        if (_activePanel.value == WorkspacePanel.GIT && isProjectSelected) {
             gitRuntime?.refresh(GitRefreshReason.FOREGROUND)
         }
         updateInputGate()
@@ -222,12 +277,19 @@ class ProjectWorkspaceState(
      * or connection generation retirement.
      * Detached documents and uncommitted edits remain preserved in memory.
      */
+    private var reauthEpoch: Long = 0L
+
     fun revokeAuthority() {
+        reauthEpoch++
         _isAuthorityRetired.value = true
         terminalState?.revokeAuthority()
         gitRuntime?.revoke()
         gitState.invalidateAuthority()
         spendPendingDeparture()
+        editorTabsState.registry.revokeAllAuthority()
+        val allCKeys = editorTabsState.tabs.value.map { editorTabsState.resolveCanonicalKey(it) }.toSet()
+        unauthorizedCanonicalKeys.value = allCKeys
+        unauthorizedDirtyDocIds.value = getDirtyDocumentIds().toSet()
         updateInputGate()
     }
 
@@ -241,6 +303,16 @@ class ProjectWorkspaceState(
     ): Boolean {
         if (expectedOwner != owner) {
             return false
+        }
+        reauthEpoch++
+        editorTabsState.registry.revokeAllAuthority()
+        val allCKeys = editorTabsState.tabs.value.map { editorTabsState.resolveCanonicalKey(it) }.toSet()
+        unauthorizedCanonicalKeys.value = allCKeys
+        val dirtyDocs = getDirtyDocumentIds().toSet()
+        if (dirtyDocs.isNotEmpty()) {
+            unauthorizedDirtyDocIds.value = dirtyDocs
+        } else {
+            unauthorizedDirtyDocIds.value = emptySet()
         }
         _isAuthorityRetired.value = false
         terminalState?.rebindAuthority(newConnection)
@@ -261,19 +333,110 @@ class ProjectWorkspaceState(
         newConnection: ConnectionRef,
     ): Boolean {
         if (newFileRepo.owner != owner) return false
+        reauthEpoch++
         fileRepository = newFileRepo
         editorRepository = newEditorRepo
+        editorTabsState.registry.revokeAllAuthority()
+        val allCKeys = editorTabsState.tabs.value.map { editorTabsState.resolveCanonicalKey(it) }.toSet()
+        unauthorizedCanonicalKeys.value = allCKeys
+        val dirtyDocs = getDirtyDocumentIds().toSet()
+        if (dirtyDocs.isNotEmpty()) {
+            unauthorizedDirtyDocIds.value = dirtyDocs
+        } else {
+            unauthorizedDirtyDocIds.value = emptySet()
+        }
         _isAuthorityRetired.value = false
         editorTabsState.rebindRepository(newEditorRepo)
         fileTreeState.rebindRepository(newFileRepo)
         fileMutationCoordinator.rebindRepository(newFileRepo)
-        terminalState?.rebindTransports(newConnection, dev.damhopper.nativeapp.features.terminal.TerminalRepository(newFileRepo.apiClient, newFileRepo.wsConnection))
+        terminalState?.rebindTransports(newConnection, dev.damhopper.nativeapp.features.terminal.TerminalRepository(newFileRepo.apiClient, newFileRepo.wsConnection, preferencesStore, accountUser = owner.accountUser))
         if (gitRuntime?.connection != newConnection) {
             gitRuntime?.revoke()
             gitRuntime = null
         }
         updateInputGate()
         return true
+    }
+
+    suspend fun reauthorizeRetainedDocuments(): Boolean {
+        val capturedEpoch = reauthEpoch
+        val capturedRepo = fileRepository
+        val capturedConn = capturedRepo.apiClient.connection
+        val allTabs = editorTabsState.tabs.value
+        if (allTabs.isEmpty()) {
+            if (reauthEpoch != capturedEpoch || fileRepository !== capturedRepo || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
+                return false
+            }
+            unauthorizedCanonicalKeys.value = emptySet()
+            unauthorizedDirtyDocIds.value = emptySet()
+            updateInputGate()
+            return true
+        }
+        var allMatch = true
+        val distinctTabs = allTabs.distinctBy { editorTabsState.resolveCanonicalKey(it) }
+        for (tab in distinctTabs) {
+            if (reauthEpoch != capturedEpoch || fileRepository !== capturedRepo || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
+                return false
+            }
+            val cKey = editorTabsState.resolveCanonicalKey(tab)
+            val session = editorTabsState.getSession(tab.key)
+            val doc = session?.document
+            val origFid = doc?.fileIdentity ?: tab.fileIdentity
+            val origWsId = origFid?.workspaceId?.trim()
+            val origCPath = origFid?.canonicalPath?.trim()
+            val origEpoch = origFid?.workspaceEpoch
+            if (doc == null || origFid == null || origWsId.isNullOrBlank() || origCPath.isNullOrBlank() || origEpoch == null) {
+                allMatch = false
+                continue
+            }
+            try {
+                val stat = fileRepository.stat(tab.target, tab.path)
+                if (reauthEpoch != capturedEpoch || fileRepository !== capturedRepo || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
+                    return false
+                }
+                val postSession = editorTabsState.getSession(tab.key)
+                if (postSession?.document !== doc) {
+                    allMatch = false
+                    continue
+                }
+                val serverFid = stat.fileIdentity ?: stat.fileIdentitySnake
+                val serverWsId = serverFid?.workspaceId?.trim()
+                val serverCPath = serverFid?.canonicalPath?.trim()
+                val serverEpoch = serverFid?.workspaceEpoch ?: stat.workspaceEpoch
+                if (serverFid == null || serverWsId.isNullOrBlank() || serverCPath.isNullOrBlank() || serverEpoch == null) {
+                    allMatch = false
+                    continue
+                }
+                val sameWorkspace = serverWsId == origWsId
+                val sameEpoch = serverEpoch == origEpoch
+                val samePath = serverCPath == origCPath
+                val serverMtime = stat.mtime.toLong()
+                val mtimeMatches = doc.serverMtime > 0L && serverMtime == doc.serverMtime
+                if (sameWorkspace && sameEpoch && samePath && mtimeMatches) {
+                    editorTabsState.registry.grantAuthority(cKey)
+                    unauthorizedCanonicalKeys.update { it - cKey }
+                    val docIds = editorTabsState.tabs.value
+                        .filter { editorTabsState.resolveCanonicalKey(it) == cKey }
+                        .mapNotNull { editorTabsState.getDocumentId(it.key) }
+                    unauthorizedDirtyDocIds.update { it - docIds }
+                } else {
+                    allMatch = false
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Throwable) {
+                allMatch = false
+            }
+        }
+        if (reauthEpoch != capturedEpoch || fileRepository !== capturedRepo || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
+            return false
+        }
+        if (allMatch && unauthorizedCanonicalKeys.value.isEmpty()) {
+            _isAuthorityRetired.value = false
+            updateInputGate()
+            return true
+        }
+        return false
     }
 
     /**
@@ -414,8 +577,7 @@ class ProjectWorkspaceState(
     }
 
     private fun updateInputGate() {
-        val isEligible = _isForeground.value && !_isAuthorityRetired.value
-        // Authority allows saves across panels when authorized
+        val isEligible = _isForeground.value && !_isAuthorityRetired.value && !_inputSuspended.value
         editorTabsState.isInputAllowed = { isEligible }
     }
 
@@ -424,11 +586,6 @@ class ProjectWorkspaceState(
             _activePanel.value == WorkspacePanel.EDITOR
     }
 
-    private val _inputSuspended = MutableStateFlow(false)
-
-    /** True while Settings/history/privacy covers the workspace: widget input is hidden, nothing is closed. */
-    val isInputSuspended: StateFlow<Boolean> = _inputSuspended.asStateFlow()
-
     /**
      * Hides terminal and editor widget input behind Settings (or another cover) without closing dirty documents,
      * undo history, PTYs or the sidebar; lifting it restores exactly the previous state.
@@ -436,6 +593,7 @@ class ProjectWorkspaceState(
     fun setInputSuspended(suspended: Boolean) {
         _inputSuspended.value = suspended
         terminalState?.setInputSuspended(suspended)
+        updateInputGate()
     }
 
     /** The one reactive preference truth this workspace's consumers (terminal font, files, editor) read. */
@@ -471,6 +629,14 @@ class ProjectWorkspaceState(
         gitRuntime = null
         coroutineScope.cancel()
         fileTreeState.dispose()
+
+        // Release only workspace-owned view leases
+        for ((canonicalKey, token) in ownedViewLeases) {
+            editorTabsState.getCanonicalDocument(canonicalKey)?.releaseViewLease(token)
+        }
+        ownedViewLeases.clear()
+
+        // Release workspace-owned alias leases via editorTabsState
         editorTabsState.closeAll()
     }
 
@@ -484,19 +650,25 @@ class ProjectWorkspaceState(
             fileRepository: FileRepository,
             editorRepository: EditorRepository,
             documentFactory: EditorDocumentFactory? = null,
-            coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate),
+            coroutineScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
             lifecycleCoordinator: LifecycleCoordinator? = null,
             preferenceAccess: PreferenceAccess? = null,
             commandHistory: ObservableCommandHistory? = null,
             historyOwner: SettingsOwner? = null,
+            preferencesStore: PreferencesStore? = null,
+            registry: dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry? = null,
         ): ProjectWorkspaceState {
             val tabsState = EditorTabsState(
                 profileId = owner.profileId ?: "default",
                 editorRepository = editorRepository,
                 documentFactory = documentFactory,
+                registry = registry ?: dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry(documentFactory),
             )
             val treeState = FileTreeState(
                 target = target,
+                initialFsTarget = if (target.project.isBlank() || target.project == "*") {
+                    FilesystemTargetRef.Workspace(workspaceEpoch = owner.workspaceEpoch, profileId = target.profileId)
+                } else null,
                 repository = fileRepository,
                 coroutineScope = coroutineScope,
             )
@@ -527,6 +699,7 @@ class ProjectWorkspaceState(
             )
             lifecycleCoordinator?.register(created)
             created.bindPreferenceConsumers(preferenceAccess, commandHistory, historyOwner)
+            created.preferencesStore = preferencesStore
             return created
         }
     }

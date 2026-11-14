@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -82,6 +83,8 @@ fun ProjectListScreen(
     onRefresh: (() -> Unit)? = null,
     headerEntries: HeaderEntries? = null,
     agents: TerminalAgentsContext? = null,
+    onDismiss: (() -> Unit)? = null,
+    isPicker: Boolean = false,
 ) {
     var refreshTrigger by remember(workspaceRepository) { mutableStateOf(0) }
     var repoProjects by remember(workspaceRepository) { mutableStateOf<List<ProjectSummary>?>(null) }
@@ -129,6 +132,8 @@ fun ProjectListScreen(
             onRefresh = handleRefresh,
             headerEntries = headerEntries,
             agents = agents,
+            onDismiss = onDismiss,
+            isPicker = isPicker,
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -139,7 +144,7 @@ fun ProjectListScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Projects",
+                text = if (isPicker) "Open Project" else "Projects",
                 color = DamHopperColors.TextPrimary,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
@@ -227,6 +232,8 @@ private fun ProjectListHeader(
     onRefresh: () -> Unit,
     headerEntries: HeaderEntries? = null,
     agents: TerminalAgentsContext? = null,
+    onDismiss: (() -> Unit)? = null,
+    isPicker: Boolean = false,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -288,7 +295,7 @@ private fun ProjectListHeader(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = DamHopperColors.Primary),
                         border = BorderStroke(1.dp, DamHopperColors.Border),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                        modifier = Modifier.height(36.dp),
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Default.Person,
@@ -304,7 +311,7 @@ private fun ProjectListHeader(
                         onClick = onRefresh,
                         enabled = !isLoading,
                         modifier = Modifier
-                            .size(36.dp)
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                             .clip(RoundedCornerShape(6.dp))
                             .background(DamHopperColors.SurfaceVariant.copy(alpha = 0.7f))
                             .border(BorderStroke(1.dp, DamHopperColors.Border), RoundedCornerShape(6.dp))
@@ -326,6 +333,24 @@ private fun ProjectListHeader(
                         }
                     }
                 }
+                    if (onDismiss != null) {
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(DamHopperColors.SurfaceVariant.copy(alpha = 0.7f))
+                                .border(BorderStroke(1.dp, DamHopperColors.Border), RoundedCornerShape(6.dp))
+                                .semantics { contentDescription = "Close project picker" },
+                        ) {
+                            Text(
+                                text = "\u00D7",
+                                color = DamHopperColors.TextPrimary,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
             }
         }
     }
@@ -343,6 +368,10 @@ fun ProjectCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
+            .sizeIn(minHeight = 48.dp)
+            .semantics {
+                contentDescription = "Open project ${project.name}"
+            }
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = DamHopperColors.Surface),
         shape = RoundedCornerShape(8.dp),

@@ -60,6 +60,7 @@ fun RemoteConfigScreen(
     val scope = rememberCoroutineScope()
     var showRaw by remember(editor) { mutableStateOf(false) }
     var message by remember(editor) { mutableStateOf<String?>(null) }
+    var pendingRootChangeConfirm by remember(editor) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(editor) {
         if (editor.state.value.baseConfigJson.isNullOrEmpty()) {
@@ -74,7 +75,7 @@ fun RemoteConfigScreen(
 
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Server configuration", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-        Text("Server: $targetLabel", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Admin Target B: $targetLabel", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         readOnlyReason?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error) }
         if (loading) Text("Loading…", style = MaterialTheme.typography.labelSmall)
 
@@ -86,7 +87,11 @@ fun RemoteConfigScreen(
                         OutlinedButton(onClick = { editor.discardDraft() }) { Text("Reload server version") }
                         OutlinedButton(onClick = { editor.keepLocalDraft() }) { Text("Keep my draft") }
                         Button(enabled = editable && structured.canSave, onClick = {
-                            scope.launch { message = editor.saveFullConfig(overwriteConflict = true).describe("Overwriting the server config") }
+                            if (editor.hasRootChange()) {
+                                pendingRootChangeConfirm = editor.targetRoot() ?: "new root"
+                            } else {
+                                scope.launch { message = editor.saveFullConfig(overwriteConflict = true).describe("Overwriting the server config") }
+                            }
                         }) { Text("Overwrite server") }
                     }
                 }
@@ -122,7 +127,13 @@ fun RemoteConfigScreen(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
             Button(
                 enabled = editable && state.isDirty && structured.canSave && !state.hasConflict,
-                onClick = { scope.launch { message = editor.saveFullConfig().describe("Saving the server config") } },
+                onClick = {
+                    if (editor.hasRootChange()) {
+                        pendingRootChangeConfirm = editor.targetRoot() ?: "new root"
+                    } else {
+                        scope.launch { message = editor.saveFullConfig().describe("Saving the server config") }
+                    }
+                },
             ) { Text(if (state.isSaving) "Saving…" else if (state.isDirty) "Save all *" else "Saved") }
             OutlinedButton(enabled = state.isDirty && !state.isSaving, onClick = { editor.discardDraft() }) { Text("Discard") }
             OutlinedButton(enabled = !state.isSaving && !loading, onClick = { scope.launch { editor.refresh() } }) { Text("Reload") }
@@ -143,6 +154,16 @@ fun RemoteConfigScreen(
                 enabled = editable,
                 modifier = Modifier.fillMaxWidth().height(280.dp),
                 textStyle = TextStyle(fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurface),
+            )
+        }
+        pendingRootChangeConfirm?.let { targetRoot ->
+            ConfirmRootChangeDialog(
+                targetRoot = targetRoot,
+                onConfirm = {
+                    pendingRootChangeConfirm = null
+                    scope.launch { message = editor.saveFullConfig(confirmRootChange = true).describe("Saving the server config") }
+                },
+                onDismiss = { pendingRootChangeConfirm = null },
             )
         }
     }

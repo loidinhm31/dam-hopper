@@ -54,7 +54,9 @@ class TransferCoordinatorTest {
 
         ws.onRequest = { reqId, msg ->
             assertTrue(msg is ClientMsg.FsUploadBegin)
-            assertEquals("test-proj", msg.project)
+            assertEquals("test-proj", msg.target?.project)
+            assertNull(msg.project)
+            assertNull(msg.worktreePath)
             assertEquals("dir1", msg.dir)
             assertEquals("file.bin", msg.filename)
             assertEquals(250uL, msg.len)

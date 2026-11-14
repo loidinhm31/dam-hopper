@@ -3,6 +3,7 @@ package dev.damhopper.nativeapp.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import dev.damhopper.nativeapp.features.terminal.TerminateSessionRequest
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -290,7 +291,7 @@ fun WorkbenchScreen(
                 val wRepo = WorkspaceRepository(client, targetStore)
                 val ws = try { profileRepository.getOrCreateWsConnection(activeProfileId!!) } catch (_: Exception) { null }
                 activeWsConnection = ws
-                val tRepo = TerminalRepository(client, ws)
+                val tRepo = TerminalRepository(client, ws, settingsRepository.preferencesStore)
                 workspaceRepo = wRepo
                 terminalRepo = tRepo
                 activeApiClient = client
@@ -1008,6 +1009,11 @@ fun WorkbenchScreen(
                                 )
                             }
                         },
+                        onSelectFilesystemTarget = { fsTarget ->
+                            gitWorkspace.selectBrowsingTarget(fsTarget)
+                        },
+                        isWholeWorkspaceSelected = gitWorkspace.fileTreeState.activeBrowsingTarget.value is dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Workspace,
+                        profileId = activeProfileId,
                         onDismiss = { navigation.closeTargetPicker() }
                     )
                 }
@@ -1093,11 +1099,29 @@ fun WorkbenchScreen(
                                         } catch (_: Exception) {}
                                     }
                                 },
-                                onKillSession = { id ->
+                                onKillSession = kill@{ id ->
+                                    val repo = terminalRepo ?: return@kill
+                                    val owner = repo.apiClient.connection
+                                    val project = navState.activeProject
+                                    val session = terminalSessions.find { it.id == id } ?: return@kill
+                                    val expectedEpoch = session.serverPtyEpoch
+                                    val expectedIncarnation = session.incarnationExact ?: session.incarnation.toString()
+                                    if (expectedEpoch.isNullOrBlank() || !TerminateSessionRequest.isValidEpoch(expectedEpoch) ||
+                                        !TerminateSessionRequest.isValidIncarnation(expectedIncarnation)
+                                    ) {
+                                        return@kill
+                                    }
                                     coroutineScope.launch {
                                         try {
-                                            terminalRepo?.killSession(id)
-                                            terminalSessions = terminalRepo?.listDetailed() ?: emptyList()
+                                            repo.terminateSession(
+                                                id = id,
+                                                expectedServerEpoch = expectedEpoch,
+                                                expectedIncarnation = expectedIncarnation,
+                                            )
+                                            if (terminalRepo !== repo || repo.apiClient.connection != owner ||
+                                                navState.activeProject != project
+                                            ) return@launch
+                                            terminalSessions = repo.listDetailed()
                                         } catch (_: Exception) {}
                                     }
                                 },
@@ -1106,32 +1130,25 @@ fun WorkbenchScreen(
                                     val owner = repo.apiClient.connection
                                     val project = navState.activeProject
                                     val epoch = terminalSelectionEpoch
+                                    // Local close hides qualified view only: zero server mutation
                                     coroutineScope.launch {
-                                        try {
-                                            repo.removeSession(id)
-                                            if (terminalRepo !== repo || repo.apiClient.connection != owner ||
-                                                navState.activeProject != project
-                                            ) return@launch
-                                            terminalControllers.remove("${owner.profileId}:$id")?.let { controller ->
-                                                terminalAttachQueues.remove(controller)
-                                                terminalAttachTokens.remove(controller)
-                                                controller.close()
+                                        terminalControllers.remove("${owner.profileId}:$id")?.let { controller ->
+                                            terminalAttachQueues.remove(controller)
+                                            terminalAttachTokens.remove(controller)
+                                            controller.close()
+                                        }
+                                        if (terminalRepo !== repo || repo.apiClient.connection != owner ||
+                                            navState.activeProject != project
+                                        ) return@launch
+                                        val remaining = terminalSessions.filter { it.id != id }
+                                        terminalSessions = remaining
+                                        if (activeTerminalSessionId == id && terminalSelectionEpoch == epoch) {
+                                            val next = remaining.firstOrNull()
+                                            selectTerminalSession(next?.id)
+                                            if (next != null) {
+                                                scheduleTerminalAttach(getOrCreateController(next.id, next.incarnation.toLong(), repo), repo)
                                             }
-                                            val detailed = repo.listDetailed()
-                                            if (terminalRepo !== repo || repo.apiClient.connection != owner ||
-                                                navState.activeProject != project
-                                            ) return@launch
-                                            terminalSessions = detailed
-                                            if (activeTerminalSessionId == id && terminalSelectionEpoch == epoch) {
-                                                val next = detailed.firstOrNull()
-                                                selectTerminalSession(next?.id)
-                                                if (next != null) {
-                                                    scheduleTerminalAttach(getOrCreateController(next.id, next.incarnation.toLong(), repo), repo)
-                                                }
-                                            }
-                                        } catch (e: kotlinx.coroutines.CancellationException) {
-                                            throw e
-                                        } catch (_: Exception) {}
+                                        }
                                     }
                                 },
                                 fontSize = workbenchPreferences.terminalFontSize

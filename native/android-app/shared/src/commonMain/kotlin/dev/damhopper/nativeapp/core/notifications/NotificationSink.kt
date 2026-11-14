@@ -41,6 +41,7 @@ data class NotificationTarget(
     val worktreePath: String? = null,
     val agentSessionId: String? = null,
     val agentKind: String? = null,
+    val socketInstanceId: String? = null,
 ) {
     init {
         requireSafe("generation", generation)

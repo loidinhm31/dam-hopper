@@ -62,8 +62,12 @@ class AndroidNotificationSink(context: Context) : NotificationSink {
 
     @SuppressLint("NotificationPermission", "MissingPermission")
     override fun postNotification(notification: AppNotification): Boolean {
-        if (!areNotificationsEnabled()) return false
         return try {
+            if (!areNotificationsEnabled()) return false
+            val channel = notificationManager.getNotificationChannel(notification.channel.id)
+            if (channel != null && channel.importance == NotificationManager.IMPORTANCE_NONE) {
+                return false
+            }
             notificationManager.notify(notification.key, NOTIFICATION_ID, buildNotification(notification))
             true
         } catch (_: RuntimeException) {
@@ -80,7 +84,8 @@ class AndroidNotificationSink(context: Context) : NotificationSink {
     override fun cancelNotificationsForProfile(profileId: String) {
         // The profile id travels in each notification's own extras, so this is exact by profile even
         // after a process restart, and never touches another profile's entries.
-        for (active in notificationManager.activeNotifications) {
+        val activeList = notificationManager.activeNotifications ?: emptyArray()
+        for (active in activeList) {
             if (active.packageName == appContext.packageName &&
                 active.notification.extras.getString(EXTRA_NOTIFICATION_PROFILE_ID) == profileId
             ) {
@@ -102,11 +107,11 @@ class AndroidNotificationSink(context: Context) : NotificationSink {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        // Generic public version: lock-screen safe, never any private text.
+        // Generic public version: lock-screen safe, strictly fixed generic strings without caller text or metadata.
         val publicVersion = NotificationCompat.Builder(appContext, notification.channel.id)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(notification.publicTitle)
-            .setContentText(notification.publicBody)
+            .setContentTitle(DEFAULT_PUBLIC_TITLE)
+            .setContentText(DEFAULT_PUBLIC_BODY)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .build()
@@ -150,6 +155,7 @@ class AndroidNotificationSink(context: Context) : NotificationSink {
             target.worktreePath?.let { putExtra(EXTRA_TARGET_WORKTREE_PATH, it) }
             target.agentSessionId?.let { putExtra(EXTRA_TARGET_AGENT_SESSION_ID, it) }
             target.agentKind?.let { putExtra(EXTRA_TARGET_AGENT_KIND, it) }
+            target.socketInstanceId?.let { putExtra(EXTRA_TARGET_SOCKET_INSTANCE_ID, it) }
         }
     }
 
@@ -174,6 +180,9 @@ class AndroidNotificationSink(context: Context) : NotificationSink {
         const val EXTRA_TARGET_WORKTREE_PATH = "dev.damhopper.target_worktree_path"
         const val EXTRA_TARGET_AGENT_SESSION_ID = "dev.damhopper.target_agent_session_id"
         const val EXTRA_TARGET_AGENT_KIND = "dev.damhopper.target_agent_kind"
+        const val EXTRA_TARGET_SOCKET_INSTANCE_ID = "dev.damhopper.target_socket_instance_id"
+        const val DEFAULT_PUBLIC_TITLE = "DamHopper"
+        const val DEFAULT_PUBLIC_BODY = "Attention required"
 
         /** Keys placed in the posted notification's own extras so profile cancellation survives a process restart. */
         const val EXTRA_NOTIFICATION_PROFILE_ID = "dev.damhopper.notification_profile_id"
@@ -214,6 +223,7 @@ class AndroidNotificationSink(context: Context) : NotificationSink {
                     worktreePath = intent.getStringExtra(EXTRA_TARGET_WORKTREE_PATH),
                     agentSessionId = intent.getStringExtra(EXTRA_TARGET_AGENT_SESSION_ID),
                     agentKind = intent.getStringExtra(EXTRA_TARGET_AGENT_KIND),
+                    socketInstanceId = intent.getStringExtra(EXTRA_TARGET_SOCKET_INSTANCE_ID),
                 )
             } catch (_: IllegalArgumentException) {
                 return null
@@ -235,7 +245,7 @@ class AndroidNotificationSink(context: Context) : NotificationSink {
                 // (transfer/idle); a terminal/semantic target must carry its canonical key tuple.
                 val semantic = target.serverEpoch != null || target.terminalId != null || target.incarnation != null ||
                     target.attentionRevision != null || target.processInstanceId != null || target.agentSessionId != null ||
-                    target.agentKind != null
+                    target.agentKind != null || target.socketInstanceId != null
                 if (semantic) return null
             }
             return NotificationClick(key, target)
