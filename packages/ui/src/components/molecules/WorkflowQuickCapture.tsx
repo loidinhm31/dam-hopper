@@ -1,7 +1,11 @@
 import { useState, type FormEvent } from "react";
 import { Plus, X } from "lucide-react";
 import type { ProjectTargetRef } from "@/api/client.js";
-import type { ItemKind, ItemStatus } from "@/api/workflow-dto-types.js";
+import {
+  formatWorkflowTargetLabel,
+  type ItemKind,
+  type ItemStatus,
+} from "@/api/workflow-dto-types.js";
 import { Button } from "@/components/atoms/Button.js";
 import { Input } from "@/components/ui/Input.js";
 import { Textarea } from "@/components/ui/Textarea.js";
@@ -16,6 +20,7 @@ import {
 
 export interface WorkflowQuickCaptureProps {
   target: ProjectTargetRef;
+  targetOptions?: ProjectTargetRef[];
   parentOptions?: Array<{ id: string; title: string; kind: ItemKind }>;
   initialParentId?: string | null;
   initialKind?: ItemKind;
@@ -34,6 +39,7 @@ export interface WorkflowQuickCaptureProps {
 
 export function WorkflowQuickCapture({
   target,
+  targetOptions,
   parentOptions = [],
   initialParentId = null,
   initialKind = "plan",
@@ -47,6 +53,7 @@ export function WorkflowQuickCapture({
   const [status, setStatus] = useState<ItemStatus>("backlog");
   const [parentId, setParentId] = useState<string | null>(initialParentId);
   const [startSession, setStartSession] = useState(false);
+  const [selectedTarget, setSelectedTarget] = useState<ProjectTargetRef>(target);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -59,7 +66,7 @@ export function WorkflowQuickCapture({
     setError(null);
     try {
       await onSubmit({
-        target,
+        target: parentId ? target : selectedTarget,
         kind,
         title: trimmedTitle,
         summary: summary.trim() || undefined,
@@ -81,9 +88,14 @@ export function WorkflowQuickCapture({
       aria-label="Create workflow item"
     >
       <div className="flex items-center justify-between">
-        <span className="font-semibold text-[var(--color-text)]">
-          {kind === "plan" ? "New Plan" : kind === "phase" ? "New Phase" : "New Task"}
-        </span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-semibold text-[var(--color-text)]">
+            {kind === "plan" ? "New Plan" : kind === "phase" ? "New Phase" : "New Task"}
+          </span>
+          <span className="truncate rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)]">
+            {formatWorkflowTargetLabel(parentId ? target : selectedTarget)}
+          </span>
+        </div>
         {onCancel && (
           <Button type="button" variant="ghost" size="sm" onClick={onCancel} aria-label="Cancel" className="h-6 w-6 p-0">
             <X className="h-3.5 w-3.5" />
@@ -131,6 +143,29 @@ export function WorkflowQuickCapture({
           </Select>
         </div>
       </div>
+
+      {!parentId && targetOptions && targetOptions.length > 1 && (
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="wf-cap-target" className="text-xs">Space</Label>
+          <Select
+            value={selectedTarget.project}
+            onValueChange={(val) => {
+              const next = targetOptions.find((o) => o.project === val);
+              if (next) setSelectedTarget(next);
+            }}
+            disabled={isSubmitting}
+          >
+            <SelectTrigger id="wf-cap-target" className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {targetOptions.map((opt) => (
+                <SelectItem key={opt.project} value={opt.project}>
+                  {formatWorkflowTargetLabel(opt)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       {parentOptions.length > 0 && kind !== "plan" && (
         <div className="flex flex-col gap-1">

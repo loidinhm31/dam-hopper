@@ -16,6 +16,9 @@ pub use service::WorkflowService;
 pub use store::*;
 pub use observation::*;
 pub use reconcile::*;
+
+/// Reserved target project identifier representing the global workspace space.
+pub const GLOBAL_WORKSPACE_PROJECT: &str = "__workspace__";
 /// Maximum length of an item title in characters.
 pub const MAX_TITLE_CHARS: usize = 200;
 

@@ -128,6 +128,21 @@ function sanitizeAppState(
     const projected: Record<string, unknown> = {};
     if (typeof rawState.selectedItemId === "string")
       projected.selectedItemId = rawState.selectedItemId;
+    if (
+      rawState.selectedProject === null ||
+      typeof rawState.selectedProject === "string"
+    ) {
+      projected.selectedProject = rawState.selectedProject;
+    }
+    if (
+      rawState.selectedWorktreePath === null ||
+      typeof rawState.selectedWorktreePath === "string"
+    ) {
+      projected.selectedWorktreePath = rawState.selectedWorktreePath;
+    }
+    if (rawState.plansMode === "files" || rawState.plansMode === "manual") {
+      projected.plansMode = rawState.plansMode;
+    }
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
   if (appId === "settings" || appId === "agent-store" || appId === "project-info") {

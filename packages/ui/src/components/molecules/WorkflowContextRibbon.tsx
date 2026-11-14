@@ -10,7 +10,11 @@ import {
 } from "lucide-react";
 import type { RefObject } from "react";
 import type { ProjectTargetRef } from "@/api/client.js";
-import type { ItemOverviewNodeDto, SessionDto } from "@/api/workflow-dto-types.js";
+import {
+  formatWorkflowTargetLabel,
+  type ItemOverviewNodeDto,
+  type SessionDto,
+} from "@/api/workflow-dto-types.js";
 import { formatElapsedDuration } from "@/api/workflow-domain-helpers.js";
 import {
   getTrackedTasksProgressText,
@@ -179,8 +183,11 @@ export function WorkflowContextRibbon({
       >
         <div className="flex shrink-0 items-center gap-1 text-[var(--color-text-muted)] font-mono text-[11px]">
           <FolderGit2 className="h-3.5 w-3.5" />
-          <span className="truncate max-w-[120px]" title={target?.project ?? "All Projects"}>
-            {target?.project ?? "All Projects"}
+          <span
+            className="truncate max-w-[140px]"
+            title={formatWorkflowTargetLabel(target)}
+          >
+            {formatWorkflowTargetLabel(target)}
           </span>
           {target?.worktreePath && (
             <span className="text-[10px] opacity-75">({target.worktreePath.split("/").pop()})</span>

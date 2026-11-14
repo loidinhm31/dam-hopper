@@ -197,6 +197,26 @@ impl WorkflowService {
         result
     }
 
+    /// Resolve a workflow target (either the global workspace space or a configured project/worktree),
+    /// returning the normalized worktree path if a non-root worktree is targeted.
+    pub async fn resolve_workflow_target(
+        &self,
+        target: &ProjectTargetRef,
+    ) -> Result<Option<String>, WorkflowError> {
+        if target.project == crate::workflow::GLOBAL_WORKSPACE_PROJECT {
+            if target
+                .worktree_path
+                .as_deref()
+                .is_some_and(|w| !w.trim().is_empty())
+            {
+                return Err(WorkflowError::InvalidRequest);
+            }
+            return Ok(None);
+        }
+        let resolved = self.resolve_target(target).await?;
+        Ok(crate::api::workflow::mapping::target_path(&resolved))
+    }
+
     /// Execute a blocking store operation on the Tokio blocking pool.
     pub async fn store_call<T, F>(&self, f: F) -> Result<T, WorkflowError>
     where

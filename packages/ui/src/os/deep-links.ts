@@ -601,6 +601,24 @@ export function qualifyOsDeepLink(
     };
   }
 
+  if (parsed.appId === "workflow-plans") {
+    const workflowCtx: WindowContext = {
+      profileId: capture.owner.profileId,
+      generation,
+      projectId: parsed.ctx?.projectId,
+      worktreeId: parsed.ctx?.worktreeId,
+    };
+    return {
+      status: "qualified",
+      appId: "workflow-plans",
+      intent: parsed.intent,
+      ctx: workflowCtx,
+      ...(parsed.ctx?.projectId
+        ? { appState: { selectedProject: parsed.ctx.projectId } }
+        : {}),
+    };
+  }
+
   return {
     status: "qualified",
     appId: parsed.appId,

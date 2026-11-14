@@ -1,5 +1,21 @@
 import type { ProjectTargetRef } from "./client.js";
 
+export const GLOBAL_WORKSPACE_PROJECT = "__workspace__";
+
+export function isGlobalWorkspaceTarget(
+  target?: { project?: string | null } | null,
+): boolean {
+  return target?.project === GLOBAL_WORKSPACE_PROJECT;
+}
+
+export function formatWorkflowTargetLabel(
+  target?: { project?: string | null } | null,
+): string {
+  if (!target || !target.project) return "All Projects";
+  if (target.project === GLOBAL_WORKSPACE_PROJECT) return "General (Workspace)";
+  return target.project;
+}
+
 // ── Enums & String Unions ───────────────────────────────────────────────────
 
 export type ItemKind = "plan" | "phase" | "task";

@@ -57,7 +57,7 @@ pub async fn create(
 
     validate_title(req.title.trim()).map_err(|_| err(WorkflowError::LimitExceeded))?;
 
-    let resolved = service.resolve_target(&req.target).await?;
+    let resolved_wt = service.resolve_workflow_target(&req.target).await?;
     let now = mapping::now_ms();
     let ws = service.workspace(now).await?;
 
@@ -119,7 +119,7 @@ pub async fn create(
         id: Uuid::new_v4().to_string(),
         workspace_id: ws.id.clone(),
         project_name: req.target.project,
-        worktree_path: mapping::target_path(&resolved),
+        worktree_path: resolved_wt,
         parent_id: parent_id_val,
         kind: req.kind,
         title: req.title.trim().into(),
@@ -208,10 +208,7 @@ pub async fn patch(
     }
 
     let wt = match &req.target {
-        Some(t) => {
-            let resolved = service.resolve_target(t).await?;
-            Some(mapping::target_path(&resolved))
-        }
+        Some(t) => Some(service.resolve_workflow_target(t).await?),
         None => None,
     };
 

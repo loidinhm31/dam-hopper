@@ -240,7 +240,10 @@ export function ProjectPlanFolderBrowser({
               No plans folder found
             </span>
             <p className="text-xs max-w-sm">
-              The project does not currently have a <code className="text-xs bg-[var(--color-surface-2)] px-1 rounded">plans/</code> directory.
+              {foldersData?.target.targetKey === "workspace"
+                ? "The global workspace does not currently have a "
+                : "The project does not currently have a "}
+              <code className="text-xs bg-[var(--color-surface-2)] px-1 rounded">plans/</code> directory.
             </p>
           </div>
         )}

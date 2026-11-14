@@ -229,4 +229,25 @@ describe("OS Management Apps Browser Tests", () => {
     const memoryBtn = storeEl?.querySelector('button[aria-pressed="true"]');
     expect(memoryBtn?.textContent).toContain("Memory Files");
   });
+
+  it("opens WorkflowPlansApp without project context and defaults to General global workspace", async () => {
+    await renderOs();
+
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-workflow-global",
+        appId: "workflow-plans",
+        title: "Workflow & Plans",
+        ctx: { profileId: testProfile.id },
+        mode: "tile",
+      });
+    });
+
+    const workflowEl = container?.querySelector(
+      '[data-os-workflow-plans-app="win-workflow-global"]',
+    );
+    expect(workflowEl).not.toBeNull();
+    expect(workflowEl?.textContent).toContain("General (Workspace)");
+    expect(workflowEl?.textContent).toContain("Global workspace");
+  });
 });

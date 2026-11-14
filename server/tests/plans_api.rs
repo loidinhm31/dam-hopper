@@ -708,3 +708,39 @@ async fn test_selected_plan_bare_table_cell_and_high_phase_numbers() {
         assert!(json["plan"]["diagnostics"].as_array().unwrap().is_empty());
     }
 }
+
+#[tokio::test]
+async fn test_global_workspace_plan_folders_and_selected_plan() {
+    let (ctx, app) = setup_test_app();
+    let ws_plan_dir = ctx._temp_dir.path().join("plans").join("ws-global-plan");
+    std::fs::create_dir_all(&ws_plan_dir).unwrap();
+    std::fs::write(
+        ws_plan_dir.join("plan.md"),
+        "---\ntitle: \"Workspace Plan\"\nstatus: in-progress\n---\n\n# Workspace Plan\n\n## Phases\n\n| # | Phase | Status |\n|---|---|---|\n| 1 | Init | Completed |\n| 2 | Build | In-Progress |\n",
+    )
+    .unwrap();
+
+    let req = Request::builder()
+        .uri("/api/plans/folders?targetType=workspace&path=plans")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = json_response(res).await;
+    assert_eq!(json["target"]["targetKey"], "workspace");
+    assert_eq!(json["target"]["project"], "__workspace__");
+    assert_eq!(json["kind"], "collection");
+    assert_eq!(json["folders"][0]["name"], "ws-global-plan");
+
+    let req = Request::builder()
+        .uri("/api/plans?targetType=workspace&planPath=plans/ws-global-plan")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = json_response(res).await;
+    assert_eq!(json["target"]["targetKey"], "workspace");
+    assert_eq!(json["plan"]["title"], "Workspace Plan");
+    assert_eq!(json["plan"]["reportedStatus"]["value"], "in-progress");
+    assert_eq!(json["plan"]["completion"]["completed"], 1);
+}

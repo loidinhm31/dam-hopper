@@ -85,8 +85,8 @@ export const APP_MANIFESTS: Record<OsAppId, AppManifest> = {
   "workflow-plans": {
     appId: "workflow-plans",
     displayName: "Workflow & Plans",
-    instancing: "project-instance",
-    minimumCtx: "project",
+    instancing: "profile-instance",
+    minimumCtx: "profile",
     defaultPlacement: "float",
     minSize: { width: 340, height: 280 },
     intents: ["workflow:open-item", "workflow:open-plan"],

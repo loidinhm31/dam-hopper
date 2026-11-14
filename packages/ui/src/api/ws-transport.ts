@@ -938,9 +938,20 @@ function channelToEndpoint(
         worktreePath?: string | null;
         path?: string;
       };
-      const target = restTargetFields(d.target ?? d);
-      const params = new URLSearchParams({ project: target.project });
-      setWorktreePath(params, target);
+      const rawTarget = (d.target ?? d) as Record<string, unknown> | undefined;
+      const isWorkspace =
+        rawTarget?.kind === "workspace" ||
+        rawTarget?.type === "workspace" ||
+        rawTarget?.targetType === "workspace" ||
+        rawTarget?.project === "__workspace__";
+      const params = new URLSearchParams();
+      if (isWorkspace) {
+        params.set("targetType", "workspace");
+      } else {
+        const target = restTargetFields(d.target ?? d);
+        params.set("project", target.project);
+        setWorktreePath(params, target);
+      }
       if (d.path != null && d.path !== "") {
         params.set("path", d.path);
       }
@@ -956,12 +967,22 @@ function channelToEndpoint(
         worktreePath?: string | null;
         planPath?: string;
       };
-      const target = restTargetFields(d.target ?? d);
+      const rawTarget = (d.target ?? d) as Record<string, unknown> | undefined;
+      const isWorkspace =
+        rawTarget?.kind === "workspace" ||
+        rawTarget?.type === "workspace" ||
+        rawTarget?.targetType === "workspace" ||
+        rawTarget?.project === "__workspace__";
       const params = new URLSearchParams({
-        project: target.project,
         planPath: d.planPath ?? "",
       });
-      setWorktreePath(params, target);
+      if (isWorkspace) {
+        params.set("targetType", "workspace");
+      } else {
+        const target = restTargetFields(d.target ?? d);
+        params.set("project", target.project);
+        setWorktreePath(params, target);
+      }
       return {
         method: "GET",
         url: `/api/plans?${params.toString()}`,

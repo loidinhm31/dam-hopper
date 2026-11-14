@@ -1136,3 +1136,76 @@ async fn test_workflow_harness_bounds_and_terminal_target_mismatch() {
     assert!(!error.to_string().contains("different-project"));
     let _ = ctx._app_state.pty_manager.kill(&terminal.id);
 }
+
+#[tokio::test]
+async fn test_workflow_global_workspace_space_crud_and_sessions() {
+    let (_ctx, router) = setup_test_app(true);
+
+    let plan = json_response(
+        send_json(
+            &router,
+            "POST",
+            "/api/workflow/items",
+            json!({
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "target": { "project": "__workspace__" },
+                "kind": "plan",
+                "title": "Global Workspace Plan",
+                "status": "in_progress"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(plan["resource"]["target"]["project"], "__workspace__");
+    assert_eq!(plan["resource"]["target"]["worktreePath"], Value::Null);
+    let plan_id = plan["resource"]["id"].as_str().unwrap().to_owned();
+
+    // Reject non-empty worktreePath on global workspace target
+    let bad_res = send_json(
+        &router,
+        "POST",
+        "/api/workflow/items",
+        json!({
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "target": { "project": "__workspace__", "worktreePath": "/tmp/wt" },
+            "kind": "task",
+            "title": "Invalid worktree task",
+            "status": "backlog"
+        }),
+    )
+    .await;
+    assert_eq!(bad_res.status(), StatusCode::BAD_REQUEST);
+
+    let session = json_response(
+        send_json(
+            &router,
+            "POST",
+            "/api/workflow/sessions",
+            json!({
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "target": { "project": "__workspace__" },
+                "itemId": plan_id,
+                "startedAt": "2026-09-02T10:00:00.000Z"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(session["resource"]["target"]["project"], "__workspace__");
+
+    let overview = json_response(
+        send_json(&router, "GET", "/api/workflow/overview", json!({})).await,
+    )
+    .await;
+    assert!(overview["plans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["item"]["title"] == "Global Workspace Plan"));
+    assert!(overview["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["project"] == "__workspace__" && p["planCount"] == 1));
+}

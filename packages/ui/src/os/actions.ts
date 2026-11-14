@@ -211,10 +211,9 @@ function buildActionCatalog(): Record<OsActionId, ActionDescriptor> {
     },
     {
       appId: "workflow-plans",
-      requirement: "project",
+      requirement: "profile",
       bindingSource: { kind: "extra", extraId: "app.workflow-plans.open" },
       defaultBinding: null,
-      enabledExplanation: "Requires project context",
     },
     {
       appId: "ports-tunnels",

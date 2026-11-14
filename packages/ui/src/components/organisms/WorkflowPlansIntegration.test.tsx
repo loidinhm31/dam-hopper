@@ -270,4 +270,46 @@ describe("WorkflowPlansIntegration — Deck & Sheet mode switch and draft preser
       "Select a configured project or worktree",
     );
   });
+
+  it("supports General global workspace space in both manual and file plans modes without a configured project", () => {
+    const onSelectTarget = vi.fn();
+    act(() => {
+      root?.render(
+        createElement(
+          QueryClientProvider,
+          { client: qc },
+          createElement(WorkflowContextDeck, {
+            variant: "window",
+            isOpen: true,
+            onClose: vi.fn(),
+            owner: mockOwner,
+            target: { project: "__workspace__" },
+            plansMode: "files",
+            projects: [],
+            configuredProjects: [{ name: "alpha" }],
+            plans: [],
+            standaloneTasks: [],
+            sessions: [],
+            onSelectTarget,
+            onSelectItem: vi.fn(),
+          }),
+        ),
+      );
+    });
+
+    expect(container?.textContent).toContain("General (Workspace)");
+    expect(container?.textContent).not.toContain("No configured project selected");
+    expect(
+      container?.querySelector('button[aria-label="Close workflow deck"]'),
+    ).toBeNull();
+
+    const generalBtn = container?.querySelector(
+      '[data-testid="workflow-space-general"]',
+    ) as HTMLButtonElement | null;
+    expect(generalBtn).not.toBeNull();
+    act(() => {
+      generalBtn?.click();
+    });
+    expect(onSelectTarget).toHaveBeenCalledWith({ project: "__workspace__" });
+  });
 });

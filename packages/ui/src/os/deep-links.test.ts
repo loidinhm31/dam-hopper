@@ -99,6 +99,24 @@ describe("deep-links parser", () => {
     expect(portsRes.appId).toBe("ports-tunnels");
   });
 
+  it("parses workflow-plans without requiring project and qualifies without inheriting ambient project", () => {
+    const wfRes = parseOsDeepLink("?open=workflow-plans&profile=prof-1", TEST_PROFILES);
+    expect(wfRes.status).toBe("valid");
+    expect(wfRes.appId).toBe("workflow-plans");
+    expect(wfRes.ctx?.projectId).toBeUndefined();
+
+    const qualified = qualifyOsDeepLink(wfRes, {
+      owner: { profileId: "prof-1", generation: 1 },
+      projectId: "ambient-project",
+      destinationDesktopId: "desk-1",
+    });
+    expect(qualified.status).toBe("qualified");
+    if (qualified.status === "qualified") {
+      expect(qualified.ctx.projectId).toBeUndefined();
+      expect(qualified.appState).toBeUndefined();
+    }
+  });
+
   it("validates session-changes requires full owner tuple", () => {
     const incomplete = parseOsDeepLink(
       "?open=session-changes&profile=prof-1&terminal=t1",

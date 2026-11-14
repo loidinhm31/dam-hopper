@@ -23,6 +23,7 @@ import {
   decodeSelectedPlanResponse,
 } from "./project-plans-types.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
+import { GLOBAL_WORKSPACE_PROJECT } from "./workflow-dto-types.js";
 
 // ── Path Normalization ──────────────────────────────────────────────────────
 
@@ -195,8 +196,13 @@ export async function fetchPlanDocument(
   assertOwnerActive(owner);
   const apiClient = client ?? getApi(owner);
   const normalizedPath = normalizePlanDocumentPath(documentPath);
+  const normalizedTarget = resolveNormalizedTarget(target);
+  const fsTarget =
+    normalizedTarget.project === GLOBAL_WORKSPACE_PROJECT
+      ? ({ kind: "workspace", profileId: owner.profileId } as const)
+      : target;
 
-  const res = await apiClient.fs.read(target, normalizedPath, {
+  const res = await apiClient.fs.read(fsTarget, normalizedPath, {
     mode: "plan-document",
   });
   if (signal?.aborted) {

@@ -375,6 +375,9 @@ export function OsShell() {
           if (existing) {
             if (existing.minimized) restoreWindow(existing.id);
             focusWindow(existing.id);
+            if (qualified.appState) {
+              useWindowStore.getState().updateAppState(existing.id, qualified.appState);
+            }
           } else {
             const newId = `${qualified.appId}-${generateUUID().slice(0, 8)}`;
             openWindow(
@@ -925,17 +928,24 @@ export function OsShell() {
           profileId: intent.payload.profileId,
           projectId: intent.payload.projectId,
         };
+        const nextAppState: Record<string, unknown> = {
+          selectedItemId: intent.payload.itemId,
+          ...(intent.payload.projectId
+            ? { selectedProject: intent.payload.projectId }
+            : {}),
+        };
         const existing = findExistingWindowForApp(
           useWindowStore.getState().session.windows,
           "workflow-plans",
           targetCtx,
         );
         if (existing) {
+          if (existing.desktopId !== useWindowStore.getState().session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
           if (existing.minimized) restoreWindow(existing.id);
           focusWindow(existing.id);
-          useWindowStore.getState().updateAppState(existing.id, {
-            selectedItemId: intent.payload.itemId,
-          });
+          useWindowStore.getState().updateAppState(existing.id, nextAppState);
           return { status: "handled", targetWindowId: existing.id };
         }
         const id = `workflow-plans-${generateUUID().slice(0, 8)}`;
@@ -946,7 +956,46 @@ export function OsShell() {
             title: "Workflow & Plans",
             ctx: targetCtx,
             mode: getPlacement(),
-            appState: { selectedItemId: intent.payload.itemId },
+            appState: nextAppState,
+          },
+          useWindowStore.getState().session.activeDesktopId,
+        );
+        return { status: "handled", targetWindowId: id };
+      }),
+      registerIntentHandler("workflow:open-plan", (intent) => {
+        const targetCtx: WindowContext = {
+          profileId: intent.payload.profileId,
+          projectId: intent.payload.projectId,
+        };
+        const nextAppState: Record<string, unknown> = {
+          selectedItemId: intent.payload.planId,
+          ...(intent.payload.projectId
+            ? { selectedProject: intent.payload.projectId }
+            : {}),
+        };
+        const existing = findExistingWindowForApp(
+          useWindowStore.getState().session.windows,
+          "workflow-plans",
+          targetCtx,
+        );
+        if (existing) {
+          if (existing.desktopId !== useWindowStore.getState().session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          useWindowStore.getState().updateAppState(existing.id, nextAppState);
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const id = `workflow-plans-${generateUUID().slice(0, 8)}`;
+        openWindow(
+          {
+            id,
+            appId: "workflow-plans",
+            title: "Workflow & Plans",
+            ctx: targetCtx,
+            mode: getPlacement(),
+            appState: nextAppState,
           },
           useWindowStore.getState().session.activeDesktopId,
         );

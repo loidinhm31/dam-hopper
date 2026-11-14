@@ -93,7 +93,7 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
     // Project-required action fails without project
     expect(
       canExecuteAction({
-        id: "app.workflow-plans.open",
+        id: "app.project-info.open",
         context: {
           kind: "desktop",
           desktopId: "desk-1",
@@ -102,7 +102,46 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
       }),
     ).toEqual({
       canExecute: false,
-      reason: "Action 'app.workflow-plans.open' requires a project context",
+      reason: "Action 'app.project-info.open' requires a project context",
+    });
+
+    // Workflow & Plans opens with profile only (no project target select required)
+    expect(
+      canExecuteAction({
+        id: "app.workflow-plans.open",
+        context: {
+          kind: "desktop",
+          desktopId: "desk-1",
+          owner: { profileId: "prof-1", generation: 1 },
+        },
+      }),
+    ).toEqual({ canExecute: true });
+  });
+
+  it("opens workflow-plans without project context and focuses same profile window regardless of project selection", async () => {
+    const firstResult = await executeAction({
+      id: "app.workflow-plans.open",
+      context: {
+        kind: "desktop",
+        desktopId: "desk-1",
+        owner: { profileId: "prof-1", generation: 1 },
+      },
+    });
+    expect(firstResult.kind).toBe("opened");
+    if (firstResult.kind !== "opened") return;
+
+    const secondResult = await executeAction({
+      id: "app.workflow-plans.open",
+      context: {
+        kind: "desktop",
+        desktopId: "desk-1",
+        windowContext: { profileId: "prof-1", projectId: "some-project" },
+        owner: { profileId: "prof-1", generation: 1 },
+      },
+    });
+    expect(secondResult).toEqual({
+      kind: "focused",
+      windowId: firstResult.windowId,
     });
   });
 
