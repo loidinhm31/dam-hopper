@@ -236,6 +236,7 @@ vi.mock("../browser-host/canvas-view.js", () => ({
         onPointerUp: props.onCanvasPointerUp,
         onPointerMove: props.onCanvasPointerMove,
         onPointerCancel: props.onCanvasPointerCancel,
+        onLostPointerCapture: props.onCanvasLostPointerCapture,
       }),
       children,
     ),
@@ -1462,6 +1463,262 @@ describe("browser first pointer gesture control handoff & popup tabs", () => {
     });
     expect(controllers[0]?.visible).toBe(true);
     setDocumentVisibilityForTests(null);
+  });
+
+  const makePointerEvent = (
+    type: string,
+    opts: { clientX?: number; clientY?: number; button?: number; pointerId: number },
+  ) => {
+    const evt = new MouseEvent(type, {
+      clientX: opts.clientX ?? 400,
+      clientY: opts.clientY ?? 300,
+      button: opts.button ?? 0,
+      bubbles: true,
+    });
+    Object.defineProperty(evt, "pointerId", { configurable: true, value: opts.pointerId });
+    return evt;
+  };
+
+  const makeLostCaptureEvent = (pointerId: number) => {
+    const evt = new Event("lostpointercapture", { bubbles: true });
+    Object.defineProperty(evt, "pointerId", { configurable: true, value: pointerId });
+    return evt;
+  };
+
+  const mockCanvasRectAndCapture = (canvas: HTMLCanvasElement) => {
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}),
+    });
+    let captured: number | null = null;
+    const setCapture = vi.fn((id: number) => {
+      captured = id;
+    });
+    const releaseCapture = vi.fn((id: number) => {
+      if (captured === id) captured = null;
+    });
+    const hasCapture = vi.fn((id: number) => captured === id);
+    Object.defineProperty(canvas, "setPointerCapture", { configurable: true, value: setCapture });
+    Object.defineProperty(canvas, "releasePointerCapture", { configurable: true, value: releaseCapture });
+    Object.defineProperty(canvas, "hasPointerCapture", { configurable: true, value: hasCapture });
+    return { setCapture, releaseCapture, hasCapture, getCaptured: () => captured };
+  };
+
+  it("surfaces content-free visible error on oversize paste and mid-paste interruption", async () => {
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-p06-paste" });
+    await render();
+    const proxy = slot.querySelector("textarea")!;
+    const secretText = "PRIVATE_PASTE_" + "x".repeat(16 * 1024);
+    const pasteEvt = new Event("paste", { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: { getData: (t: string) => string };
+    };
+    Object.defineProperty(pasteEvt, "clipboardData", {
+      configurable: true,
+      value: { getData: (t: string) => (t === "text/plain" ? secretText : "") },
+    });
+    await act(async () => {
+      proxy.dispatchEvent(pasteEvt);
+    });
+    const alertEl = slot.querySelector('[data-testid="browser-control-error-window-1-tab-1"]');
+    expect(alertEl?.textContent).toContain("16 KiB");
+    expect(alertEl?.textContent).not.toContain("PRIVATE_PASTE");
+    expect(sentInput()).toEqual([]);
+
+    // Accepted small paste clears previous control error
+    const okPaste = new Event("paste", { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: { getData: (t: string) => string };
+    };
+    Object.defineProperty(okPaste, "clipboardData", {
+      configurable: true,
+      value: { getData: (t: string) => (t === "text/plain" ? "clean" : "") },
+    });
+    await act(async () => {
+      proxy.dispatchEvent(okPaste);
+    });
+    expect(slot.querySelector('[data-testid="browser-control-error-window-1-tab-1"]')).toBeNull();
+    expect(sentInput().map((m) => m.event)).toEqual([{ kind: "insertText", text: "clean" }]);
+
+    // Mid-paste interruption during click-to-acquire handoff displays visible warning
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease.promise);
+    const canvas = slot.querySelector("canvas")!;
+    mockCanvasRectAndCapture(canvas);
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 1 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { pointerId: 1 }));
+    });
+    const midPaste = new Event("paste", { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: { getData: (t: string) => string };
+    };
+    Object.defineProperty(midPaste, "clipboardData", {
+      configurable: true,
+      value: { getData: (t: string) => (t === "text/plain" ? "a".repeat(8000) : "") },
+    });
+    await act(async () => {
+      proxy.dispatchEvent(midPaste);
+    });
+    controlSocket.send.mockClear();
+    await act(async () => {
+      lease.resolve({ leaseToken: "lease-mid-paste", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    // First chunk already drained synchronously upon handoff completion; close socket before second chunk at 25ms
+    controlSocket.readyState = 3;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    controlSocket.readyState = 1;
+    const interruptAlert = slot.querySelector('[data-testid="browser-control-error-window-1-tab-1"]');
+    expect(interruptAlert?.textContent).toContain("Paste interrupted");
+
+    // Hiding/minimizing window preserves an interruption warning raised during hide rather than erasing it
+    controlSocket.readyState = 1;
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease2 = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease2.promise);
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 2 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { pointerId: 2 }));
+    });
+    const hidePaste = new Event("paste", { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: { getData: (t: string) => string };
+    };
+    Object.defineProperty(hidePaste, "clipboardData", {
+      configurable: true,
+      value: { getData: (t: string) => (t === "text/plain" ? "b".repeat(8000) : "") },
+    });
+    await act(async () => {
+      proxy.dispatchEvent(hidePaste);
+    });
+    await act(async () => {
+      lease2.resolve({ leaseToken: "lease-hide-paste", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    const hideAlert = slot.querySelector('[data-testid="browser-control-error-window-1-tab-1"]');
+    expect(hideAlert?.textContent).toContain("Paste interrupted");
+  });
+
+  it("captures accepted pointerdown, completes outside-canvas drag cleanly, and never captures rejected/modal downs", async () => {
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-p06-cap" });
+    await render();
+    const canvas = slot.querySelector("canvas")!;
+    const cap = mockCanvasRectAndCapture(canvas);
+
+    // Rejected non-inputAvailable down never captures
+    patchTabInTest("tab-1", { snapshot: { ...readTab("tab-1").snapshot!, inputAvailable: false } });
+    await render();
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 1 }));
+    });
+    expect(cap.setCapture).not.toHaveBeenCalled();
+
+    // Active modal dialog never captures
+    patchTabInTest("tab-1", { snapshot: { ...readTab("tab-1").snapshot!, inputAvailable: true } });
+    await render();
+    await push({ kind: "dialogOpened", dialogId: "dlg-1", dialogType: "alert", message: "wait" });
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 1 }));
+    });
+    expect(cap.setCapture).not.toHaveBeenCalled();
+    await push({ kind: "dialogClosed", dialogId: "dlg-1" });
+
+    // Accepted down captures, drags outside canvas, releases normally, and resulting lostpointercapture does not double-cancel
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 7 }));
+    });
+    expect(cap.setCapture).toHaveBeenCalledWith(7);
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointermove", { clientX: 1200, clientY: 900, pointerId: 7 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 1200, clientY: 900, pointerId: 7 }));
+      canvas.dispatchEvent(makeLostCaptureEvent(7));
+    });
+    expect(cap.releaseCapture).toHaveBeenCalledWith(7);
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerMove", u: 1, v: 1, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 1, v: 1, modifiers: 0 },
+    ]);
+  });
+
+  it("cancels safely on capture failure, unexpected lostpointercapture, privacy, and late capture loss cannot cancel successor gesture", async () => {
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-p06-fail" });
+    await render();
+    const canvas = slot.querySelector("canvas")!;
+    const cap = mockCanvasRectAndCapture(canvas);
+
+    // 1. Capture failure cancels active lease gesture cleanly
+    cap.setCapture.mockImplementationOnce(() => {
+      throw new Error("capture denied");
+    });
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 2 }));
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerCancel" },
+    ]);
+
+    // 2. Unexpected lostpointercapture cancels active drag
+    controlSocket.send.mockClear();
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 3 }));
+    });
+    await act(async () => {
+      cap.releaseCapture(3);
+      canvas.dispatchEvent(makeLostCaptureEvent(3));
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerCancel" },
+    ]);
+
+    // 3. Pending click-to-acquire retains outside pointerup, and late lostpointercapture does not cancel successor gesture
+    controlSocket.send.mockClear();
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease.promise);
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 4 }));
+      canvas.dispatchEvent(makePointerEvent("pointermove", { clientX: 950, clientY: 700, pointerId: 4 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 950, clientY: 700, pointerId: 4 }));
+    });
+    expect(cap.setCapture).toHaveBeenCalledWith(4);
+    expect(cap.releaseCapture).toHaveBeenCalledWith(4);
+    expect(sentInput()).toEqual([]); // no premature dispatch before lease
+    await act(async () => {
+      lease.resolve({ leaseToken: "lease-pending-up", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    await act(async () => vi.runAllTimersAsync());
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerMove", u: 1, v: 1, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 1, v: 1, modifiers: 0 },
+    ]);
+
+    // Start successor gesture on pointerId 4 while a stale lostpointercapture fires; hasPointerCapture(4) === true prevents cancel
+    controlSocket.send.mockClear();
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 4 }));
+      canvas.dispatchEvent(makeLostCaptureEvent(4));
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+    ]);
+
+    // Privacy activation cancels and releases original capture
+    await act(async () => {
+      streamState.suppressed = true;
+      cognitoListeners.forEach((fn) => fn());
+    });
+    expect(cap.releaseCapture).toHaveBeenCalledWith(4);
+    expect(sentInput().map((m) => m.event.kind)).toContain("pointerCancel");
   });
 });
 

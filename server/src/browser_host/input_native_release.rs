@@ -10,7 +10,7 @@ use std::sync::{Arc, Weak};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use super::cdp::CdpClient;
+use super::cdp::{CdpClient, CdpError};
 use super::input::{InputEvent, SessionInputManager};
 use super::media::dispatch_input_event_to_cdp;
 use super::protocol::TargetGeometry;
@@ -33,11 +33,10 @@ impl fmt::Debug for NativeInputTarget {
 }
 
 impl NativeInputTarget {
-    /// Dispatches one event on this exact native identity; the error is the CDP failure text.
-    pub async fn dispatch(&self, event: &InputEvent) -> Result<(), String> {
+    /// Dispatches one event on this exact native identity, preserving outcome ambiguity.
+    pub async fn dispatch(&self, event: &InputEvent) -> Result<(), CdpError> {
         dispatch_input_event_to_cdp(&self.client, &self.page_session_id, &self.geometry, event)
             .await
-            .map_err(|err| err.to_string())
     }
 }
 

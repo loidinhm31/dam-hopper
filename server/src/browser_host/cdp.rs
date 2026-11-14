@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,6 +60,8 @@ enum WriteOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CdpError {
     CommandTimeout,
+    /// Cancellation won before the actor began writing this command.
+    CancelledBeforeWrite,
     TooManyPendingCommands { current: usize, max: usize },
     WriterQueueFull { messages: usize, bytes: usize },
     CommandTooLarge { size: usize, max: usize },
@@ -79,7 +81,8 @@ impl CdpError {
     /// Exhaustive on purpose: a new variant must be classified here.
     pub fn outcome_is_ambiguous(&self) -> bool {
         match self {
-            Self::TooManyPendingCommands { .. }
+            Self::CancelledBeforeWrite
+            | Self::TooManyPendingCommands { .. }
             | Self::WriterQueueFull { .. }
             | Self::CommandTooLarge { .. }
             | Self::Protocol { .. } => false,
@@ -99,6 +102,7 @@ impl fmt::Display for CdpError {
             Self::CommandTimeout => {
                 write!(f, "CDP command timed out after {COMMAND_TIMEOUT_SECS}s")
             }
+            Self::CancelledBeforeWrite => write!(f, "CDP command cancelled before write"),
             Self::TooManyPendingCommands { current, max } => {
                 write!(f, "too many pending commands: {current} >= {max}")
             }
@@ -419,6 +423,27 @@ struct PendingRequest {
     _reservation: CommandReservation,
 }
 
+/// Shared race between a lease fence and the actor's start-of-write claim.
+#[derive(Clone)]
+pub(crate) struct InputCommandCancellation(Arc<AtomicU8>);
+
+impl InputCommandCancellation {
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(AtomicU8::new(0)))
+    }
+
+    pub(crate) fn cancel_before_write(&self) -> bool {
+        match self.0.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) | Err(2) => true,
+            Err(_) => false,
+        }
+    }
+
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 enum ActorMessage {
     SendCommand {
         id: usize,
@@ -427,6 +452,7 @@ enum ActorMessage {
         sender: oneshot::Sender<Result<Value, CdpError>>,
         deadline: Instant,
         nav_meta: Option<(Option<String>, &'static str)>,
+        cancellation: Option<InputCommandCancellation>,
     },
 }
 
@@ -549,13 +575,18 @@ impl ActorShared {
 pub struct PendingCommand {
     receiver: oneshot::Receiver<Result<Value, CdpError>>,
     deadline: Instant,
+    cancellation: Option<InputCommandCancellation>,
 }
 
 impl PendingCommand {
     /// Waits for the response, the command deadline, or actor loss.
-    pub async fn wait(self) -> Result<Value, CdpError> {
-        tokio::select! {
-            res = self.receiver => {
+    pub async fn wait(mut self) -> Result<Value, CdpError> {
+        self.wait_mut().await
+    }
+
+    pub(crate) async fn wait_mut(&mut self) -> Result<Value, CdpError> {
+        let result = tokio::select! {
+            res = &mut self.receiver => {
                 match res {
                     Ok(result) => result,
                     Err(_) => Err(CdpError::ConnectionClosed),
@@ -564,6 +595,18 @@ impl PendingCommand {
             _ = tokio::time::sleep_until(self.deadline) => {
                 Err(CdpError::CommandTimeout)
             }
+        };
+        if result.is_err() && self.cancellation.as_ref().is_some_and(InputCommandCancellation::cancel_before_write) {
+            Err(CdpError::CancelledBeforeWrite)
+        } else {
+            result
+        }
+    }
+
+    /// Atomically suppress an input command if the actor has not started its write.
+    pub(crate) fn cancel_before_write(&self) {
+        if let Some(state) = &self.cancellation {
+            state.cancel_before_write();
         }
     }
 }
@@ -895,7 +938,7 @@ impl CdpClient {
         explicit_epoch: Option<u64>,
         expected_url: Option<&str>,
     ) -> Result<Value, CdpError> {
-        self.enqueue(method, params, session_id, explicit_epoch, expected_url)?
+        self.enqueue(method, params, session_id, explicit_epoch, expected_url, None)?
             .wait()
             .await
     }
@@ -909,6 +952,7 @@ impl CdpClient {
         session_id: Option<&str>,
         explicit_epoch: Option<u64>,
         expected_url: Option<&str>,
+        cancellation: Option<InputCommandCancellation>,
     ) -> Result<PendingCommand, CdpError> {
         let mut reservation = self.budget.reserve_slot()?;
 
@@ -963,6 +1007,7 @@ impl CdpClient {
             sender,
             deadline,
             nav_meta,
+            cancellation: cancellation.clone(),
         }) {
             if let Some(m) = nav_method {
                 notify_nav_response(&self.nav_listeners, session_id, call_id, m, None, true);
@@ -979,7 +1024,18 @@ impl CdpClient {
             .total_commands_sent
             .fetch_add(1, Ordering::Relaxed);
 
-        Ok(PendingCommand { receiver, deadline })
+        Ok(PendingCommand { receiver, deadline, cancellation })
+    }
+
+    /// Queue one input command with a cancellation race against the actor's write claim.
+    pub(crate) fn enqueue_cancellable_input(
+        &self,
+        method: &str,
+        params: &Value,
+        session_id: &str,
+        cancellation: InputCommandCancellation,
+    ) -> Result<PendingCommand, CdpError> {
+        self.enqueue(method, Some(params), Some(session_id), None, None, Some(cancellation))
     }
 
     /// Send a strongly typed command from chromiumoxide_types / chromiumoxide_cdp.
@@ -1017,7 +1073,7 @@ impl CdpClient {
         use chromiumoxide_types::Method;
         let params = ScreencastFrameAckParams::new(frame_session_id);
         let method = params.identifier().to_string();
-        let command = self.enqueue(&method, Some(&params), Some(session_id), None, None)?;
+        let command = self.enqueue(&method, Some(&params), Some(session_id), None, None, None)?;
         Ok(PendingAck {
             command,
             stats: self.stats.clone(),
@@ -1063,7 +1119,7 @@ where
                 // Command submission from clients
                 cmd_opt = self.command_rx.recv() => {
                     match cmd_opt {
-                        Some(ActorMessage::SendCommand { id, json, reservation, sender, deadline, nav_meta }) => {
+                        Some(ActorMessage::SendCommand { id, json, reservation, sender, deadline, nav_meta, cancellation }) => {
                             // Caller cancellation check: skip command if caller abandoned the request before dequeue
                             if sender.is_closed() {
                                 if let Some((ref sid, m)) = nav_meta {
@@ -1079,6 +1135,12 @@ where
                                 }
                                 let _ = sender.send(Err(CdpError::CommandTimeout));
                                 continue;
+                            }
+                            if let Some(state) = &cancellation {
+                                if state.0.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_err() {
+                                    let _ = sender.send(Err(CdpError::CancelledBeforeWrite));
+                                    continue;
+                                }
                             }
 
                             // Bounded, close-cancellable write so peer stalls cannot hold the actor
@@ -1750,6 +1812,14 @@ where
     /// Fail in-flight owners and every command still queued for the writer, and refuse new
     /// submissions, so no caller waits on the (bounded) WS close or its own deadline.
     fn fail_all(&mut self, err: CdpError) {
+        // A policy-command rejection can terminate the actor without answering any of the
+        // unrelated commands already written to Chromium. Their outcomes are ambiguous.
+        let pending_error = match &err {
+            CdpError::Protocol { .. } => {
+                CdpError::Transport(format!("CDP actor terminated after {err}"))
+            }
+            _ => err.clone(),
+        };
         self.command_rx.close();
         while let Ok(ActorMessage::SendCommand { id, sender, nav_meta, .. }) = self.command_rx.try_recv() {
             if let Some((ref sid, m)) = nav_meta {
@@ -1761,7 +1831,7 @@ where
             if let Some((ref sid, m)) = req.nav_meta {
                 notify_nav_response(&self.nav_listeners, sid.as_deref(), id, m, None, true);
             }
-            let _ = req.sender.send(Err(err.clone()));
+            let _ = req.sender.send(Err(pending_error.clone()));
         }
     }
 }
@@ -1960,6 +2030,7 @@ mod tests {
                 sender: sender1,
                 deadline: Instant::now() + Duration::from_secs(10),
                 nav_meta: None,
+                cancellation: None,
             })
             .await
             .unwrap();
@@ -1974,6 +2045,7 @@ mod tests {
                 sender: sender2,
                 deadline: Instant::now() + Duration::from_secs(10),
                 nav_meta: None,
+                cancellation: None,
             })
             .await
             .unwrap();
@@ -2631,15 +2703,81 @@ mod tests {
         assert!(!client.is_closed());
         assert!(!escalated.load(Ordering::SeqCst));
     }
+
+    #[tokio::test]
+    async fn policy_rejection_does_not_claim_pending_command_was_rejected() {
+        use crate::browser_host::config::BrowserHostConfig;
+        use crate::browser_host::network_policy::NetworkPolicy;
+
+        let (in_tx, in_rx) = mpsc::channel(16);
+        let (out_tx, mut out_rx) = mpsc::channel(16);
+        let client = CdpClient::from_ws_stream_with_memory_controller(
+            MockChannelWs { tx: out_tx, rx: in_rx },
+            MemoryAdmissionController::new(64 * 1024),
+        );
+        let policy = Arc::new(NetworkPolicy::from_config(&BrowserHostConfig::default(), false).unwrap());
+        let install = client.install_browser_request_policy(policy, Arc::new(|_| {}));
+        let reply = async {
+            let Message::Text(command) = out_rx.recv().await.unwrap() else { panic!("expected Fetch.enable") };
+            let command: Value = serde_json::from_str(&command).unwrap();
+            in_tx.send(Ok(Message::Text(serde_json::json!({"id": command["id"], "result": {}}).to_string().into()))).await.unwrap();
+        };
+        tokio::join!(install, reply).0.unwrap();
+
+        let rejected_client = client.clone();
+        let rejected = tokio::spawn(async move {
+            rejected_client.send_command("Page.stopScreencast", None, None).await
+        });
+        let Message::Text(command) = out_rx.recv().await.unwrap() else { panic!("expected stop command") };
+        let command: Value = serde_json::from_str(&command).unwrap();
+        in_tx.send(Ok(Message::Text(serde_json::json!({
+            "id": command["id"], "error": {"code": -32603, "message": "stop rejected"}
+        }).to_string().into()))).await.unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(2), rejected).await.unwrap().unwrap().unwrap_err();
+        assert!(!error.outcome_is_ambiguous(), "owned rejection must remain definite: {error:?}");
+
+        let pending_client = client.clone();
+        let pending = tokio::spawn(async move {
+            pending_client.send_command("Page.stopScreencast", None, None).await
+        });
+        let Message::Text(command) = out_rx.recv().await.unwrap() else { panic!("expected stop command") };
+        let command: Value = serde_json::from_str(&command).unwrap();
+        assert_eq!(command["method"], "Page.stopScreencast");
+        in_tx.send(Ok(Message::Text(serde_json::json!({
+            "method": "Fetch.requestPaused",
+            "params": {"requestId": "request", "request": {"url": "https://example.com"}, "resourceType": "Document"}
+        }).to_string().into()))).await.unwrap();
+        let Message::Text(decision) = out_rx.recv().await.unwrap() else { panic!("expected policy decision") };
+        let decision: Value = serde_json::from_str(&decision).unwrap();
+        in_tx.send(Ok(Message::Text(serde_json::json!({
+            "id": decision["id"], "error": {"code": -32603, "message": "policy failed"}
+        }).to_string().into()))).await.unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(2), pending).await.unwrap().unwrap().unwrap_err();
+        assert!(error.outcome_is_ambiguous(), "unanswered stop must be ambiguous: {error:?}");
+    }
 }
 
 #[cfg(test)]
 mod outcome_classification_tests {
     use super::CdpError;
 
+    #[tokio::test]
+    async fn cancelled_unwritten_command_stays_definite_after_deadline() {
+        let cancellation = super::InputCommandCancellation::new();
+        let (_sender, receiver) = tokio::sync::oneshot::channel();
+        let pending = super::PendingCommand {
+            receiver,
+            deadline: tokio::time::Instant::now(),
+            cancellation: Some(cancellation.clone()),
+        };
+        assert!(cancellation.cancel_before_write());
+        assert!(matches!(pending.wait().await, Err(CdpError::CancelledBeforeWrite)));
+    }
+
     #[test]
     fn only_pre_send_rejections_and_browser_errors_prove_the_command_did_not_execute() {
         let definite = [
+            CdpError::CancelledBeforeWrite,
             CdpError::TooManyPendingCommands { current: 64, max: 64 },
             CdpError::WriterQueueFull { messages: 1, bytes: 1 },
             CdpError::CommandTooLarge { size: 2, max: 1 },

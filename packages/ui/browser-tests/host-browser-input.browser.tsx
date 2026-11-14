@@ -530,4 +530,247 @@ describe("host-browser-input in Chromium", () => {
     expect(keyUp.event.kind).toBe("keyUp");
     expect(cancel.event.kind).toBe("pointerCancel");
   });
+
+  it("delivers >4096..16KiB multibyte paste + trailing typing in order to editable DOM and rejects oversize paste visibly", async () => {
+    const errors: string[] = [];
+    const remoteDom = document.createElement("textarea");
+    remoteDom.setAttribute("data-testid", "remote-editable-dom");
+    container.appendChild(remoteDom);
+
+    const captureSocket = {
+      readyState: MockControlSocket.OPEN,
+      sentMessages: [] as string[],
+      send(data: string) {
+        this.sentMessages.push(data);
+        const msg = JSON.parse(data) as InputMessage;
+        if (msg.event.kind === "insertText") {
+          remoteDom.value += msg.event.text;
+        }
+      },
+    } as unknown as MockControlSocket;
+
+    let ctrlRef: BrowserInputController | null = null;
+    let proxyRefLocal: TextInputProxyHandle | null = null;
+    act(() => {
+      root.render(
+        <div>
+          <CanvasView controller={null}>
+            <TextInputProxy
+              ref={(h) => {
+                proxyRefLocal = h;
+              }}
+              controller={ctrlRef}
+              onPasteError={(m) => errors.push(m)}
+            />
+          </CanvasView>
+        </div>,
+      );
+    });
+
+    ctrlRef = new BrowserInputController({
+      getSessionId: () => "sess-paste",
+      getIncarnation: () => "inc-paste",
+      getProfileEpoch: () => "1",
+      getSubscriptionEpoch: () => "sub-paste",
+      getLeaseToken: () => "lease-paste",
+      getViewportEpoch: () => "1",
+      getDrawnRect: () => mockDrawnRect,
+      getControlSocket: () => captureSocket as unknown as WebSocket,
+      onError: (err) => errors.push(err.message),
+    });
+    activeController = ctrlRef;
+
+    act(() => {
+      root.render(
+        <CanvasView controller={null}>
+          <TextInputProxy
+            ref={(h) => {
+              proxyRefLocal = h;
+            }}
+            controller={ctrlRef}
+            onPasteError={(m) => errors.push(m)}
+          />
+        </CanvasView>,
+      );
+    });
+    await vi.waitFor(() => expect(proxyRefLocal).not.toBeNull());
+
+    const textarea = container.querySelector("textarea")!;
+    proxyRefLocal!.focus();
+
+    // Oversize paste (>16 KiB) rejected before sending any prefix
+    const oversize = "SECRET_" + "a".repeat(16 * 1024);
+    const oversizeTransfer = new DataTransfer();
+    oversizeTransfer.setData("text/plain", oversize);
+    textarea.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: oversizeTransfer, bubbles: true, cancelable: true }),
+    );
+    expect(remoteDom.value).toBe("");
+    expect(errors.at(-1)).toContain("16 KiB");
+    expect(errors.at(-1)).not.toContain("SECRET_");
+
+    // Valid 15 KiB multibyte UTF-8 paste + real trailing keyboard typing
+    const pattern = "đặng🙂a"; // 12 UTF-8 bytes
+    const multibytePaste = pattern.repeat(Math.floor((15 * 1024) / 12));
+    const validTransfer = new DataTransfer();
+    validTransfer.setData("text/plain", multibytePaste);
+    textarea.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: validTransfer, bubbles: true, cancelable: true }),
+    );
+    await userEvent.keyboard("tail");
+    expect(remoteDom.value).toBe(multibytePaste + "tail");
+  });
+
+  it("captures real Chromium pointer across outside-canvas drag and releases cleanly on outside mouseup", async () => {
+    const remoteLog: string[] = [];
+    let capturedId: number | null = null;
+    const dragContainer = document.createElement("div");
+    dragContainer.style.cssText = "display:flex;width:640px;height:240px;";
+    container.appendChild(dragContainer);
+    const dragRoot = createRoot(dragContainer);
+    const capSocket = {
+      readyState: MockControlSocket.OPEN,
+      send(data: string) {
+        remoteLog.push((JSON.parse(data) as InputMessage).event.kind);
+      },
+    } as unknown as WebSocket;
+    const ctrl = new BrowserInputController({
+      getSessionId: () => "sess-cap",
+      getIncarnation: () => "inc-cap",
+      getProfileEpoch: () => "1",
+      getSubscriptionEpoch: () => "sub-cap",
+      getLeaseToken: () => "lease-cap",
+      getViewportEpoch: () => "1",
+      getDrawnRect: () => ({ ...mockDrawnRect, drawX: 0, drawY: 0, drawWidth: 320, drawHeight: 240 }),
+      getControlSocket: () => capSocket,
+    });
+    activeController = ctrl;
+
+    let outsideEl: HTMLDivElement | null = null;
+    let canvasEl: HTMLCanvasElement | null = null;
+    act(() => {
+      dragRoot.render(
+        <>
+          <div style={{ width: 320, height: 240, position: "relative" }}>
+            <CanvasView
+              ref={(el) => {
+                canvasEl = el;
+              }}
+              controller={null}
+              onCanvasPointerDown={(e) => {
+                if (!ctrl.handlePointerDown(e)) return;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                capturedId = e.pointerId;
+                remoteLog.push(`capture:${e.pointerId}:has=${e.currentTarget.hasPointerCapture(e.pointerId)}`);
+              }}
+              onCanvasPointerMove={(e) => {
+                ctrl.handlePointerMove(e);
+              }}
+              onCanvasPointerUp={(e) => {
+                if (capturedId === e.pointerId) {
+                  capturedId = null;
+                  if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  }
+                }
+                ctrl.handlePointerUp(e);
+              }}
+              onCanvasLostPointerCapture={(e) => {
+                remoteLog.push(`lost:${e.pointerId}:captured=${capturedId}`);
+                if (capturedId === e.pointerId) {
+                  capturedId = null;
+                  ctrl.handlePointerCancel();
+                }
+              }}
+            />
+          </div>
+          <div
+            ref={(el) => {
+              outsideEl = el;
+            }}
+            data-testid="outside-drag-target"
+            style={{ width: 320, height: 240 }}
+          />
+        </>,
+      );
+    });
+    await vi.waitFor(() => expect(canvasEl).not.toBeNull());
+    await vi.waitFor(() => expect(outsideEl).not.toBeNull());
+
+    await userEvent.dragAndDrop(canvasEl!, outsideEl!);
+    await vi.waitFor(() => expect(remoteLog).toContain("pointerUp"));
+    await vi.waitFor(() => expect(remoteLog.some((e) => e.startsWith("lost:"))).toBe(true));
+    expect(remoteLog).toContain("pointerDown");
+    expect(remoteLog.indexOf("pointerDown")).toBeLessThan(remoteLog.indexOf("pointerUp"));
+    expect(remoteLog).toContain("capture:1:has=true");
+    expect(remoteLog).toContain("lost:1:captured=null");
+    expect(remoteLog).not.toContain("pointerCancel");
+    expect(ctrl.getHeldButtons().size).toBe(0);
+
+    act(() => {
+      dragRoot.unmount();
+    });
+    dragContainer.remove();
+  });
+
+  it("applies normalized line/page/pixel wheel deltas to a real Chromium scrollable container independent of DPR/downscale", async () => {
+    const scroller = document.createElement("div");
+    scroller.style.cssText = "width:300px;height:200px;overflow:auto;";
+    const inner = document.createElement("div");
+    inner.style.cssText = "width:2000px;height:3000px;";
+    scroller.appendChild(inner);
+    document.body.appendChild(scroller);
+
+    const wheelDrawn: DrawnRect = {
+      ...mockDrawnRect,
+      imageWidth: 640,
+      imageHeight: 360,
+      geometry: {
+        ...mockDrawnRect.geometry,
+        cssWidth: 1280,
+        cssHeight: 720,
+        dpr: 2,
+      },
+    };
+
+    const wheelSocket = {
+      readyState: MockControlSocket.OPEN,
+      sentMessages: [] as string[],
+      send(data: string) {
+        this.sentMessages.push(data);
+        const msg = JSON.parse(data) as InputMessage;
+        if (msg.event.kind === "wheel") {
+          scroller.scrollBy(msg.event.delta_x, msg.event.delta_y);
+        }
+      },
+    } as unknown as MockControlSocket;
+
+    act(() => {
+      root.render(
+        <TestHarness
+          socket={wheelSocket}
+          drawnRect={wheelDrawn}
+          onControllerReady={(ctrl, proxy) => {
+            activeController = ctrl;
+            activeProxy = proxy;
+          }}
+        />,
+      );
+    });
+    await vi.waitFor(() => expect(activeController).not.toBeNull());
+    const canvas = container.querySelector("canvas")!;
+
+    // Line mode: deltaY=3 -> 48 CSS px
+    canvas.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 240, deltaMode: 1, deltaY: 3, bubbles: true }));
+    await vi.waitFor(() => expect(scroller.scrollTop).toBe(48));
+
+    // Page mode: deltaY=1 -> cssHeight (720) CSS px, independent of DPR=2 and 640x360 JPEG
+    canvas.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 240, deltaMode: 2, deltaY: 1, bubbles: true }));
+    await vi.waitFor(() => expect(scroller.scrollTop).toBe(768));
+
+    // Signed pixel delta: -18 CSS px
+    canvas.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 240, deltaMode: 0, deltaY: -18, bubbles: true }));
+    await vi.waitFor(() => expect(scroller.scrollTop).toBe(750));
+    scroller.remove();
+  });
 });

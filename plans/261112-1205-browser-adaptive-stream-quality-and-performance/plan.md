@@ -1,7 +1,7 @@
 ---
 title: "Browser adaptive stream quality and performance"
 description: "Adapt shared Browser image fidelity and per-viewer pacing to measured delivery while preserving layout, input and audio safety."
-status: in-progress
+status: completed
 priority: P2
 effort: 82h
 branch: feat/ai-os-redesign
@@ -21,10 +21,10 @@ Improve existing server Chromium → CDP JPEG → BHJF/WebSocket → React canva
 | [03 Server adaptive capture tiers](phase-03-server-adaptive-capture-tiers.md) | Completed (2026-11-12) · 2/2 tasks | 20h |
 | [04 Viewer quality controls](phase-04-viewer-quality-controls.md) | Completed (2026-11-13) · 2/2 tasks | 10h |
 | [05 Calibration, qualification and docs](phase-05-calibration-qualification-and-docs.md) | Completed (2026-11-14) · 2/2 tasks | 12h |
-| [06 Input interaction defects](phase-06-input-interaction-defects.md) | Pending · 0/4 tasks | 10h |
+| [06 Input interaction defects](phase-06-input-interaction-defects.md) | Completed (2026-11-14) · 4/4 tasks | 10h |
 
 <!-- evcrate-progress:start -->
-Tasks: 15/19 completed; remaining: 4.
+Tasks: 19/19 completed; remaining: 0.
 <!-- evcrate-progress:end -->
 
 ## Settled design

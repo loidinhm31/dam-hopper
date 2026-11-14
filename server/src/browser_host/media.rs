@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -30,10 +32,11 @@ use crate::browser_host::auth::{
 };
 use crate::browser_host::cdp::{CdpClient, CdpError, CdpLifecycleEvent};
 use crate::browser_host::control_input::{
-    handle_control_text, input_unavailable_json, ControlInputContext, ControlInputOutcome,
+    admit_control_text, drain_control_input, input_unavailable_json, ControlInputContext,
+    ControlInputOutcome,
 };
 use crate::browser_host::diagnostics::{global_stream_diagnostics, TrackedBhjfFrame};
-use crate::browser_host::input::InputEvent;
+use crate::browser_host::input::{InputEvent, SessionInputManager};
 use crate::browser_host::manager::{
     BrowserInstanceHandle, NativeCloseOutcome, NativeControl, NativeControlError,
     NativeCreateError, NativeFaults, NativePumpRequest,
@@ -2329,13 +2332,22 @@ pub async fn control_ws_handler(
             Ok(registration) => registration,
             Err(resp) => return resp,
         };
+    let session_id = admitted.browser_session_id.clone().unwrap_or_default();
+    let viewer_id = admitted.viewer_id.clone().unwrap_or_default();
+    let mut connection_cleanup = ControlSessionCleanup {
+        manager: None,
+        session_id: session_id.clone(),
+        viewer_id: viewer_id.clone(),
+        conn_id,
+        armed: true,
+        fence_holder: false,
+    };
     if let Err(resp) = attachment_session_live(&admitted).await {
         att_manager.unregister_connection(conn_id).await;
+        connection_cleanup.armed = false;
         return resp;
     }
 
-    let session_id = admitted.browser_session_id.clone().unwrap_or_default();
-    let viewer_id = admitted.viewer_id.clone().unwrap_or_default();
     let sub_epoch = admitted.subscription_epoch.clone().unwrap_or_default();
     let effective_deadline = admitted.effective_deadline;
     let updates = match global_session_registry()
@@ -2351,6 +2363,7 @@ pub async fn control_ws_handler(
         Ok(updates) => updates,
         Err(_) => {
             att_manager.unregister_connection(conn_id).await;
+            connection_cleanup.armed = false;
             return browser_error_response(
                 StatusCode::NOT_FOUND,
                 "sessionNotFound",
@@ -2360,6 +2373,7 @@ pub async fn control_ws_handler(
     };
     let Some(paired_rx) = att_manager.subscribe_pair(conn_id).await else {
         att_manager.unregister_connection(conn_id).await;
+        connection_cleanup.armed = false;
         return browser_error_response(
             StatusCode::FORBIDDEN,
             "pairingFailed",
@@ -2384,8 +2398,184 @@ pub async fn control_ws_handler(
                 conn_id,
                 paired_rx,
                 permit,
+                connection_cleanup,
             )
         })
+}
+
+struct ControlSessionCleanup {
+    manager: Option<Arc<SessionInputManager>>,
+    session_id: String,
+    viewer_id: String,
+    conn_id: Uuid,
+    armed: bool,
+    fence_holder: bool,
+}
+
+impl Drop for ControlSessionCleanup {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let manager = self.manager.take();
+        let session_id = self.session_id.clone();
+        let viewer_id = self.viewer_id.clone();
+        let conn_id = self.conn_id;
+        let fence_holder = self.fence_holder;
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let manager = match manager {
+                    Some(manager) => Some(manager),
+                    None => crate::api::browser_host::global_input_managers()
+                        .read().await.get(&session_id).cloned(),
+                };
+                let cleanup = if let Some(manager) = &manager {
+                    let cleanup = if fence_holder {
+                        manager.fence_control_holder(&viewer_id).await
+                    } else {
+                        None
+                    };
+                    manager.discard_queued_from(conn_id).await;
+                    cleanup
+                } else {
+                    None
+                };
+                global_attachment_manager().unregister_connection(conn_id).await;
+                if let Some(cleanup) = cleanup {
+                    match cleanup.await {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(error)) => warn!(%viewer_id, %error, "aborted control cleanup failed"),
+                        Err(error) => warn!(%viewer_id, %error, "aborted control cleanup task failed"),
+                    }
+                }
+            });
+        }
+    }
+}
+
+async fn publish_control_snapshot(
+    ws_sink: &mut futures_util::stream::SplitSink<WebSocket, AxumWsMessage>,
+    updates: &mut watch::Receiver<ServerControlEvent>,
+    paired: bool,
+    effective_deadline: Option<DateTime<Utc>>,
+    cancel_token: &CancellationToken,
+    subscription_epoch: &str,
+) -> bool {
+    // Release the watch borrow before the socket await: producers never wait on
+    // a slow viewer and only one latest-state slot is retained per session.
+    let Ok((json, retired)) = serialize_control_snapshot(updates, paired) else {
+        return false;
+    };
+    let json_len = json.len();
+    let Some(deadline) = control_write_deadline(effective_deadline) else {
+        return false;
+    };
+    let write_started = Instant::now();
+    let sent = tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => false,
+        result = timeout(deadline, ws_sink.send(AxumWsMessage::Text(json.into()))) => {
+            matches!(result, Ok(Ok(())))
+        }
+    };
+    if sent {
+        let write_dur = Instant::now().saturating_duration_since(write_started);
+        global_stream_diagnostics().record_control_write(subscription_epoch, json_len, write_dur);
+    }
+    sent && !retired
+}
+
+async fn handle_control_input_outcome(
+    ws_sink: &mut futures_util::stream::SplitSink<WebSocket, AxumWsMessage>,
+    outcome: ControlInputOutcome,
+) -> bool {
+    match outcome {
+        ControlInputOutcome::Continue => true,
+        ControlInputOutcome::ReleaseFailed(reason) => {
+            if let Some(json) = input_unavailable_json(&reason) {
+                let _ = timeout(WRITE_DEADLINE, ws_sink.send(AxumWsMessage::Text(json.into()))).await;
+            }
+            false
+        }
+        ControlInputOutcome::DispatchFailed => {
+            let status = ServerControlEvent::Status {
+                input_available: false,
+                unavailable_reason: Some("nativeInputDispatchFailed".into()),
+            };
+            if let Ok(json) = serde_json::to_string(&status) {
+                let _ = timeout(WRITE_DEADLINE, ws_sink.send(AxumWsMessage::Text(json.into()))).await;
+            }
+            false
+        }
+    }
+}
+
+enum ControlSelectTurn<M> {
+    Cancelled,
+    Deadline,
+    PairChanged(Result<(), watch::error::RecvError>),
+    Update(Result<(), watch::error::RecvError>),
+    InputOutcome(ControlInputOutcome),
+    WsMessage(Option<M>),
+}
+
+async fn poll_control_select_turn<S, M, F>(
+    initial_update: bool,
+    prefer_input: bool,
+    cancel_token: &CancellationToken,
+    mut deadline_sleep: Pin<&mut Option<tokio::time::Sleep>>,
+    paired_rx: &mut watch::Receiver<bool>,
+    updates: &mut watch::Receiver<ServerControlEvent>,
+    active_input: &mut Option<Pin<Box<F>>>,
+    ws_stream: &mut S,
+) -> ControlSelectTurn<M>
+where
+    S: futures_util::Stream<Item = M> + Unpin,
+    F: Future<Output = ControlInputOutcome> + Send + ?Sized,
+{
+    let deadline_fut = async {
+        if let Some(sleep_fut) = deadline_sleep.as_mut().as_pin_mut() {
+            sleep_fut.await;
+        } else {
+            futures_util::future::pending::<()>().await;
+        }
+    };
+    let update_fut = async {
+        if initial_update {
+            Ok(())
+        } else {
+            updates.changed().await
+        }
+    };
+    let has_active_input = active_input.is_some();
+    let input_fut = async {
+        match active_input.as_mut() {
+            Some(future) => future.await,
+            None => futures_util::future::pending().await,
+        }
+    };
+
+    if initial_update || !prefer_input {
+        tokio::select! {
+            biased;
+            _ = cancel_token.cancelled() => ControlSelectTurn::Cancelled,
+            _ = deadline_fut => ControlSelectTurn::Deadline,
+            changed = paired_rx.changed() => ControlSelectTurn::PairChanged(changed),
+            changed = update_fut => ControlSelectTurn::Update(changed),
+            outcome = input_fut, if has_active_input => ControlSelectTurn::InputOutcome(outcome),
+            msg = ws_stream.next() => ControlSelectTurn::WsMessage(msg),
+        }
+    } else {
+        tokio::select! {
+            biased;
+            _ = cancel_token.cancelled() => ControlSelectTurn::Cancelled,
+            _ = deadline_fut => ControlSelectTurn::Deadline,
+            changed = paired_rx.changed() => ControlSelectTurn::PairChanged(changed),
+            outcome = input_fut, if has_active_input => ControlSelectTurn::InputOutcome(outcome),
+            msg = ws_stream.next() => ControlSelectTurn::WsMessage(msg),
+            changed = update_fut => ControlSelectTurn::Update(changed),
+        }
+    }
 }
 
 async fn run_control_session(
@@ -2401,13 +2591,25 @@ async fn run_control_session(
     conn_id: Uuid,
     mut paired_rx: watch::Receiver<bool>,
     _permit: PairPermit,
+    mut connection_cleanup: ControlSessionCleanup,
 ) {
     let (mut ws_sink, mut ws_stream) = socket.split();
+    connection_cleanup.fence_holder = true;
     let input_manager = crate::api::browser_host::get_or_create_input_manager(&session_id).await;
+    connection_cleanup.manager = Some(input_manager.clone());
+    let drain_context = ControlInputContext {
+        input_manager: &input_manager,
+        session_id: &session_id,
+        viewer_id: &viewer_id,
+        subscription_epoch: &subscription_epoch,
+        paired: true,
+    };
+    let mut active_input: Option<Pin<Box<dyn Future<Output = ControlInputOutcome> + Send + '_>>> = None;
 
     let mut message_count_in_sec = 0usize;
     let mut rate_window_start = Instant::now();
     let mut initial_update = true;
+    let mut prefer_input = false;
 
     let deadline_sleep = match effective_deadline {
         Some(dl) => {
@@ -2420,68 +2622,64 @@ async fn run_control_session(
     tokio::pin!(deadline_sleep);
 
     loop {
-        tokio::select! {
-            biased;
-            _ = cancel_token.cancelled() => {
+        let turn = poll_control_select_turn(
+            initial_update,
+            prefer_input,
+            &cancel_token,
+            deadline_sleep.as_mut(),
+            &mut paired_rx,
+            &mut updates,
+            &mut active_input,
+            &mut ws_stream,
+        )
+        .await;
+
+        match turn {
+            ControlSelectTurn::Cancelled => {
                 debug!(viewer_id = %viewer_id, "control session cancelled (auth revoke or pair teardown)");
                 break;
             }
-            _ = async {
-                if let Some(sleep_fut) = deadline_sleep.as_mut().as_pin_mut() {
-                    sleep_fut.await;
-                } else {
-                    futures_util::future::pending::<()>().await;
-                }
-            } => {
+            ControlSelectTurn::Deadline => {
                 warn!(viewer_id = %viewer_id, "control session reached absolute auth deadline; closing");
                 break;
             }
-            // The pair became ready or incomplete: re-publish the snapshot with its input
-            // readiness (unpaired control never advertises input).
-            changed = paired_rx.changed() => {
+            ControlSelectTurn::PairChanged(changed) => {
+                // The pair became ready or incomplete: re-publish the snapshot with its input
+                // readiness (unpaired control never advertises input).
                 if changed.is_err() {
                     break;
                 }
                 initial_update = true;
             }
-            changed = async {
-                if initial_update {
-                    Ok(())
-                } else {
-                    updates.changed().await
-                }
-            } => {
+            ControlSelectTurn::Update(changed) => {
                 initial_update = false;
                 if changed.is_err() {
                     break;
                 }
-                // Release the watch borrow before the socket await: producers never wait on
-                // a slow viewer and only one latest-state slot is retained per session.
-                let Ok((json, retired)) = serialize_control_snapshot(&mut updates, *paired_rx.borrow()) else {
+                let paired = *paired_rx.borrow();
+                if !publish_control_snapshot(
+                    &mut ws_sink,
+                    &mut updates,
+                    paired,
+                    effective_deadline,
+                    &cancel_token,
+                    &subscription_epoch,
+                )
+                .await
+                {
                     break;
-                };
-                let json_len = json.len();
-                let Some(deadline) = control_write_deadline(effective_deadline) else {
-                    break;
-                };
-                let write_started = Instant::now();
-                let sent = tokio::select! {
-                    biased;
-                    _ = cancel_token.cancelled() => false,
-                    result = timeout(deadline, ws_sink.send(AxumWsMessage::Text(json.into()))) => {
-                        matches!(result, Ok(Ok(())))
-                    }
-                };
-                if sent {
-                    let write_dur = Instant::now().saturating_duration_since(write_started);
-                    global_stream_diagnostics()
-                        .record_control_write(&subscription_epoch, json_len, write_dur);
                 }
-                if !sent || retired {
+                prefer_input = true;
+            }
+            ControlSelectTurn::InputOutcome(outcome) => {
+                active_input = None;
+                prefer_input = false;
+                if !handle_control_input_outcome(&mut ws_sink, outcome).await {
                     break;
                 }
             }
-            msg = ws_stream.next() => {
+            ControlSelectTurn::WsMessage(msg) => {
+                prefer_input = false;
                 let msg = match msg {
                     Some(Ok(m)) => m,
                     Some(Err(e)) => {
@@ -2511,24 +2709,25 @@ async fn run_control_session(
                         }
 
                         let paired = *paired_rx.borrow();
-                        let outcome = handle_control_text(
-                            &ControlInputContext {
-                                input_manager: &input_manager,
-                                session_id: &session_id,
-                                viewer_id: &viewer_id,
-                                subscription_epoch: &subscription_epoch,
-                                paired,
-                            },
-                            &text,
-                        )
-                        .await;
-                        if let ControlInputOutcome::ReleaseFailed(reason) = outcome {
-                            // Native state is uncertain: tell the viewer input is unavailable
-                            // and cancel this channel (the pair goes with it).
-                            if let Some(json) = input_unavailable_json(&reason) {
-                                let _ = timeout(WRITE_DEADLINE, ws_sink.send(AxumWsMessage::Text(json.into()))).await;
+                        let context = ControlInputContext {
+                            input_manager: &input_manager,
+                            session_id: &session_id,
+                            viewer_id: &viewer_id,
+                            subscription_epoch: &subscription_epoch,
+                            paired,
+                        };
+                        match admit_control_text(&context, &text, Some(conn_id)).await {
+                            Ok(true) => {
+                                if active_input.is_none() {
+                                    active_input = Some(Box::pin(drain_control_input(&drain_context, Some(conn_id))));
+                                }
                             }
-                            break;
+                            Ok(false) => {}
+                            Err(outcome) => {
+                                if !handle_control_input_outcome(&mut ws_sink, outcome).await {
+                                    break;
+                                }
+                            }
                         }
                     }
                     AxumWsMessage::Close(_) => break,
@@ -2537,6 +2736,14 @@ async fn run_control_session(
             }
         }
     }
+
+    // Dropping the persistent dispatch transfers any claimed native command to its
+    // cancellation-safe owner. Retire the pair before waiting for native cleanup.
+    drop(active_input);
+    let cleanup = input_manager.fence_control_holder(&viewer_id).await;
+    input_manager.discard_queued_from(conn_id).await;
+    global_attachment_manager().unregister_connection(conn_id).await;
+    connection_cleanup.armed = false;
 
     // Native retirement can publish and revoke attachments in the same scheduler turn.
     // Best-effort final truth must not bypass auth revocation: recheck live admission,
@@ -2575,15 +2782,14 @@ async fn run_control_session(
     }
     drop(updates);
 
-    // Teardown: the lease ends (releasing held native input on its original native identity)
-    // only if this viewer is the current lease holder, decided atomically.
-    if let Err(err) = input_manager.revoke_lease_if_holder(&viewer_id).await {
-        warn!(viewer_id = %viewer_id, error = %err, "control teardown: native input release failed");
+    if let Some(cleanup) = cleanup {
+        match cleanup.await {
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => warn!(viewer_id = %viewer_id, error = %err, "control teardown: native input release failed"),
+            Err(err) => warn!(viewer_id = %viewer_id, error = %err, "control teardown: cleanup task failed"),
+        }
     }
     global_stream_diagnostics().clear_pending_control_write(&subscription_epoch);
-    global_attachment_manager()
-        .unregister_connection(conn_id)
-        .await;
     let _ = timeout(WRITE_DEADLINE, ws_sink.send(AxumWsMessage::Close(None))).await;
 }
 
@@ -2785,6 +2991,21 @@ fn input_event_command(
     }
 }
 
+/// Admit input synchronously so its response owner can survive handler cancellation.
+pub(crate) fn enqueue_cancellable_input(
+    client: &CdpClient,
+    page_session_id: &str,
+    geom: &TargetGeometry,
+    event: &InputEvent,
+    mouse_ctx: crate::browser_host::input::MouseDispatchContext,
+    cancellation: crate::browser_host::cdp::InputCommandCancellation,
+) -> Result<Option<crate::browser_host::cdp::PendingCommand>, CdpError> {
+    let Some((method, params)) = input_event_command(geom, event, mouse_ctx) else {
+        return Ok(None);
+    };
+    client.enqueue_cancellable_input(method, &params, page_session_id, cancellation).map(Some)
+}
+
 /// Dispatches one input event on the given native page session with explicit mouse button context.
 pub async fn dispatch_input_event_to_cdp_with_mouse(
     client: &CdpClient,
@@ -2823,3 +3044,133 @@ pub async fn dispatch_input_event_to_cdp(
 #[cfg(test)]
 #[path = "media_keyboard_tests.rs"]
 mod keyboard_tests;
+
+#[cfg(test)]
+mod control_arbitration_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn control_select_alternates_ready_updates_and_input_under_safety_priority() {
+        let cancel_token = CancellationToken::new();
+        let (_pair_tx, mut paired_rx) = watch::channel(true);
+        let (upd_tx, mut updates) = watch::channel(ServerControlEvent::Status {
+            input_available: true,
+            unavailable_reason: None,
+        });
+        let mut ws_stream = futures_util::stream::iter(vec![1u32, 2, 3, 4]);
+        let mut active_input: Option<Pin<Box<dyn Future<Output = ControlInputOutcome> + Send>>> =
+            Some(Box::pin(futures_util::future::ready(ControlInputOutcome::Continue)));
+        let deadline_sleep: Option<tokio::time::Sleep> = None;
+        tokio::pin!(deadline_sleep);
+
+        // Keep updates continuously ready on every turn.
+        let mark_update_ready = || {
+            let _ = upd_tx.send(ServerControlEvent::Status {
+                input_available: true,
+                unavailable_reason: None,
+            });
+        };
+
+        // Turn 0: initial_update=true must select Update even with active_input & ws_stream ready.
+        mark_update_ready();
+        let mut initial_update = true;
+        let mut prefer_input = false;
+        let t0 = poll_control_select_turn(
+            initial_update,
+            prefer_input,
+            &cancel_token,
+            deadline_sleep.as_mut(),
+            &mut paired_rx,
+            &mut updates,
+            &mut active_input,
+            &mut ws_stream,
+        )
+        .await;
+        assert!(matches!(t0, ControlSelectTurn::Update(Ok(()))));
+        initial_update = false;
+        prefer_input = true;
+
+        // Turn 1: both Update and InputOutcome ready -> must select InputOutcome (never 2 updates ahead of ready input).
+        mark_update_ready();
+        let t1 = poll_control_select_turn(
+            initial_update,
+            prefer_input,
+            &cancel_token,
+            deadline_sleep.as_mut(),
+            &mut paired_rx,
+            &mut updates,
+            &mut active_input,
+            &mut ws_stream,
+        )
+        .await;
+        assert!(matches!(t1, ControlSelectTurn::InputOutcome(ControlInputOutcome::Continue)));
+        active_input = None;
+        prefer_input = false;
+
+        // Turn 2: continuous ws_stream input + ready Update -> must select Update (input cannot starve updates).
+        mark_update_ready();
+        let t2 = poll_control_select_turn(
+            initial_update,
+            prefer_input,
+            &cancel_token,
+            deadline_sleep.as_mut(),
+            &mut paired_rx,
+            &mut updates,
+            &mut active_input,
+            &mut ws_stream,
+        )
+        .await;
+        assert!(matches!(t2, ControlSelectTurn::Update(Ok(()))));
+        prefer_input = true;
+
+        // Turn 3: both Update and WsMessage ready -> must select WsMessage.
+        mark_update_ready();
+        let t3 = poll_control_select_turn(
+            initial_update,
+            prefer_input,
+            &cancel_token,
+            deadline_sleep.as_mut(),
+            &mut paired_rx,
+            &mut updates,
+            &mut active_input,
+            &mut ws_stream,
+        )
+        .await;
+        assert!(matches!(t3, ControlSelectTurn::WsMessage(Some(1))));
+
+        // Turn 4: already-ready cancellation wins ahead of both ready Update and ready WsMessage.
+        mark_update_ready();
+        cancel_token.cancel();
+        let t4 = poll_control_select_turn(
+            initial_update,
+            true,
+            &cancel_token,
+            deadline_sleep.as_mut(),
+            &mut paired_rx,
+            &mut updates,
+            &mut active_input,
+            &mut ws_stream,
+        )
+        .await;
+        assert!(matches!(t4, ControlSelectTurn::Cancelled));
+
+        // Turn 5: already-elapsed deadline wins ahead of both ready Update and ready WsMessage.
+        let active_cancel = CancellationToken::new();
+        let expired_sleep = Some(sleep(Duration::from_millis(1)));
+        tokio::pin!(expired_sleep);
+        sleep(Duration::from_millis(15)).await;
+        mark_update_ready();
+        let t5 = poll_control_select_turn(
+            initial_update,
+            true,
+            &active_cancel,
+            expired_sleep.as_mut(),
+            &mut paired_rx,
+            &mut updates,
+            &mut active_input,
+            &mut ws_stream,
+        )
+        .await;
+        assert!(matches!(t5, ControlSelectTurn::Deadline));
+    }
+}

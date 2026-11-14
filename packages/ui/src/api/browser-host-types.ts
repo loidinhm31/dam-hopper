@@ -820,8 +820,6 @@ export type InputEvent =
       kind: "wheel";
       u: number;
       v: number;
-      deltaX: number;
-      deltaY: number;
       delta_x: number;
       delta_y: number;
       modifiers: number;

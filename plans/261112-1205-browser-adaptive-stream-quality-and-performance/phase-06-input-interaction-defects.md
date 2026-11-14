@@ -4,7 +4,7 @@
 [Overview](plan.md) · [Pacing prerequisite](phase-02-hot-path-and-client-performance.md) · [Dedupe authority](../reports/planner-261112-1205-browser-adaptive-stream-quality.md) · [UI findings F3/F4/F6](../reports/code-reviewer-261112-1205-browser-ui-client.md) · [Transport finding F5](../reports/code-reviewer-261112-1205-browser-server-media-transport.md) · [Native lifecycle prerequisite](../261109-2251-host-browser-review-remediation/phase-02-stream-input-contracts.md) · [Client/interaction prerequisites](../261109-2251-host-browser-review-remediation/phase-03-os-viewer-lifecycle.md).
 
 ## Overview
-Date: 2026-11-12 · Priority: P2 paste/drag/wheel; P3 control-select fairness · Implementation status: pending (0/4) · Review status: coordinator review pending · Effort: 10h (4h/3h/2h/1h).
+Date: 2026-11-12 · Priority: P2 paste/drag/wheel; P3 control-select fairness · Implementation status: completed (4/4, 2026-11-14) · Review status: Cycle 3 terminal review 2026-11-14 (8/10, 0 critical; user approved with noted H2 test-coupling warning; Phase06TesterCycle3: 423/423 tests passed, 0 failures) · Effort: 10h (4h/3h/2h/1h).
 User-approved scope extension. All tasks follow Phase 02 `pace-client-input`; external gates: `fence-client-input-decoding`, `wire-browser-interaction`, `enforce-paired-input-lifecycle`. Coordinator verifies actual upstream receipts before scheduling. Phase 06 does not block Phases 03–05; one integration owner serializes overlapping input/controller/host/media/test edits with those phases and remediation. No second owner, task-state hydration or implementation approval.
 
 ## Key Insights
@@ -78,10 +78,10 @@ Exact create/modify ownership in task allowlists; modify existing production mod
   }
 ]
 ```
-- [ ] <!-- evcrate-task:preserve-bounded-paste --> Deliver complete bounded paste or reject visibly
-- [ ] <!-- evcrate-task:capture-accepted-pointer --> Capture accepted drag and cancel lost capture
-- [ ] <!-- evcrate-task:normalize-wheel-units --> Normalize CSS-pixel wheel deltas before coalescing
-- [ ] <!-- evcrate-task:arbitrate-control-input-fairly --> Alternate update/input readiness beneath safety priority
+- [x] <!-- evcrate-task:preserve-bounded-paste --> Deliver complete bounded paste or reject visibly (done 2026-11-14; Cycle 3 user-approved with noted H2 test-coupling warning)
+- [x] <!-- evcrate-task:capture-accepted-pointer --> Capture accepted drag and cancel lost capture (done 2026-11-14)
+- [x] <!-- evcrate-task:normalize-wheel-units --> Normalize CSS-pixel wheel deltas before coalescing (done 2026-11-14)
+- [x] <!-- evcrate-task:arbitrate-control-input-fairly --> Alternate update/input readiness beneath safety priority (done 2026-11-14; Cycle 3 verified)
 
 ## Success Criteria
 All four consumer outcomes demonstrated: exact complete accepted paste/no-prefix visible rejection or explicit interruption uncertainty; native release outside canvas; expected CSS scroll for line/page/pixel input; native input processed while session updates continue. Preserve unified pacing, sequence/lease/owner/privacy/modal fences and upstream native cleanup. Commands above are future repository-guided checks, not executed receipts; coordinator runs coherent checks after shared edits. Phases 03–05 remain schedulable without Phase 06 completion, subject to single-writer arbitration.
@@ -92,5 +92,19 @@ Queue admission is not remote transaction commit: interruption can leave a prefi
 ## Security Considerations
 Paste is private user data: never log clipboard text/chunks, tokens or raw input; visible errors are content-free and owner-qualified. Total-size/queue/message/rate bounds are DoS protection, not permission to expand server ceilings; bound length scan/allocation and discard cancelled buffers. Pointer capture cannot bypass Cognito privacy, modal input isolation, visibility, trusted hit geometry, current lease/pair or original-channel cleanup. Wheel normalization does not grant authority; only existing authenticated input path. Fairness preserves cancellation/auth deadlines and no unauthenticated surface/new protocol kind.
 
-## Next steps
-Coordinator reviews extension and prerequisite receipts, serializes overlapping owners, then schedules these four tasks after pacing without making them gates for Phases03–05. Reconcile Phase06 behavior in the existing docs/release handoff once implemented; no new docs owner/task or edit to another plan. Final acceptance includes all six phases and upstream Browser gates; no builds/tests/live probes, activation or task hydration run during authoring.
+## Terminal Review & Handoff (Cycle 3, 2026-11-14)
+- **Review score:** 8/10 (0 critical findings, 0 high blocking findings; 1 noted H2 test-coupling warning). User approved.
+- **Verification (`Phase06TesterCycle3`):** 423/423 tests passed, 0 failures across 5 validation suites:
+  - UI unit tests (`src/browser-host`, `src/os/BrowserStreamKeepAliveHost.test.tsx`): 191/191 passed
+  - UI browser integration tests (`host-browser-input.browser.tsx`, `browser-adaptive-stream.browser.tsx`): 27/27 passed
+  - UI typecheck build (`pnpm --filter @dam-hopper/ui build`): clean exit 0
+  - Server browser host input integration suite (`tests/browser_host_input.rs`): 59/59 passed
+  - Server lib tests (`browser_host` module filter): 146/146 passed (1,443 filtered)
+- **Remediations verified:**
+  - Lone surrogate normalization to U+FFFD prior to length check and chunking prevents server UTF-8 sequence gaps and frame drops.
+  - Interruption feedback survives hidden visibility transitions via `setControlError(null)` ordering fix.
+  - Bounded pre-normalization length checks guard allocation budgets.
+  - Server arbitration alternates ready updates and control input fairly while preserving cancellation/deadline precedence.
+  - Reconciled documentation in `docs/architecture/host-browser-cdp-streaming.md`.
+- **Noted follow-up:** High warning H2 noted by reviewer: `server/tests/browser_host_input.rs` escape-heavy native test uses manual chunking rather than production client controller records, and component test uses simulated DOM insertion. User approved with warning noted for future test harness refinement.
+- **Task status:** 4/4 tasks completed. Phase 06 is DONE.

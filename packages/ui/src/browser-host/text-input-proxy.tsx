@@ -15,6 +15,8 @@ export interface TextInputProxyProps {
   onCopyShortcut?: () => void;
   onSelectionInvalidate?: () => void;
   onCopy?: React.ClipboardEventHandler<HTMLTextAreaElement>;
+  onPasteError?: (message: string) => void;
+  onPasteSuccess?: () => void;
 }
 
 export interface TextInputProxyHandle {
@@ -78,7 +80,7 @@ export const TextInputProxy = React.forwardRef<
   TextInputProxyHandle,
   TextInputProxyProps
 >(function TextInputProxy(
-  { controller, autoFocus = false, onFocus, onBlur, onUserGesture, onCopyShortcut, onSelectionInvalidate, onCopy },
+  { controller, autoFocus = false, onFocus, onBlur, onUserGesture, onCopyShortcut, onSelectionInvalidate, onCopy, onPasteError, onPasteSuccess },
   forwardedRef,
 ) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -228,18 +230,26 @@ export const TextInputProxy = React.forwardRef<
   const handlePaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
       e.preventDefault();
-      if (!controller) return;
+      if (!controller) {
+        onPasteError?.("Paste rejected: browser input controller unavailable");
+        return;
+      }
 
       const text = e.clipboardData?.getData("text/plain");
       if (text) {
-        controller.handleInsertText(text);
-        onSelectionInvalidate?.();
-      }
-      if (textareaRef.current) {
+        const accepted = controller.handlePasteText(text);
+        if (accepted) {
+          onSelectionInvalidate?.();
+          onPasteSuccess?.();
+        }
+        if (textareaRef.current) {
+          textareaRef.current.value = "";
+        }
+      } else if (textareaRef.current) {
         textareaRef.current.value = "";
       }
     },
-    [controller, onSelectionInvalidate],
+    [controller, onPasteError, onPasteSuccess, onSelectionInvalidate],
   );
 
   const handleBlur = useCallback(() => {

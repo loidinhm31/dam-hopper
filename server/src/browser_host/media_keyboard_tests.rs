@@ -3,6 +3,106 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::time::Duration;
 
+#[tokio::test]
+async fn aborted_control_task_retires_unclaimed_input_and_lease() {
+    use crate::browser_host::input::{InputMessage, SessionInputManager};
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    let manager = Arc::new(SessionInputManager::new());
+    let (token, _) = manager.acquire_lease("viewer", "human").await.unwrap();
+    let conn_id = Uuid::new_v4();
+    manager.enqueue_socket_input("viewer", conn_id, InputMessage {
+        browser_session_id: "s".into(), browser_incarnation: "i".into(),
+        profile_epoch: 1, subscription_epoch: "sub".into(), lease_token: token.clone(),
+        input_seq: 1, viewport_epoch: 1,
+        event: InputEvent::InsertText { text: "x".into() },
+    }).await.unwrap();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let task = {
+        let manager = manager.clone();
+        tokio::spawn(async move {
+            let _cleanup = super::ControlSessionCleanup {
+                manager: Some(manager),
+                session_id: "s".into(),
+                viewer_id: "viewer".into(),
+                conn_id,
+                armed: true,
+                fence_holder: true,
+            };
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+        })
+    };
+    ready.await.unwrap();
+    task.abort();
+    let _ = task.await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while manager.validate_lease(&token).await.is_ok()
+            || manager.has_queued_from(Some(conn_id)).await
+        {
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("aborted connection must fence and discard its input");
+}
+
+#[tokio::test]
+async fn pre_upgrade_control_cleanup_guard_unregisters_connection_and_pair() {
+    use crate::api::browser_host::global_attachment_manager;
+    use crate::browser_host::attachments::{AdmittedAttachment, AttachmentPurpose};
+    use crate::browser_host::input::SessionInputManager;
+    use crate::browser_host::media::ViewerPermit;
+    use std::sync::Arc;
+
+    let att = global_attachment_manager();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let sub_epoch = uuid::Uuid::new_v4().to_string();
+    let admitted = AdmittedAttachment {
+        purpose: AttachmentPurpose::Control,
+        principal: "pre-upgrade-user".into(),
+        is_dev: true,
+        auth_session_id: None,
+        auth_version: None,
+        credential_version: None,
+        effective_deadline: None,
+        browser_session_id: Some(session_id.clone()),
+        browser_incarnation: "inc-1".into(),
+        profile_epoch: 1,
+        viewer_id: Some("viewer-upgrade".into()),
+        subscription_epoch: Some(sub_epoch),
+    };
+    static PERMIT_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let reg = att
+        .register_pair_connection(&admitted, || Ok(ViewerPermit::try_acquire_in(&PERMIT_COUNTER, 16).unwrap()))
+        .await
+        .unwrap();
+    assert!(att.subscribe_pair(reg.connection_id).await.is_some());
+
+    let manager = Arc::new(SessionInputManager::new());
+    let (live_token, _) = manager.acquire_lease("viewer-upgrade", "human").await.unwrap();
+    let cleanup = super::ControlSessionCleanup {
+        manager: Some(manager.clone()),
+        session_id: session_id.clone(),
+        viewer_id: "viewer-upgrade".into(),
+        conn_id: reg.connection_id,
+        armed: true,
+        fence_holder: false,
+    };
+    drop(cleanup);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while att.subscribe_pair(reg.connection_id).await.is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("pre-upgrade cleanup must unregister connection and pair");
+    assert!(reg.cancel_token.is_cancelled());
+    assert!(
+        manager.validate_lease(&live_token).await.is_ok(),
+        "pre-upgrade drop before run_control_session must not revoke an active lease"
+    );
+}
+
 fn geometry() -> TargetGeometry {
     TargetGeometry {
         css_width: 800.0,

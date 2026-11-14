@@ -698,11 +698,11 @@ Client sends JSON `InputMessage` records carrying ordered user interactions:
 {
   "browserSessionId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
   "browserIncarnation": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-  "profileEpoch": 1,
+  "profileEpoch": "1",
   "subscriptionEpoch": "4fa85f64-5717-4562-b3fc-2c963f66afa6",
   "leaseToken": "5fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "inputSeq": 1,
-  "viewportEpoch": 1,
+  "inputSeq": "1",
+  "viewportEpoch": "1",
   "event": {
     "kind": "pointerDown",
     "button": "left",
@@ -713,7 +713,7 @@ Client sends JSON `InputMessage` records carrying ordered user interactions:
 }
 ```
 
-Supported `event.kind` variants: `pointerDown`, `pointerUp`, `pointerMove`, `pointerCancel`, `wheel` (with `deltaX`, `deltaY`), `keyDown` (with `key`, `code`), `keyUp`, `insertText` (with `text`).
+Supported `event.kind` variants: `pointerDown`, `pointerUp`, `pointerMove` (`u`, `v`, `modifiers`, plus `button` on down/up), `pointerCancel`, `wheel` (`u`, `v`, `delta_x`, `delta_y`, `modifiers` — canonical snake_case CSS px deltas clamped to `±4096`), `keyDown` (`key`, `code`, `modifiers`), `keyUp` (`key`, `code`, `modifiers`), `insertText` (`text`).
 
 ### Server Control Events (Server -> Client)
 
@@ -756,8 +756,8 @@ Frontend client API and stream controller exports (`packages/ui/src/api/browser-
 - `BrowserStreamController`: Persistent canvas controller governing 1-active-decode + 1-pending-frame, captured-socket ACKs, synchronous privacy blackening (`setPrivacyMode`), visibility detachment (`setVisibility`), `streamQualityActive` latch, and per-run monotonic `appliedCaptureVersionsByRun` map (rejecting same-run rollback across runs while ignoring placeholders).
 - `browser-stream-quality.ts`: Ephemeral in-memory preference and diagnostics store keyed by `(profileId, generation, windowId, tabId)`, default Auto; survives placement/reconnect, cleared on close/retire, zero web storage persistence.
 - `BrowserTools`: Accessible controlled selector (Auto/High/Medium/Low, `value={qualityPreference}`), shared effective tier, scale, quality, viewer FPS, and audio suppression reason (`Muted` vs `Bandwidth constrained`).
-- `BrowserInputController`: Letterbox coordinate mapping to $[0.0, 1.0]$, microtask move coalescing, and held-input auto-release. Display-only while the last drawn frame is `inputTrusted: false`: pointer, wheel, key and text/composition/paste input are all dropped and held input is released once (paired keyUp/pointerCancel).
-- `TextInputProxy`: Manages virtual keyboard focus and multi-stage IME composition deduplication.
+- `BrowserInputController`: Letterbox coordinate mapping to $[0.0, 1.0]$, microtask move coalescing, CSS-pixel wheel normalization (`x1` pixel, `x16` line, `x cssWidth/cssHeight` page, `±4096` clamp, canonical `delta_x`/`delta_y`), bounded 16 KiB UTF-8 plain-text paste (`handlePasteText`, surrogate normalization, escape-aware `insertText` chunking $\le 4096$ raw / $\le 16384$ serialized bytes, atomic preflight), and held-input auto-release. Display-only while the last drawn frame is `inputTrusted: false`: pointer, wheel, key and text/composition/paste input are all dropped and held input is released once (paired keyUp/pointerCancel).
+- `TextInputProxy` & `CanvasView`: `TextInputProxy` manages virtual keyboard focus, multi-stage IME composition deduplication, and paste rejection/success callbacks (`onPasteError`, `onPasteSuccess`); `CanvasView` forwards `onCanvasLostPointerCapture` for accepted-gesture pointer capture cleanup in `BrowserStreamKeepAliveHost`.
 
 ---
 

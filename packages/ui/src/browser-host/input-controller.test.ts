@@ -10,6 +10,11 @@ import {
   MODIFIER_SHIFT,
   MAX_QUEUE_RECORDS,
   MAX_HANDOFF_BYTES,
+  MAX_PASTE_BYTES,
+  MAX_INSERT_TEXT_BYTES,
+  MAX_CONTROL_MESSAGE_BYTES,
+  WHEEL_LINE_HEIGHT_CSS_PX,
+  MAX_WHEEL_DELTA_CSS_PX,
 } from "./input-controller.js";
 import type { DrawnRect } from "./stream-controller.js";
 import type { InputMessage } from "../api/browser-host-types.js";
@@ -17,6 +22,7 @@ import type { InputMessage } from "../api/browser-host-types.js";
 class MockControlSocket {
   public static OPEN = 1;
   public readyState = MockControlSocket.OPEN;
+  public bufferedAmount = 0;
   public sentMessages: string[] = [];
   public closeCalls: Array<[number | undefined, string | undefined]> = [];
 
@@ -276,10 +282,11 @@ describe("input-controller", () => {
       expect(socket.sentMessages.length).toBe(2);
       const releaseMsg = JSON.parse(socket.sentMessages[0]) as InputMessage;
       const insertMsg = JSON.parse(socket.sentMessages[1]) as InputMessage;
-      expect(releaseMsg.inputSeq).toBe("1");
+      expect(releaseMsg.leaseToken).toBe("lease-token-123");
+      expect(releaseMsg.inputSeq).toBe("2");
       expect(releaseMsg.event.kind).toBe("keyUp");
       expect(insertMsg.event.kind).toBe("insertText");
-      expect(insertMsg.inputSeq).toBe("2");
+      expect(insertMsg.inputSeq).toBe("1");
       expect(insertMsg.leaseToken).toBe("new-lease-token-456");
     });
   });
@@ -763,6 +770,76 @@ describe("input-controller", () => {
       expect(keyUpMsg.event.kind).toBe("keyUp");
       expect(cancelMsg.event.kind).toBe("pointerCancel");
     });
+
+    it("flushes pending movement barrier before releasing held keys and buttons", () => {
+      controller.handlePointerDown({
+        currentTarget: canvas, clientX: 320, clientY: 240, button: 0,
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false,
+      } as unknown as PointerEvent);
+      controller.handlePointerMove({
+        currentTarget: canvas, clientX: 400, clientY: 240, button: 0,
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false,
+      } as unknown as PointerEvent);
+      socket.sentMessages = [];
+
+      controller.releaseAllHeldInput();
+
+      const events = socket.sentMessages.map((m) => (JSON.parse(m) as InputMessage).event.kind);
+      expect(events).toEqual(["pointerMove", "pointerCancel"]);
+    });
+
+    it("releases prior lease holds on the original lease and socket rather than the replacement", () => {
+      const replacementSocket = new MockControlSocket();
+      let activeSocket = socket;
+      controller = new BrowserInputController({
+        getSessionId: () => "sess-1",
+        getIncarnation: () => "inc-1",
+        getProfileEpoch: () => "1",
+        getSubscriptionEpoch: () => subEpoch,
+        getLeaseToken: () => leaseToken,
+        getViewportEpoch: () => "1",
+        getDrawnRect: () => drawnRect,
+        getControlSocket: () => activeSocket as unknown as WebSocket,
+      });
+      controller.handleKeyDown(new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft" }));
+      expect(socket.sentMessages).toHaveLength(1);
+
+      // Switch to replacement lease and replacement socket before next event.
+      leaseToken = "lease-replacement";
+      subEpoch = "sub-epoch-uuid-2";
+      activeSocket = replacementSocket;
+      expect(controller.handleInsertText("after")).toBe(true);
+
+      const priorMsgs = socket.sentMessages.map((m) => JSON.parse(m) as InputMessage);
+      expect(priorMsgs.map((m) => [m.leaseToken, m.subscriptionEpoch, m.inputSeq, m.event.kind])).toEqual([
+        ["lease-token-123", "sub-epoch-uuid-1", "1", "keyDown"],
+        ["lease-token-123", "sub-epoch-uuid-1", "2", "keyUp"],
+      ]);
+      const replacementMsgs = replacementSocket.sentMessages.map((m) => JSON.parse(m) as InputMessage);
+      expect(replacementMsgs.map((m) => [m.leaseToken, m.subscriptionEpoch, m.inputSeq, m.event.kind])).toEqual([
+        ["lease-replacement", "sub-epoch-uuid-2", "1", "insertText"],
+      ]);
+    });
+
+    it("closes the control socket fail-closed when bufferedAmount exceeds 256 KiB", () => {
+      const errors: Error[] = [];
+      controller = new BrowserInputController({
+        getSessionId: () => "sess-1",
+        getIncarnation: () => "inc-1",
+        getProfileEpoch: () => "1",
+        getSubscriptionEpoch: () => subEpoch,
+        getLeaseToken: () => leaseToken,
+        getViewportEpoch: () => "1",
+        getDrawnRect: () => drawnRect,
+        getControlSocket: () => socket as unknown as WebSocket,
+        onError: (err) => errors.push(err),
+      });
+      socket.bufferedAmount = 256 * 1024 + 1;
+      expect(controller.handleInsertText("saturated")).toBe(false);
+      expect(socket.sentMessages).toEqual([]);
+      expect(socket.closeCalls).toEqual([[1008, "control socket output queue saturated"]]);
+      expect(errors.map((e) => e.message)).toContain("Control socket output queue saturated");
+    });
   });
 
   describe("rolling input budget", () => {
@@ -881,7 +958,7 @@ describe("input-controller", () => {
       await vi.advanceTimersByTimeAsync(30);
       const events = socket.sentMessages.map(message => (JSON.parse(message) as InputMessage).event);
       expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ kind: "wheel", deltaY: 20, u: expect.closeTo((400 - 80) / 480, 4) });
+      expect(events[0]).toMatchObject({ kind: "wheel", delta_y: 20, u: expect.closeTo((400 - 80) / 480, 4) });
     });
   });
 
@@ -957,6 +1034,229 @@ describe("input-controller", () => {
         viewport = "2";
         await vi.advanceTimersByTimeAsync(50);
         expect(socket.sentMessages).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("Phase 06 bounded paste and wheel normalization", () => {
+    it("delivers ASCII and multibyte UTF-8 pastes (>4096..16KiB) in ordered UTF-8-safe chunks before trailing typing", () => {
+      const pattern = "đặng🙂a"; // 10 UTF-8 bytes: đ(2)+ặ(3)+n(1)+g(1)+🙂(4)? wait: đ=2,ặ=3,n=1,g=1,🙂=4,a=1 => 12 bytes
+      const unitBytes = new TextEncoder().encode(pattern).length;
+      const fullPaste = pattern.repeat(Math.floor(MAX_PASTE_BYTES / unitBytes));
+      const fullPasteBytes = new TextEncoder().encode(fullPaste).length;
+      expect(fullPasteBytes).toBeGreaterThan(MAX_INSERT_TEXT_BYTES);
+      expect(fullPasteBytes).toBeLessThanOrEqual(MAX_PASTE_BYTES);
+
+      expect(controller.handlePasteText(fullPaste)).toBe(true);
+      expect(controller.handleInsertText("tail")).toBe(true);
+
+      const msgs = socket.sentMessages.map((m) => JSON.parse(m) as InputMessage);
+      expect(msgs.length).toBeGreaterThan(1);
+      const texts: string[] = [];
+      for (let i = 0; i < msgs.length; i++) {
+        expect(msgs[i].inputSeq).toBe(String(i + 1));
+        expect(msgs[i].event.kind).toBe("insertText");
+        const rawChunkBytes = new TextEncoder().encode((msgs[i].event as { kind: "insertText"; text: string }).text).length;
+        expect(rawChunkBytes).toBeLessThanOrEqual(MAX_INSERT_TEXT_BYTES);
+        expect(new TextEncoder().encode(socket.sentMessages[i]).length).toBeLessThanOrEqual(MAX_CONTROL_MESSAGE_BYTES);
+        texts.push((msgs[i].event as { kind: "insertText"; text: string }).text);
+      }
+      expect(texts.join("")).toBe(fullPaste + "tail");
+    });
+
+    it("normalizes lone UTF-16 surrogates to U+FFFD in both handleInsertText and handlePasteText without emitting invalid JSON escapes", () => {
+      const brokenInsert = "hi\uD800there\uDFFF!";
+      expect(controller.handleInsertText(brokenInsert)).toBe(true);
+      const brokenPaste = "p\uD800".repeat(2500);
+      expect(controller.handlePasteText(brokenPaste)).toBe(true);
+      expect(controller.handleInsertText("after")).toBe(true);
+
+      for (const raw of socket.sentMessages) {
+        expect(raw).not.toMatch(/\\u[dD][89abABcdEF][0-9a-fA-F]{2}/);
+      }
+      const msgs = socket.sentMessages.map((m) => JSON.parse(m) as InputMessage);
+      expect(msgs.map((m) => m.inputSeq)).toEqual(
+        Array.from({ length: msgs.length }, (_, i) => String(i + 1)),
+      );
+      const combined = msgs
+        .map((m) => (m.event as { kind: "insertText"; text: string }).text)
+        .join("");
+      expect(combined).toBe("hi\uFFFDthere\uFFFD!" + "p\uFFFD".repeat(2500) + "after");
+      // Regex fallback path when String.prototype.toWellFormed is unavailable
+      const origToWellFormed = (String.prototype as unknown as { toWellFormed?: () => string }).toWellFormed;
+      Object.defineProperty(String.prototype, "toWellFormed", { configurable: true, value: undefined });
+      try {
+        const seqBefore = msgs.length;
+        expect(controller.handleInsertText("fb\uDFFF\uD800")).toBe(true);
+        const fbMsg = JSON.parse(socket.sentMessages[seqBefore]) as InputMessage;
+        expect((fbMsg.event as { kind: "insertText"; text: string }).text).toBe("fb\uFFFD\uFFFD");
+      } finally {
+        if (origToWellFormed) {
+          Object.defineProperty(String.prototype, "toWellFormed", { configurable: true, value: origToWellFormed });
+        }
+      }
+
+      // Oversized input (> 16 KiB) is rejected BEFORE normalization allocates
+      if (typeof origToWellFormed === "function") {
+        const spy = vi.spyOn(String.prototype as unknown as { toWellFormed: () => string }, "toWellFormed");
+        expect(controller.handlePasteText("\uD800".repeat(MAX_PASTE_BYTES + 1))).toBe(false);
+        expect(controller.handleInsertText("\uD800".repeat(MAX_PASTE_BYTES + 1))).toBe(false);
+        expect(spy).not.toHaveBeenCalled();
+        spy.mockRestore();
+      }
+    });
+
+    it("re-splits escape-heavy text so every serialized InputMessage stays within 16 KiB", () => {
+      // Each \u0000 is 1 raw UTF-8 byte but 6 JSON bytes ("\\u0000"). 4096 of them = 24,576 JSON bytes (>16KiB) if unsplit!
+      const escapeHeavy = "\u0000".repeat(4096);
+      expect(controller.handlePasteText(escapeHeavy)).toBe(true);
+      expect(socket.sentMessages.length).toBeGreaterThan(1);
+      let reassembled = "";
+      for (const raw of socket.sentMessages) {
+        expect(new TextEncoder().encode(raw).length).toBeLessThanOrEqual(MAX_CONTROL_MESSAGE_BYTES);
+        const parsed = JSON.parse(raw) as InputMessage;
+        expect(parsed.event.kind).toBe("insertText");
+        const t = (parsed.event as { kind: "insertText"; text: string }).text;
+        expect(new TextEncoder().encode(t).length).toBeLessThanOrEqual(MAX_INSERT_TEXT_BYTES);
+        reassembled += t;
+      }
+      expect(reassembled).toBe(escapeHeavy);
+    });
+
+    it("rejects oversize paste (>16 KiB) before sending any prefix with content-free error", () => {
+      const errors: Error[] = [];
+      controller = new BrowserInputController({
+        getSessionId: () => "sess-1", getIncarnation: () => "inc-1", getProfileEpoch: () => "1",
+        getSubscriptionEpoch: () => subEpoch, getLeaseToken: () => leaseToken, getViewportEpoch: () => "1",
+        getDrawnRect: () => drawnRect, getControlSocket: () => socket as unknown as WebSocket,
+        onError: (err) => errors.push(err),
+      });
+      const secret = "SECRET_PASTE_TOKEN_" + "x".repeat(MAX_PASTE_BYTES);
+      expect(controller.handlePasteText(secret)).toBe(false);
+      expect(socket.sentMessages).toEqual([]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0].message).toContain("16 KiB");
+      expect(errors[0].message).not.toContain("SECRET_PASTE_TOKEN");
+    });
+
+    it("rejects live paste atomically when remaining rolling normal budget cannot fit all chunks", () => {
+      const errors: Error[] = [];
+      controller = new BrowserInputController({
+        getSessionId: () => "sess-1", getIncarnation: () => "inc-1", getProfileEpoch: () => "1",
+        getSubscriptionEpoch: () => subEpoch, getLeaseToken: () => leaseToken, getViewportEpoch: () => "1",
+        getDrawnRect: () => drawnRect, getControlSocket: () => socket as unknown as WebSocket,
+        onError: (err) => errors.push(err),
+      });
+      // Consume 78 of 80 normal slots/sec, leaving 2 slots; a 4-chunk paste needs 4 slots.
+      for (let i = 0; i < 78; i++) {
+        expect(controller.handleInsertText("a")).toBe(true);
+      }
+      const beforeCount = socket.sentMessages.length;
+      expect(controller.handlePasteText("b".repeat(MAX_PASTE_BYTES))).toBe(false);
+      expect(socket.sentMessages.length).toBe(beforeCount);
+      expect(errors.at(-1)?.message).toContain("rate capacity");
+    });
+
+    it("enforces handoff capacity atomically, prevents typing from overtaking paste tail, and warns on mid-paste interruption", async () => {
+      vi.useFakeTimers();
+      try {
+        const errors: Error[] = [];
+        controller = new BrowserInputController({
+          getSessionId: () => "sess-1", getIncarnation: () => "inc-1", getProfileEpoch: () => "1",
+          getSubscriptionEpoch: () => subEpoch, getLeaseToken: () => leaseToken, getViewportEpoch: () => "1",
+          getDrawnRect: () => drawnRect, getControlSocket: () => socket as unknown as WebSocket,
+          onError: (err) => errors.push(err),
+        });
+        const h = controller.beginControlHandoff(() => true, () => {});
+        expect(controller.handleInsertText("head-")).toBe(true);
+        // 16 KiB raw ASCII is 4 chunks whose serialized events exceed MAX_HANDOFF_BYTES (16384): rejected without dropping "head-".
+        expect(controller.handlePasteText("p".repeat(MAX_PASTE_BYTES))).toBe(false);
+        expect(errors.at(-1)?.message).toContain("handoff limit");
+
+        // 8000 bytes (2 chunks) fits handoff; subsequent typing queues behind it.
+        const paste = "q".repeat(8000);
+        expect(controller.handlePasteText(paste)).toBe(true);
+        expect(controller.handleInsertText("-tail")).toBe(true);
+        expect(controller.completeControlHandoff(h)).toBe(true);
+        // Drain first chunk ("head-"), then first paste chunk, then interrupt socket before second paste chunk.
+        await vi.advanceTimersByTimeAsync(25);
+        expect(socket.sentMessages).toHaveLength(2);
+        socket.readyState = 3;
+        await vi.advanceTimersByTimeAsync(25);
+        expect(errors.at(-1)?.message).toContain("Paste interrupted");
+        expect(socket.sentMessages).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("normalizes pixel/line/page wheel modes to bounded canonical CSS-pixel delta_x/delta_y independent of DPR/downscale", async () => {
+      vi.useFakeTimers();
+      try {
+        drawnRect = {
+          ...drawnRect!,
+          imageWidth: 640,
+          imageHeight: 360,
+          geometry: {
+            cssWidth: 1280,
+            cssHeight: 720,
+            offsetTop: 0,
+            scrollX: 0,
+            scrollY: 0,
+            pageScale: 1,
+            visualOffsetX: 0,
+            visualOffsetY: 0,
+            dpr: 2,
+          },
+        };
+        const baseWheel = {
+          currentTarget: canvas, clientX: 320, clientY: 240,
+          altKey: false, ctrlKey: false, metaKey: false, shiftKey: false,
+        };
+
+        // Line mode: deltaY=3 -> 48 CSS px, fractional deltaX=-1.5 -> -24 CSS px
+        expect(controller.handleWheel({ ...baseWheel, deltaMode: 1, deltaX: -1.5, deltaY: 3 } as unknown as WheelEvent)).toBe(true);
+        // Pixel mode mixed into same coalescing window: fractional signed deltas preserved
+        expect(controller.handleWheel({ ...baseWheel, deltaMode: 0, deltaX: 0.25, deltaY: -12.5 } as unknown as WheelEvent)).toBe(true);
+        await vi.advanceTimersByTimeAsync(30);
+        let parsed = JSON.parse(socket.sentMessages.at(-1)!) as InputMessage;
+        expect(parsed.event).toMatchObject({
+          kind: "wheel",
+          delta_x: -23.75,
+          delta_y: 35.5,
+        });
+        expect("deltaX" in parsed.event).toBe(false);
+        expect("deltaY" in parsed.event).toBe(false);
+
+        // Page mode: uses remote CSS viewport (1280x720), independent of DPR=2 / 640x360 JPEG
+        expect(controller.handleWheel({ ...baseWheel, deltaMode: 2, deltaX: 0.5, deltaY: 1 } as unknown as WheelEvent)).toBe(true);
+        await vi.advanceTimersByTimeAsync(30);
+        parsed = JSON.parse(socket.sentMessages.at(-1)!) as InputMessage;
+        expect(parsed.event).toMatchObject({ kind: "wheel", delta_x: 640, delta_y: 720 });
+
+        // Clamp single event and accumulated axis to +/- 4096
+        expect(controller.handleWheel({ ...baseWheel, deltaMode: 0, deltaX: 3000, deltaY: -9000 } as unknown as WheelEvent)).toBe(true);
+        expect(controller.handleWheel({ ...baseWheel, deltaMode: 0, deltaX: 3000, deltaY: -1000 } as unknown as WheelEvent)).toBe(true);
+        await vi.advanceTimersByTimeAsync(30);
+        parsed = JSON.parse(socket.sentMessages.at(-1)!) as InputMessage;
+        expect(parsed.event).toMatchObject({
+          kind: "wheel",
+          delta_x: MAX_WHEEL_DELTA_CSS_PX,
+          delta_y: -MAX_WHEEL_DELTA_CSS_PX,
+        });
+        expect(WHEEL_LINE_HEIGHT_CSS_PX).toBe(16);
+
+        // Reject nonfinite, unknown deltaMode, and unavailable page geometry
+        const beforeReject = socket.sentMessages.length;
+        expect(controller.handleWheel({ ...baseWheel, deltaMode: 0, deltaX: Number.NaN, deltaY: 10 } as unknown as WheelEvent)).toBe(false);
+        expect(controller.handleWheel({ ...baseWheel, deltaMode: 0, deltaX: 0, deltaY: Number.POSITIVE_INFINITY } as unknown as WheelEvent)).toBe(false);
+        expect(controller.handleWheel({ ...baseWheel, deltaMode: 3, deltaX: 0, deltaY: 10 } as unknown as WheelEvent)).toBe(false);
+        drawnRect = { ...drawnRect!, geometry: { ...drawnRect!.geometry, cssWidth: 0, cssHeight: 0 } };
+        expect(controller.handleWheel({ ...baseWheel, deltaMode: 2, deltaX: 0, deltaY: 1 } as unknown as WheelEvent)).toBe(false);
+        await vi.advanceTimersByTimeAsync(30);
+        expect(socket.sentMessages.length).toBe(beforeReject);
       } finally {
         vi.useRealTimers();
       }

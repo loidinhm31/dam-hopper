@@ -560,6 +560,65 @@ function ParkedBrowserStreamItem({
   const [activeDialog, setActiveDialog] = useState<ActiveDialogState | null>(
     null,
   );
+  const activeDialogRef = useRef<ActiveDialogState | null>(null);
+  activeDialogRef.current = activeDialog;
+  const activeCaptureRef = useRef<{
+    pointerId: number;
+    canvas: HTMLCanvasElement;
+    completedNormally: boolean;
+  } | null>(null);
+  const releaseActiveCapture = useCallback((expectedPointerId?: number) => {
+    const active = activeCaptureRef.current;
+    if (!active) return;
+    if (expectedPointerId !== undefined && active.pointerId !== expectedPointerId) {
+      return;
+    }
+    // Mark normal/handled completion before release so resulting lostpointercapture cannot double-cancel.
+    active.completedNormally = true;
+    activeCaptureRef.current = null;
+    try {
+      active.canvas.releasePointerCapture?.(active.pointerId);
+    } catch {
+      // ignore unsupported pointer capture
+    }
+  }, []);
+  const captureAcceptedPointer = useCallback(
+    (
+      canvas: HTMLCanvasElement,
+      pointerId: number | undefined,
+      isTrusted: boolean | undefined,
+      onFailure: () => void,
+    ): boolean => {
+      if (typeof pointerId !== "number" || typeof canvas.setPointerCapture !== "function") {
+        return true;
+      }
+      if (activeCaptureRef.current && activeCaptureRef.current.pointerId !== pointerId) {
+        releaseActiveCapture();
+      }
+      try {
+        canvas.setPointerCapture(pointerId);
+      } catch (err) {
+        // Synthetic PointerEvents in browser tests lack an active native pointer id and throw NotFoundError.
+        const isSyntheticNotFound =
+          !isTrusted &&
+          typeof DOMException !== "undefined" &&
+          err instanceof DOMException &&
+          err.name === "NotFoundError";
+        if (isSyntheticNotFound) {
+          return true;
+        }
+        onFailure();
+        return false;
+      }
+      activeCaptureRef.current = {
+        pointerId,
+        canvas,
+        completedNormally: false,
+      };
+      return true;
+    },
+    [releaseActiveCapture],
+  );
   const [controlError, setControlError] = useState<string | null>(null);
   const [viewerCapacityError, setViewerCapacityError] = useState<string | null>(
     null,
@@ -567,10 +626,11 @@ function ParkedBrowserStreamItem({
   const [streamStatus, setStreamStatus] = useState<string>("idle");
   const [retryNonce, setRetryNonce] = useState(0);
   const cancelPendingGesture = useCallback(() => {
+    releaseActiveCapture();
     pendingPointerRef.current = null;
     inputControllerRef.current?.cancelControlHandoff();
     textInputProxyRef.current?.reset();
-  }, []);
+  }, [releaseActiveCapture]);
 
   const canPlayAudioRef = useRef<() => boolean>(() => false);
   const ensurePcmPlayer = useCallback((): PcmPlayer => {
@@ -806,6 +866,10 @@ function ParkedBrowserStreamItem({
         snap.dialog &&
         typeof snap.dialog.dialogId === "string"
       ) {
+        if (!activeDialogRef.current) {
+          cancelPendingGesture();
+          inputControllerRef.current?.releaseAllHeldInput();
+        }
         setActiveDialog({
           dialogId: snap.dialog.dialogId,
           message: snap.dialog.message,
@@ -1082,7 +1146,6 @@ function ParkedBrowserStreamItem({
       cancelPendingGesture();
       inputControllerRef.current?.releaseAllHeldInput();
       setActiveDialog(null);
-      setControlError(null);
       clearStreamQuality(qualityTuple);
     }
     if (streamControllerRef.current) {
@@ -1097,6 +1160,7 @@ function ParkedBrowserStreamItem({
     streamControllerRef.current?.resetAudioAuthority();
     clearSelectedTextCache();
     cancelPendingGesture();
+    setControlError(null);
     clearStreamQuality(qualityTuple);
     return () => {
       lastAudioDocEpochRef.current = null;
@@ -1568,8 +1632,10 @@ function ParkedBrowserStreamItem({
             currentAttachedCredsRef.current ?? undefined,
           ),
         onError: (err) => {
-          console.error("[BrowserInput] Controller error:", err);
-          setControlError(err.message);
+          console.error("[BrowserInput] Controller error:", err.message);
+          if (isCurrentConnection(ownerRef.current)) {
+            setControlError(err.message);
+          }
         },
       });
 
@@ -2124,11 +2190,11 @@ function ParkedBrowserStreamItem({
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       if (
+        activeDialogRef.current !== null ||
         !canStreamTabRef.current(currentAttachedCredsRef.current ?? undefined)
       ) {
         return;
       }
-      pointerDownPosRef.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
       clearSelectedTextCache();
       textInputProxyRef.current?.focus();
       if (canPlayAudio()) {
@@ -2156,17 +2222,21 @@ function ParkedBrowserStreamItem({
       }
       if (latest.tab.isController && latest.tab.leaseToken) {
         if (pendingPointerRef.current?.replayed) cancelPendingGesture();
-        try {
-          e.currentTarget?.setPointerCapture?.(e.pointerId);
-        } catch {
-          // ignore unsupported pointer capture
+        setControlError(null);
+        if (!input.handlePointerDown(e)) {
+          return;
         }
-        input.handlePointerDown(e);
+        pointerDownPosRef.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+        captureAcceptedPointer(e.currentTarget, e.pointerId, e.isTrusted, () => {
+          pointerDownPosRef.current = null;
+          input.handlePointerCancel();
+        });
         return;
       }
       const viewerId = latest.tab.viewerId;
       const sessionId = latest.tab.sessionId;
       if (!sessionId || !viewerId || pendingPointerRef.current) return;
+      pointerDownPosRef.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
       setControlError(null);
       const provenance = {
         actionSequence: latest.tab.actionSequence,
@@ -2224,10 +2294,21 @@ function ParkedBrowserStreamItem({
       const handoff = input.beginControlHandoff(isCurrentGesture, () => {
         controlSocket?.removeEventListener("close", handleControlClose);
         if (pendingPointerRef.current === pending) {
+          if (!pending.replayed) {
+            releaseActiveCapture(pending.pointerId);
+          }
           pendingPointerRef.current = null;
           textInputProxyRef.current?.reset();
         }
       });
+      if (
+        !captureAcceptedPointer(e.currentTarget, e.pointerId, e.isTrusted, () => {
+          pointerDownPosRef.current = null;
+          cancelPendingGesture();
+        })
+      ) {
+        return;
+      }
       controlSocket?.addEventListener("close", handleControlClose, { once: true });
       void runSerializedBrowserControlAcquire(liveOwner, sessionId, viewerId, async () => {
         const latestInQueue = readBrowserWindowAndTab(win.id, tab.tabId);
@@ -2293,18 +2374,12 @@ function ParkedBrowserStreamItem({
         console.warn("[BrowserStream] Click control acquisition failed:", error);
       });
     },
-    [win.id, tab.tabId, canPlayAudio, cancelPendingGesture, clearSelectedTextCache, ensurePcmPlayer],
+    [win.id, tab.tabId, canPlayAudio, cancelPendingGesture, captureAcceptedPointer, clearSelectedTextCache, ensurePcmPlayer, releaseActiveCapture],
   );
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
-      try {
-        if (e.currentTarget?.hasPointerCapture?.(e.pointerId)) {
-          e.currentTarget.releasePointerCapture?.(e.pointerId);
-        }
-      } catch {
-        // ignore unsupported pointer capture
-      }
+      releaseActiveCapture(e.pointerId);
       if (canPlayAudio()) {
         ensurePcmPlayer().prime();
       }
@@ -2364,8 +2439,18 @@ function ParkedBrowserStreamItem({
       }
       inputControllerRef.current?.handlePointerUp(e);
     },
-    [canPlayAudio, ensurePcmPlayer, readSelectionAuthority],
+    [canPlayAudio, ensurePcmPlayer, readSelectionAuthority, releaseActiveCapture],
   );
+
+  const handleProxyPasteError = useCallback((message: string) => {
+    if (isCurrentConnection(ownerRef.current)) {
+      setControlError(message);
+    }
+  }, []);
+
+  const handleProxyPasteSuccess = useCallback(() => {
+    setControlError(null);
+  }, []);
 
   const handleProxyUserGesture = useCallback(() => {
     if (canPlayAudio()) {
@@ -2441,17 +2526,49 @@ function ParkedBrowserStreamItem({
     [],
   );
 
-  const handlePointerCancel = useCallback((e?: React.PointerEvent<HTMLCanvasElement>) => {
-    try {
-      if (e && e.currentTarget?.hasPointerCapture?.(e.pointerId)) {
-        e.currentTarget.releasePointerCapture?.(e.pointerId);
+  const handlePointerCancel = useCallback(
+    (e?: React.PointerEvent<HTMLCanvasElement>) => {
+      releaseActiveCapture(e?.pointerId);
+      if (!e || pointerDownPosRef.current?.pointerId === e.pointerId) {
+        pointerDownPosRef.current = null;
       }
-    } catch {
-      // ignore unsupported pointer capture
-    }
-    cancelPendingGesture();
-    inputControllerRef.current?.handlePointerCancel();
-  }, [cancelPendingGesture]);
+      cancelPendingGesture();
+      inputControllerRef.current?.handlePointerCancel();
+    },
+    [cancelPendingGesture, releaseActiveCapture],
+  );
+
+  const handleLostPointerCapture = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const active = activeCaptureRef.current;
+      if (
+        !active ||
+        active.completedNormally ||
+        active.pointerId !== e.pointerId ||
+        active.canvas !== e.currentTarget
+      ) {
+        return;
+      }
+      if (
+        typeof e.currentTarget?.hasPointerCapture === "function" &&
+        e.currentTarget.hasPointerCapture(e.pointerId)
+      ) {
+        return;
+      }
+      active.completedNormally = true;
+      activeCaptureRef.current = null;
+      if (pointerDownPosRef.current?.pointerId === e.pointerId) {
+        pointerDownPosRef.current = null;
+      }
+      const pending = pendingPointerRef.current;
+      if (pending && !pending.replayed && pending.pointerId === e.pointerId) {
+        cancelPendingGesture();
+        return;
+      }
+      inputControllerRef.current?.handlePointerCancel();
+    },
+    [cancelPendingGesture],
+  );
 
   const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
     inputControllerRef.current?.handleWheel(e);
@@ -2475,6 +2592,7 @@ function ParkedBrowserStreamItem({
       onCanvasPointerUp={handlePointerUp}
       onCanvasPointerMove={handlePointerMove}
       onCanvasPointerCancel={handlePointerCancel}
+      onCanvasLostPointerCapture={handleLostPointerCapture}
       onCanvasWheel={handleWheel}
       onCanvasContextMenu={handleContextMenu}
     >
@@ -2486,6 +2604,8 @@ function ParkedBrowserStreamItem({
         onCopyShortcut={handleProxyCopyShortcut}
         onSelectionInvalidate={clearSelectedTextCache}
         onCopy={handleProxyCopy}
+        onPasteError={handleProxyPasteError}
+        onPasteSuccess={handleProxyPasteSuccess}
       />
       {(streamStatus === "error" || streamStatus === "unsupported") && (
         <div
@@ -2516,6 +2636,7 @@ function ParkedBrowserStreamItem({
       {controlError && (
         <div
           role="alert"
+          data-testid={`browser-control-error-${win.id}-${tab.tabId}`}
           className="absolute bottom-0 inset-x-0 bg-black/80 p-2 text-xs text-white pointer-events-none"
         >
           {controlError}

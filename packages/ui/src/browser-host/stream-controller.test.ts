@@ -1402,8 +1402,6 @@ describe("stream-controller", () => {
     const wheelMsg = JSON.parse(controlWs.sentMessages.at(-1)!);
     expect(wheelMsg.event).toMatchObject({
       kind: "wheel",
-      deltaX: 12,
-      deltaY: 25,
       delta_x: 12,
       delta_y: 25,
     });

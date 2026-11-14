@@ -2874,7 +2874,6 @@ async fn failed_native_release_still_clears_picked_and_active_selection_and_hide
     };
 
     let input_mgr = get_or_create_input_manager(&fx.session_id).await;
-    input_mgr.capture_native_target(native_target.clone()).await;
     input_mgr
         .enqueue_input(InputMessage {
             browser_session_id: fx.session_id.clone(),
@@ -2893,6 +2892,12 @@ async fn failed_native_release_still_clears_picked_and_active_selection_and_hide
         .await
         .unwrap();
     input_mgr.drain_inputs().await;
+    let event = InputEvent::KeyDown { key: "a".into(), code: "KeyA".into(), modifiers: 0 };
+    let gate = input_mgr.begin_dispatch(&fx.lease_token).await.unwrap();
+    input_mgr.prepare_native_input(&gate, native_target.clone(), &event).await.unwrap();
+    native_target.dispatch(&event).await.unwrap();
+    input_mgr.confirm_native_input(&gate, &event).await;
+    drop(gate);
 
     // Pick element + create unclaimed pending artifact.
     let sel_rev = fx.select(1).await;
@@ -2950,7 +2955,6 @@ async fn failed_native_release_still_clears_picked_and_active_selection_and_hide
     assert_eq!(acq2_st, StatusCode::OK, "{acq2_body}");
     let lease2 = acq2_body["leaseToken"].as_str().unwrap().to_string();
 
-    input_mgr.capture_native_target(native_target).await;
     input_mgr
         .enqueue_input(InputMessage {
             browser_session_id: fx.session_id.clone(),
@@ -2969,6 +2973,12 @@ async fn failed_native_release_still_clears_picked_and_active_selection_and_hide
         .await
         .unwrap();
     input_mgr.drain_inputs().await;
+    let event = InputEvent::KeyDown { key: "b".into(), code: "KeyB".into(), modifiers: 0 };
+    let gate = input_mgr.begin_dispatch(&lease2).await.unwrap();
+    input_mgr.prepare_native_input(&gate, native_target.clone(), &event).await.unwrap();
+    native_target.dispatch(&event).await.unwrap();
+    input_mgr.confirm_native_input(&gate, &event).await;
+    drop(gate);
 
     let (st_active, _) = api_request(
         fx.state.clone(),
