@@ -6,7 +6,7 @@ import { useWindowStore } from "../window-store.js";
 import { closeBrowserTarget } from "./browser-close-lifecycle.js";
 import { readCanonicalBrowserWindowState, sanitizeBrowserError, writeCanonicalWindowState } from "./browser-navigation.js";
 import { areBrowserOwnerScopesEqual, captureVerifiedBrowserOwner } from "./browser-owner-scope.js";
-import { BROWSER_RECOVERY_STORAGE_KEY, loadBrowserRecoveryDisk, settleRecoveryOperation } from "./browser-recovery-store.js";
+import { BROWSER_RECOVERY_STORAGE_KEY, loadBrowserRecoveryDisk, settleProvenRecoveryOperation, settleRecoveryOperationsIfAuthorized } from "./browser-recovery-store.js";
 import { acknowledgeUnknownOperationRisk, closeSelectedInventorySession, commitTargetAdmission, getVerifiedBrowserSession, isOperationRiskAcknowledged, listVerifiedBrowserSessions } from "./browser-session-inventory.js";
 import { removeBrowserTab, selectBrowserTab } from "./browser-tab-state.js";
 import type { BrowserOwnerScope, BrowserRecoveryOperation, BrowserTabRuntime, BrowserWindowClosingState } from "./browser-tab-types.js";
@@ -42,25 +42,95 @@ export function BrowserRecoveryPanel({
     ? [] as BrowserRecoveryOperation[]
     : diskState.disk.operations.filter((op) => areBrowserOwnerScopesEqual(op.ownerScope, verifiedScope)), [diskState.disk, masked, verifiedScope]);
 
-  const removeTabIfPresent = useCallback((winId: string, tabId?: string) => {
+  const removeTabIfPresent = useCallback((winId: string, expectedScope: BrowserOwnerScope, tabId?: string) => {
     const cur = tabId ? useWindowStore.getState().session?.windows?.[winId] : undefined;
-    if (!cur || !tabId) return;
+    if (!cur || !tabId || cur.ctx.profileId !== owner.profileId) return;
     const curState = readCanonicalBrowserWindowState(cur.appState, activeTab.tabId);
+    if (curState.ownerScope && !areBrowserOwnerScopesEqual(curState.ownerScope, expectedScope)) return;
     if (curState.tabs.some((t) => t.tabId === tabId)) writeCanonicalWindowState(winId, removeBrowserTab(curState, tabId));
-  }, [activeTab.tabId]);
+  }, [activeTab.tabId, owner.profileId]);
 
-  const tryFinalizeParentWindowOp = useCallback(async (op: BrowserRecoveryOperation): Promise<boolean> => {
-    const disk = loadBrowserRecoveryDisk();
-    const childPending = disk.operations.some((o) => o.operationId !== op.operationId && o.kind !== "close-window" && o.windowId === op.windowId && areBrowserOwnerScopesEqual(o.ownerScope, op.ownerScope));
-    const curWin = useWindowStore.getState().session?.windows?.[op.windowId];
-    if (childPending || (curWin && readCanonicalBrowserWindowState(curWin.appState, activeTab.tabId).tabs.some((t) => Boolean(t.sessionId)))) return false;
-    const parentWinOp = op.kind === "close-window" && !op.sessionId ? op : disk.operations.find((o) => o.kind === "close-window" && !o.sessionId && o.windowId === op.windowId && areBrowserOwnerScopesEqual(o.ownerScope, op.ownerScope));
-    if (!parentWinOp) return false;
-    await settleRecoveryOperation(parentWinOp.operationId);
-    acknowledgeUnknownOperationRisk(parentWinOp.operationId);
-    if (parentWinOp.windowId === windowId) onCloseUnknownWindowAllowed?.();
-    return true;
-  }, [activeTab.tabId, onCloseUnknownWindowAllowed, windowId]);
+  const isRetryOwnerCurrent = useCallback(
+    (capturedOwner: ConnectionRef, capturedScope: BrowserOwnerScope): boolean => {
+      const live = captureVerifiedBrowserOwner(owner.profileId);
+      return Boolean(
+        live &&
+          live.owner.generation === capturedOwner.generation &&
+          areBrowserOwnerScopesEqual(live.scope, capturedScope),
+      );
+    },
+    [owner.profileId],
+  );
+
+  const tryFinalizeParentWindowOp = useCallback(
+    async (
+      op: BrowserRecoveryOperation,
+      capturedOwner: ConnectionRef,
+      capturedScope: BrowserOwnerScope,
+    ): Promise<boolean> => {
+      if (!isRetryOwnerCurrent(capturedOwner, capturedScope)) return false;
+      const disk = loadBrowserRecoveryDisk();
+      const childPending = disk.operations.some(
+        (o) =>
+          o.operationId !== op.operationId &&
+          o.kind !== "close-window" &&
+          o.windowId === op.windowId &&
+          areBrowserOwnerScopesEqual(o.ownerScope, capturedScope),
+      );
+      if (childPending) return false;
+      const curWin = useWindowStore.getState().session?.windows?.[op.windowId];
+      if (curWin) {
+        if (curWin.ctx.profileId !== capturedOwner.profileId) return false;
+        const curState = readCanonicalBrowserWindowState(curWin.appState, activeTab.tabId);
+        if (
+          (curState.ownerScope && !areBrowserOwnerScopesEqual(curState.ownerScope, capturedScope)) ||
+          curState.tabs.some((t) => Boolean(t.sessionId))
+        ) {
+          return false;
+        }
+      }
+      const parentWinOp =
+        op.kind === "close-window" && !op.sessionId
+          ? op
+          : disk.operations.find(
+              (o) =>
+                o.kind === "close-window" &&
+                !o.sessionId &&
+                o.windowId === op.windowId &&
+                areBrowserOwnerScopesEqual(o.ownerScope, capturedScope),
+            );
+      if (!parentWinOp || !areBrowserOwnerScopesEqual(parentWinOp.ownerScope, capturedScope)) return false;
+      if (curWin && readCanonicalBrowserWindowState(curWin.appState, activeTab.tabId).closing?.status === "pending") {
+        return false;
+      }
+      const settled = await settleProvenRecoveryOperation(parentWinOp.operationId, capturedScope, () => {
+        if (!isRetryOwnerCurrent(capturedOwner, capturedScope)) return false;
+        const liveWin = useWindowStore.getState().session?.windows?.[parentWinOp.windowId];
+        if (liveWin) {
+          if (liveWin.ctx.profileId !== capturedOwner.profileId) return false;
+          const liveState = readCanonicalBrowserWindowState(liveWin.appState, activeTab.tabId);
+          if (liveState.ownerScope && !areBrowserOwnerScopesEqual(liveState.ownerScope, capturedScope)) return false;
+          if (liveState.closing?.status === "pending") return false;
+        }
+        return true;
+      });
+      if (!settled || !isRetryOwnerCurrent(capturedOwner, capturedScope)) return false;
+      const postWin = useWindowStore.getState().session?.windows?.[parentWinOp.windowId];
+      if (parentWinOp.windowId === windowId) {
+        if (!postWin || postWin.ctx.profileId !== capturedOwner.profileId) return false;
+        const postState = readCanonicalBrowserWindowState(postWin.appState, activeTab.tabId);
+        if (postState.ownerScope && !areBrowserOwnerScopesEqual(postState.ownerScope, capturedScope)) return false;
+        acknowledgeUnknownOperationRisk(parentWinOp.operationId);
+        if (postState.closing?.operationId === parentWinOp.operationId) {
+          onCloseUnknownWindowAllowed?.();
+        }
+      } else {
+        acknowledgeUnknownOperationRisk(parentWinOp.operationId);
+      }
+      return true;
+    },
+    [activeTab.tabId, isRetryOwnerCurrent, onCloseUnknownWindowAllowed, windowId],
+  );
 
   const handleRetryClose = useCallback(async (op: BrowserRecoveryOperation) => {
     const verified = captureVerifiedBrowserOwner(owner.profileId);
@@ -71,20 +141,49 @@ export function BrowserRecoveryPanel({
     try {
       if (op.kind === "close-window" && !op.sessionId) {
         const disk = loadBrowserRecoveryDisk(), handled = new Set<string>(); let blocked = false;
-        for (const child of disk.operations.filter((o) => o.operationId !== op.operationId && o.kind !== "close-window" && o.windowId === op.windowId && areBrowserOwnerScopesEqual(o.ownerScope, op.ownerScope) && Boolean(o.sessionId))) {
+        for (const child of disk.operations.filter((o) => o.operationId !== op.operationId && o.kind !== "close-window" && o.windowId === op.windowId && areBrowserOwnerScopesEqual(o.ownerScope, verified.scope) && Boolean(o.sessionId))) {
+          if (!isRetryOwnerCurrent(verified.owner, verified.scope)) {
+            setStatusMsg({ kind: "error", text: "Original verified owner changed during retry." }); return;
+          }
           handled.add(child.sessionId!);
           const out = await closeBrowserTarget({ owner: verified.owner, scope: verified.scope, sessionId: child.sessionId!, windowId: child.windowId, tabId: child.tabId, operationId: child.operationId, groupId: child.groupId ?? op.groupId });
-          if (out.kind === "closed" || out.kind === "released") { removeTabIfPresent(child.windowId, child.tabId); await settleRecoveryOperation(child.operationId); }
-          else { blocked = true; setStatusMsg({ kind: "error", text: sanitizeBrowserError(out.error, "Close check failed.") }); }
+          if (!isRetryOwnerCurrent(verified.owner, verified.scope)) {
+            setStatusMsg({ kind: "error", text: "Original verified owner changed during retry." }); return;
+          }
+          if (out.kind === "closed" || out.kind === "released") {
+            await settleProvenRecoveryOperation(child.operationId, verified.scope, () => isRetryOwnerCurrent(verified.owner, verified.scope));
+            if (!isRetryOwnerCurrent(verified.owner, verified.scope)) {
+              setStatusMsg({ kind: "error", text: "Original verified owner changed during retry." }); return;
+            }
+            removeTabIfPresent(child.windowId, verified.scope, child.tabId);
+          } else {
+            blocked = true; setStatusMsg({ kind: "error", text: sanitizeBrowserError(out.error, "Close check failed.") });
+          }
         }
         const curWin = useWindowStore.getState().session?.windows?.[op.windowId];
-        for (const t of (curWin ? readCanonicalBrowserWindowState(curWin.appState, activeTab.tabId).tabs.filter((x) => Boolean(x.sessionId) && !handled.has(x.sessionId!)) : [])) {
+        const curTabs = (curWin && curWin.ctx.profileId === verified.owner.profileId)
+          ? (() => {
+              const st = readCanonicalBrowserWindowState(curWin.appState, activeTab.tabId);
+              if (st.ownerScope && !areBrowserOwnerScopesEqual(st.ownerScope, verified.scope)) return [];
+              return st.tabs.filter((x) => Boolean(x.sessionId) && !handled.has(x.sessionId!));
+            })()
+          : [];
+        for (const t of curTabs) {
+          if (!isRetryOwnerCurrent(verified.owner, verified.scope)) {
+            setStatusMsg({ kind: "error", text: "Original verified owner changed during retry." }); return;
+          }
           const out = await closeBrowserTarget({ owner: verified.owner, scope: verified.scope, sessionId: t.sessionId!, windowId: op.windowId, tabId: t.tabId, groupId: op.groupId, runtime: t.snapshot });
-          if (out.kind === "closed" || out.kind === "released") removeTabIfPresent(op.windowId, t.tabId);
+          if (!isRetryOwnerCurrent(verified.owner, verified.scope)) {
+            setStatusMsg({ kind: "error", text: "Original verified owner changed during retry." }); return;
+          }
+          if (out.kind === "closed" || out.kind === "released") removeTabIfPresent(op.windowId, verified.scope, t.tabId);
           else { blocked = true; setStatusMsg({ kind: "error", text: sanitizeBrowserError(out.error, "Close check failed.") }); }
         }
         if (!blocked) {
-          const finalized = await tryFinalizeParentWindowOp(op);
+          const finalized = await tryFinalizeParentWindowOp(op, verified.owner, verified.scope);
+          if (!isRetryOwnerCurrent(verified.owner, verified.scope)) {
+            setStatusMsg({ kind: "error", text: "Original verified owner changed during retry." }); return;
+          }
           setStatusMsg(finalized ? { kind: "info", text: "Window closure reconciled." } : { kind: "error", text: "Remaining recovery operations block window close." });
           if (finalized) onWindowStateUpdated();
         }
@@ -92,24 +191,126 @@ export function BrowserRecoveryPanel({
       }
       if (!op.sessionId) return;
       const outcome = await closeBrowserTarget({ owner: verified.owner, scope: verified.scope, sessionId: op.sessionId, windowId: op.windowId, tabId: op.tabId, operationId: op.operationId, groupId: op.groupId });
+      if (!isRetryOwnerCurrent(verified.owner, verified.scope)) {
+        setStatusMsg({ kind: "error", text: "Original verified owner changed during retry." }); return;
+      }
       if (outcome.kind === "closed" || outcome.kind === "released") {
-        if (op.windowId === windowId) removeTabIfPresent(windowId, op.tabId);
-        await settleRecoveryOperation(op.operationId); await tryFinalizeParentWindowOp(op);
+        await settleProvenRecoveryOperation(op.operationId, verified.scope, () => isRetryOwnerCurrent(verified.owner, verified.scope));
+        if (!isRetryOwnerCurrent(verified.owner, verified.scope)) {
+          setStatusMsg({ kind: "error", text: "Original verified owner changed during retry." }); return;
+        }
+        if (op.windowId === windowId) removeTabIfPresent(windowId, verified.scope, op.tabId);
+        await tryFinalizeParentWindowOp(op, verified.owner, verified.scope);
+        if (!isRetryOwnerCurrent(verified.owner, verified.scope)) return;
         setStatusMsg({ kind: "info", text: outcome.kind === "released" ? "View reference released." : "Remote page closed." });
         onWindowStateUpdated();
       } else setStatusMsg({ kind: "error", text: sanitizeBrowserError(outcome.error, "Close retry failed.") });
     } catch (err) { setStatusMsg({ kind: "error", text: sanitizeBrowserError(err, "Close retry failed.") }); }
     finally { setBusyId(null); setTick((n) => n + 1); }
-  }, [owner.profileId, owner.generation, windowId, activeTab.tabId, onWindowStateUpdated, removeTabIfPresent, tryFinalizeParentWindowOp]);
+  }, [activeTab.tabId, isRetryOwnerCurrent, onWindowStateUpdated, owner.generation, owner.profileId, removeTabIfPresent, tryFinalizeParentWindowOp, windowId]);
 
-  const handleAck = useCallback((op: BrowserRecoveryOperation) => {
-    acknowledgeUnknownOperationRisk(op.operationId); setTick((n) => n + 1);
-    if (windowClosing?.status === "unknown" && op.operationId === windowClosing.operationId) { onCloseUnknownWindowAllowed?.(); return; }
-    const curWin = op.tabId && op.windowId === windowId ? useWindowStore.getState().session?.windows?.[windowId] : undefined;
-    if (curWin && op.tabId && readCanonicalBrowserWindowState(curWin.appState, activeTab.tabId).tabs.some((t) => t.tabId === op.tabId && (t.phase === "close-unknown" || t.phase === "create-unknown"))) {
-      removeTabIfPresent(windowId, op.tabId); onWindowStateUpdated();
+  const isWindowActivelyClosing = useCallback((targetWinId: string, statuses: readonly string[]): boolean => {
+    const targetWin = useWindowStore.getState().session?.windows?.[targetWinId];
+    if (!targetWin || targetWin.appId !== "browser" || !targetWin.appState) return false;
+    const st = readCanonicalBrowserWindowState(targetWin.appState, activeTab.tabId);
+    return Boolean(st.closing && statuses.includes(st.closing.status));
+  }, [activeTab.tabId]);
+
+  const dismissibleOps = useMemo(
+    () => ownerOps.filter((op) => !isWindowActivelyClosing(op.windowId, ["pending", "unknown"])),
+    [isWindowActivelyClosing, ownerOps],
+  );
+
+  const handleAck = useCallback(async (op: BrowserRecoveryOperation) => {
+    const verified = captureVerifiedBrowserOwner(owner.profileId);
+    if (!verified || verified.owner.generation !== owner.generation || !areBrowserOwnerScopesEqual(verified.scope, op.ownerScope)) {
+      setStatusMsg({ kind: "error", text: "Original verified owner is disconnected or changed." }); return;
     }
-  }, [windowClosing, onCloseUnknownWindowAllowed, windowId, activeTab.tabId, onWindowStateUpdated, removeTabIfPresent]);
+    if (isWindowActivelyClosing(op.windowId, ["pending"])) {
+      setStatusMsg({ kind: "error", text: "Window close is still pending." }); return;
+    }
+    if (windowClosing?.status === "unknown" && op.operationId === windowClosing.operationId && op.windowId === windowId) {
+      acknowledgeUnknownOperationRisk(op.operationId); setTick((n) => n + 1);
+      onCloseUnknownWindowAllowed?.();
+      return;
+    }
+    setBusyId(op.operationId); setStatusMsg(null);
+    try {
+      const settled = await settleRecoveryOperationsIfAuthorized({
+        operationIds: [op.operationId],
+        expectedScope: verified.scope,
+        allowUnknownClosingForWindowId: windowId,
+        shouldSettle: () => {
+          const live = captureVerifiedBrowserOwner(owner.profileId);
+          return Boolean(live && live.owner.generation === owner.generation && areBrowserOwnerScopesEqual(live.scope, verified.scope));
+        },
+      });
+      const postVerified = captureVerifiedBrowserOwner(owner.profileId);
+      if (!postVerified || postVerified.owner.generation !== owner.generation || !areBrowserOwnerScopesEqual(postVerified.scope, verified.scope)) {
+        setStatusMsg({ kind: "error", text: "Original verified owner changed before recovery settlement completed." });
+        return;
+      }
+      if (settled.length === 0) {
+        setStatusMsg({ kind: "error", text: "Operation cannot be dismissed while window close is active." });
+        return;
+      }
+      acknowledgeUnknownOperationRisk(op.operationId);
+      const curWin = op.tabId && op.windowId === windowId ? useWindowStore.getState().session?.windows?.[windowId] : undefined;
+      if (curWin && curWin.ctx.profileId === owner.profileId && op.tabId) {
+        const curState = readCanonicalBrowserWindowState(curWin.appState, activeTab.tabId);
+        if ((!curState.ownerScope || areBrowserOwnerScopesEqual(curState.ownerScope, verified.scope)) &&
+          curState.tabs.some((t) => t.tabId === op.tabId && (t.phase === "close-unknown" || t.phase === "create-unknown"))) {
+          removeTabIfPresent(windowId, verified.scope, op.tabId);
+        }
+      }
+      onWindowStateUpdated();
+    } catch (err) {
+      setStatusMsg({ kind: "error", text: sanitizeBrowserError(err, "Failed to dismiss recovery operation.") });
+    } finally {
+      setBusyId(null); setTick((n) => n + 1);
+    }
+  }, [activeTab.tabId, isWindowActivelyClosing, onCloseUnknownWindowAllowed, onWindowStateUpdated, owner.generation, owner.profileId, removeTabIfPresent, windowClosing, windowId]);
+
+  const handleDismissAll = useCallback(async () => {
+    if (dismissibleOps.length === 0) return;
+    const verified = captureVerifiedBrowserOwner(owner.profileId);
+    if (!verified || verified.owner.generation !== owner.generation) {
+      setStatusMsg({ kind: "error", text: "Original verified owner is disconnected or changed." }); return;
+    }
+    setBusyId("__all__"); setStatusMsg(null);
+    try {
+      const settled = await settleRecoveryOperationsIfAuthorized({
+        operationIds: dismissibleOps.map((o) => o.operationId),
+        expectedScope: verified.scope,
+        skipActiveClosingWindows: true,
+        shouldSettle: () => {
+          const live = captureVerifiedBrowserOwner(owner.profileId);
+          return Boolean(live && live.owner.generation === owner.generation && areBrowserOwnerScopesEqual(live.scope, verified.scope));
+        },
+      });
+      const postVerified = captureVerifiedBrowserOwner(owner.profileId);
+      if (!postVerified || postVerified.owner.generation !== owner.generation || !areBrowserOwnerScopesEqual(postVerified.scope, verified.scope)) {
+        setStatusMsg({ kind: "error", text: "Original verified owner changed before recovery settlement completed." });
+        return;
+      }
+      for (const op of settled) {
+        acknowledgeUnknownOperationRisk(op.operationId);
+        const curWin = op.tabId && op.windowId === windowId ? useWindowStore.getState().session?.windows?.[windowId] : undefined;
+        if (curWin && curWin.ctx.profileId === owner.profileId && op.tabId) {
+          const curState = readCanonicalBrowserWindowState(curWin.appState, activeTab.tabId);
+          if ((!curState.ownerScope || areBrowserOwnerScopesEqual(curState.ownerScope, verified.scope)) &&
+            curState.tabs.some((t) => t.tabId === op.tabId && (t.phase === "close-unknown" || t.phase === "create-unknown"))) {
+            removeTabIfPresent(windowId, verified.scope, op.tabId);
+          }
+        }
+      }
+      onWindowStateUpdated();
+    } catch (err) {
+      setStatusMsg({ kind: "error", text: sanitizeBrowserError(err, "Failed to dismiss recovery operations.") });
+    } finally {
+      setBusyId(null); setTick((n) => n + 1);
+    }
+  }, [activeTab.tabId, dismissibleOps, onWindowStateUpdated, owner.generation, owner.profileId, removeTabIfPresent, windowId]);
 
   const handleRefreshInventory = useCallback(async () => {
     const verified = captureVerifiedBrowserOwner(owner.profileId);
@@ -168,14 +369,19 @@ export function BrowserRecoveryPanel({
       </div>
       {diskState.error && <p role="alert" data-testid="browser-recovery-disk-error" className="text-[11px] text-[var(--color-danger)]">{diskState.error}</p>}
       {statusMsg && <p role={statusMsg.kind === "error" ? "alert" : "status"} data-testid="browser-recovery-status" className={`text-[11px] ${statusMsg.kind === "error" ? "text-[var(--color-danger)]" : "text-[var(--color-success)]"}`}>{statusMsg.text}</p>}
+      {ownerOps.length > 1 && (
+        <div className="flex items-center justify-end">
+          <button type="button" data-testid="browser-recovery-dismiss-all-btn" disabled={busyId !== null || dismissibleOps.length === 0} onClick={() => void handleDismissAll()} className="rounded border border-[var(--color-warning)]/50 bg-[var(--color-warning)]/10 px-2 py-0.5 text-[10px] font-medium text-[var(--color-warning)] hover:bg-[var(--color-warning)]/20 disabled:opacity-40">Dismiss all</button>
+        </div>
+      )}
       {ownerOps.map((op) => (
         <div key={op.operationId} data-testid={`browser-recovery-op-${op.operationId}`} className="rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 p-2 space-y-1 text-[11px]">
           <div className="font-medium text-[var(--color-warning)]">{op.kind} ({op.status}){op.sessionId ? ` · ${op.sessionId.slice(0, 8)}` : ""}</div>
           <div className="flex flex-wrap gap-1.5">
             {((op.kind === "close-tab" && op.sessionId) || (op.kind === "close-window" && (op.sessionId || op.windowId === windowId))) && (
-              <button type="button" data-testid={`browser-recovery-retry-${op.operationId}`} disabled={busyId === op.operationId} onClick={() => void handleRetryClose(op)} className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-[10px] hover:bg-[var(--color-surface-2)]">Check close status / Retry close</button>
+              <button type="button" data-testid={`browser-recovery-retry-${op.operationId}`} disabled={busyId !== null} onClick={() => void handleRetryClose(op)} className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-[10px] hover:bg-[var(--color-surface-2)]">Check close status / Retry close</button>
             )}
-            <button type="button" data-testid={`browser-recovery-ack-${op.operationId}`} onClick={() => handleAck(op)} className="rounded border border-[var(--color-warning)]/50 px-2 py-0.5 text-[10px] hover:bg-[var(--color-warning)]/20">{isOperationRiskAcknowledged(op.operationId) ? "Risk acknowledged (notice retained)" : "Acknowledge duplicate risk"}</button>
+            <button type="button" data-testid={`browser-recovery-ack-${op.operationId}`} disabled={busyId !== null} onClick={() => void handleAck(op)} className="rounded border border-[var(--color-warning)]/50 px-2 py-0.5 text-[10px] hover:bg-[var(--color-warning)]/20 disabled:opacity-40">{isOperationRiskAcknowledged(op.operationId) ? "Risk acknowledged (notice retained)" : "Acknowledge duplicate risk"}</button>
           </div>
         </div>
       ))}

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, LazyLock};
@@ -23,6 +24,7 @@ use crate::browser_debug::{
     BrowserSelectionV1, HandoffFence, MAX_PNG_BYTES,
 };
 use crate::browser_host::auth::BrowserAdmission;
+use crate::browser_host::input::SessionInputManager;
 use crate::browser_host::cdp::{CdpClient, CdpLifecycleEvent};
 use crate::browser_host::media::{ensure_producer_for_session, get_producer};
 use crate::browser_host::protocol::TargetGeometry;
@@ -163,6 +165,7 @@ pub(crate) struct SessionSelectionState {
     active: bool,
     selection_revision: u64,
     navigation_revision: u64,
+    lease_epoch: Option<u64>,
     backend_node_id: Option<i64>,
     preview: Option<BrowserSelectionV1>,
     pending_artifacts: Vec<(Uuid, AuthenticatedActor)>,
@@ -178,6 +181,7 @@ impl SessionSelectionState {
         Self {
             owner_principal: owner_principal.to_string(),
             active: false,
+            lease_epoch: None,
             selection_revision: 0,
             navigation_revision,
             backend_node_id: None,
@@ -207,8 +211,14 @@ impl SessionSelectionState {
     }
 }
 
+pub type StartPublishHook =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
 pub struct SelectionManager {
     sessions: Arc<RwLock<HashMap<String, SessionSelectionState>>>,
+    ended_lease_epochs: StdMutex<HashMap<String, u64>>,
+    #[doc(hidden)]
+    pub _before_start_publish_hook: StdMutex<Option<StartPublishHook>>,
 }
 
 pub static GLOBAL_SELECTION_MANAGER: LazyLock<SelectionManager> =
@@ -533,9 +543,31 @@ impl SelectionManager {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            ended_lease_epochs: StdMutex::new(HashMap::new()),
+            _before_start_publish_hook: StdMutex::new(None),
         }
     }
 
+    fn record_ended_lease_epoch(&self, session_id: &str, ended_epoch: u64) {
+        let mut map = self.ended_lease_epochs.lock().unwrap();
+        let slot = map.entry(session_id.to_string()).or_insert(0);
+        if ended_epoch > *slot {
+            *slot = ended_epoch;
+        }
+    }
+
+    fn ended_lease_epoch(&self, session_id: &str) -> u64 {
+        self.ended_lease_epochs
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn forget_ended_lease_epoch(&self, session_id: &str) {
+        self.ended_lease_epochs.lock().unwrap().remove(session_id);
+    }
     pub async fn get_summary(
         &self,
         session_id: &str,
@@ -666,6 +698,7 @@ pub async fn fence_principal_sessions_in_memory(principal: &str) -> Vec<Uuid> {
     let mut pending_ids = Vec::new();
     for sid in matching_ids {
         if let Some(entry) = map.remove(&sid) {
+            GLOBAL_SELECTION_MANAGER.forget_ended_lease_epoch(&sid);
             forget_navigation_observations(&sid);
             stop_session_navigation_watcher(&sid);
             if let Some(tok) = entry.cancel_token {
@@ -688,6 +721,8 @@ pub async fn start_selection(
     is_dev: bool,
     expected_nav_rev: u64,
     inspect_point: Option<InspectPoint>,
+    input_mgr: &Arc<SessionInputManager>,
+    lease_epoch: u64,
 ) -> Result<SelectionSummaryDto, SelectionError> {
     let session_dto = global_session_registry()
         .get_session(session_id, principal)
@@ -710,10 +745,36 @@ pub async fn start_selection(
         return Err(SelectionError::Conflict("navigation observation unavailable".into()));
     }
 
+    if !input_mgr.is_lease_epoch_live(lease_epoch).await {
+        return Err(SelectionError::Conflict(
+            "control lease ended before selection start".into(),
+        ));
+    }
+
+    let start_hook = GLOBAL_SELECTION_MANAGER
+        ._before_start_publish_hook
+        .lock()
+        .unwrap()
+        .clone();
+    if let Some(hook) = start_hook {
+        hook().await;
+    }
+
+    if !input_mgr.is_lease_epoch_live(lease_epoch).await {
+        return Err(SelectionError::Conflict(
+            "control lease ended before selection start".into(),
+        ));
+    }
+
     let (old_token, old_task, old_pending, start_sel_rev) = {
         let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
         if settled_navigation_observation(session_id).is_none() {
             return Err(SelectionError::Conflict("navigation observation unavailable".into()));
+        }
+        if GLOBAL_SELECTION_MANAGER.ended_lease_epoch(session_id) >= lease_epoch {
+            return Err(SelectionError::Conflict(
+                "control lease ended before selection start".into(),
+            ));
         }
         let entry = map
             .entry(session_id.to_string())
@@ -722,6 +783,7 @@ pub async fn start_selection(
         entry.navigation_revision = current_nav_rev;
         entry.selection_revision = entry.selection_revision.saturating_add(1);
         entry.active = inspect_point.is_none();
+        entry.lease_epoch = Some(lease_epoch);
         entry.preview = None;
         entry.backend_node_id = None;
         let tok = entry.cancel_token.take();
@@ -761,6 +823,29 @@ pub async fn start_selection(
                 "navigation observation unavailable for session".into(),
             ));
         }
+        if !input_mgr.is_lease_epoch_live(lease_epoch).await {
+            let overlay = {
+                let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
+                map.get_mut(session_id).and_then(|entry| {
+                    if entry.selection_revision == start_sel_rev
+                        && entry.lease_epoch == Some(lease_epoch)
+                    {
+                        entry.active = false;
+                        entry.lease_epoch = None;
+                        entry.selection_revision = entry.selection_revision.saturating_add(1);
+                        Some(entry.overlay_teardown())
+                    } else {
+                        None
+                    }
+                })
+            };
+            if let Some(overlay) = overlay {
+                disable_overlay_if_current(session_id, overlay).await;
+            }
+            return Err(SelectionError::Conflict(
+                "control lease ended during inspect".into(),
+            ));
+        }
         let summary = {
             let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
             let Some(entry) = map.get_mut(session_id) else {
@@ -769,9 +854,11 @@ pub async fn start_selection(
             if settled_navigation_observation(session_id).is_none()
                 || entry.navigation_revision != current_nav_rev
                 || entry.selection_revision != start_sel_rev
+                || entry.lease_epoch != Some(lease_epoch)
+                || GLOBAL_SELECTION_MANAGER.ended_lease_epoch(session_id) >= lease_epoch
             {
                 return Err(SelectionError::Conflict(
-                    "navigation occurred during inspect".to_string(),
+                    "navigation or lease change occurred during inspect".to_string(),
                 ));
             }
             entry.selection_revision = entry.selection_revision.saturating_add(1);
@@ -788,6 +875,7 @@ pub async fn start_selection(
     let state_clone = state.clone();
     let sid_clone = session_id.to_string();
     let principal_clone = principal.to_string();
+    let input_mgr_clone = input_mgr.clone();
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
 
     let task = tokio::spawn(async move {
@@ -798,6 +886,8 @@ pub async fn start_selection(
             is_dev,
             current_nav_rev,
             start_sel_rev,
+            input_mgr_clone,
+            lease_epoch,
             true,
             token_clone,
             ready_tx,
@@ -808,14 +898,19 @@ pub async fn start_selection(
         let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
         let Some(entry) = map.get_mut(session_id) else {
             cancel_token.cancel();
+            task.abort();
             return Err(SelectionError::Session(SessionError::NotFound));
         };
         if settled_navigation_observation(session_id).is_none()
             || entry.selection_revision != start_sel_rev
+            || entry.lease_epoch != Some(lease_epoch)
+            || GLOBAL_SELECTION_MANAGER.ended_lease_epoch(session_id) >= lease_epoch
         {
             cancel_token.cancel();
             task.abort();
-            return Err(SelectionError::Conflict("navigation observation unavailable".into()));
+            return Err(SelectionError::Conflict(
+                "navigation or lease change occurred during selection start".into(),
+            ));
         }
         entry.cancel_token = Some(cancel_token);
         entry.inspect_task = Some(task);
@@ -828,13 +923,106 @@ pub async fn start_selection(
         if let Some(entry) = map.get_mut(session_id) {
             if entry.selection_revision == start_sel_rev {
                 entry.active = false;
+                entry.lease_epoch = None;
             }
         }
         return Err(SelectionError::Cdp(
             "selection observer could not start for session".into(),
         ));
     }
+    if !input_mgr.is_lease_epoch_live(lease_epoch).await {
+        let cleared = {
+            let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
+            map.get_mut(session_id).and_then(|entry| {
+                if entry.selection_revision == start_sel_rev
+                    && entry.lease_epoch == Some(lease_epoch)
+                {
+                    Some(clear_selection_entry(entry, None))
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(cleared) = cleared {
+            finalize_cleared_selection(state, session_id, cleared).await;
+        }
+        return Err(SelectionError::Conflict(
+            "control lease ended during selection start".into(),
+        ));
+    }
     Ok(summary)
+}
+
+struct ClearedSelection {
+    token: Option<CancellationToken>,
+    task: Option<JoinHandle<()>>,
+    pending: Vec<(Uuid, AuthenticatedActor)>,
+    overlay: OverlayTeardown,
+    summary: SelectionSummaryDto,
+}
+
+fn clear_selection_entry(
+    entry: &mut SessionSelectionState,
+    nav_rev: Option<u64>,
+) -> ClearedSelection {
+    entry.active = false;
+    entry.preview = None;
+    entry.backend_node_id = None;
+    entry.lease_epoch = None;
+    entry.selection_revision = entry.selection_revision.saturating_add(1);
+    if let Some(rev) = nav_rev {
+        entry.navigation_revision = rev;
+    }
+    ClearedSelection {
+        token: entry.cancel_token.take(),
+        task: entry.inspect_task.take(),
+        pending: std::mem::take(&mut entry.pending_artifacts),
+        overlay: entry.overlay_teardown(),
+        summary: entry.to_summary(),
+    }
+}
+
+async fn finalize_cleared_selection(
+    state: &AppState,
+    session_id: &str,
+    cleared: ClearedSelection,
+) {
+    if let Some(tok) = cleared.token {
+        tok.cancel();
+    }
+    if let Some(task) = cleared.task {
+        task.abort();
+    }
+    cleanup_pending_artifacts(state, cleared.pending).await;
+    disable_overlay_if_current(session_id, cleared.overlay).await;
+}
+
+/// Clears active or picked element selection, cancels picker tasks, invalidates unclaimed
+/// pending artifacts, and disables CDP overlay inspect/highlight only if the selection
+/// belongs to the ended `lease_epoch` (never touching a successor lease's selection).
+pub async fn clear_selection_on_lease_end(
+    state: &AppState,
+    session_id: &str,
+    principal: &str,
+    ended_lease_epoch: u64,
+) {
+    let cleared = {
+        let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
+        if let Some(entry) = map.get_mut(session_id) {
+            if entry.owner_principal != principal {
+                return;
+            }
+            GLOBAL_SELECTION_MANAGER.record_ended_lease_epoch(session_id, ended_lease_epoch);
+            if !entry.lease_epoch.is_some_and(|e| e <= ended_lease_epoch) {
+                return;
+            }
+            clear_selection_entry(entry, None)
+        } else {
+            GLOBAL_SELECTION_MANAGER.record_ended_lease_epoch(session_id, ended_lease_epoch);
+            return;
+        }
+    };
+    finalize_cleared_selection(state, session_id, cleared).await;
 }
 
 pub async fn cancel_selection(
@@ -854,35 +1042,15 @@ pub async fn cancel_selection(
         )));
     }
 
-    let (old_token, old_task, old_pending, overlay, summary) = {
+    let cleared = {
         let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
         let entry = map
             .entry(session_id.to_string())
             .or_insert_with(|| SessionSelectionState::new(principal, current_nav_rev));
-        entry.active = false;
-        entry.preview = None;
-        entry.backend_node_id = None;
-        entry.navigation_revision = current_nav_rev;
-        let tok = entry.cancel_token.take();
-        let task = entry.inspect_task.take();
-        let pend = std::mem::take(&mut entry.pending_artifacts);
-        (
-            tok,
-            task,
-            pend,
-            entry.overlay_teardown(),
-            entry.to_summary(),
-        )
+        clear_selection_entry(entry, Some(current_nav_rev))
     };
-
-    if let Some(tok) = old_token {
-        tok.cancel();
-    }
-    if let Some(task) = old_task {
-        task.abort();
-    }
-    cleanup_pending_artifacts(state, old_pending).await;
-    disable_overlay_if_current(session_id, overlay).await;
+    let summary = cleared.summary.clone();
+    finalize_cleared_selection(state, session_id, cleared).await;
 
     Ok(summary)
 }
@@ -897,6 +1065,7 @@ fn apply_navigation_invalidation(
 ) -> Option<InvalidatedSelection> {
     let entry = map.get_mut(session_id)?;
     entry.active = false;
+    entry.lease_epoch = None;
     entry.preview = None;
     entry.backend_node_id = None;
     entry.selection_revision = entry.selection_revision.saturating_add(1);
@@ -999,6 +1168,7 @@ pub(crate) async fn fence_registry_navigation<T, E>(
 
 pub async fn cleanup_session(state: &AppState, session_id: &str) {
     stop_session_navigation_watcher(session_id);
+    GLOBAL_SELECTION_MANAGER.forget_ended_lease_epoch(session_id);
     forget_navigation_observations(session_id);
     let removed = {
         let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
@@ -1293,6 +1463,12 @@ async fn current_selection_revision(session_id: &str) -> Option<u64> {
     let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
     map.get(session_id).map(|entry| entry.selection_revision)
 }
+async fn current_selection_revision_and_lease(session_id: &str) -> Option<(u64, Option<u64>)> {
+    let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
+    map.get(session_id)
+        .map(|entry| (entry.selection_revision, entry.lease_epoch))
+}
+
 
 async fn disable_overlay_inspect_best_effort(session_id: &str) {
     if let Some(producer) = get_producer(session_id).await {
@@ -1688,6 +1864,8 @@ async fn run_selection_cdp_observer(
     is_dev: bool,
     expected_nav_rev: u64,
     expected_sel_rev: u64,
+    input_mgr: Arc<SessionInputManager>,
+    expected_lease_epoch: u64,
     watch_inspect: bool,
     cancel_token: CancellationToken,
     ready_tx: oneshot::Sender<()>,
@@ -1717,10 +1895,19 @@ async fn run_selection_cdp_observer(
         record_navigation_fenced(&state, &session_id, None).await;
         return;
     }
+    if !input_mgr.is_lease_epoch_live(expected_lease_epoch).await {
+        debug!(
+            session_id,
+            expected_lease_epoch,
+            "Selection observer: initiating lease ended before inspect setup"
+        );
+        return;
+    }
     let mut event_rx = cdp.subscribe_events();
     if watch_inspect {
         // Serialized with overlay teardown, and skipped once a newer selection replaced this
-        // picker, so an obsolete picker can never re-enable native picking over a newer state.
+        // picker or the initiating lease ended, so an obsolete picker can never re-enable
+        // native picking over a newer state.
         let gate = {
             let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
             map.get(&session_id).map(|entry| entry.overlay_gate.clone())
@@ -1729,11 +1916,20 @@ async fn run_selection_cdp_observer(
             Some(gate) => Some(gate.lock().await),
             None => None,
         };
-        if current_selection_revision(&session_id).await == Some(expected_sel_rev) {
+        if input_mgr.is_lease_epoch_live(expected_lease_epoch).await
+            && current_selection_revision_and_lease(&session_id).await
+                == Some((expected_sel_rev, Some(expected_lease_epoch)))
+        {
             let dom_res = cdp.send_command("DOM.enable", None, Some(&page_sid)).await;
             let ov_res = cdp
                 .send_command("Overlay.enable", None, Some(&page_sid))
                 .await;
+            if !input_mgr.is_lease_epoch_live(expected_lease_epoch).await
+                || current_selection_revision_and_lease(&session_id).await
+                    != Some((expected_sel_rev, Some(expected_lease_epoch)))
+            {
+                return;
+            }
             let im_res = cdp
                 .send_command(
                     "Overlay.setInspectMode",
@@ -1751,6 +1947,26 @@ async fn run_selection_cdp_observer(
                 ?im_res,
                 "Overlay inspect mode initialized"
             );
+            if !input_mgr.is_lease_epoch_live(expected_lease_epoch).await {
+                let no_newer_active = {
+                    let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
+                    map.get(&session_id)
+                        .is_none_or(|entry| !entry.active && entry.preview.is_none())
+                };
+                if no_newer_active {
+                    let _ = cdp
+                        .send_command(
+                            "Overlay.setInspectMode",
+                            Some(json!({ "mode": "none" })),
+                            Some(&page_sid),
+                        )
+                        .await;
+                    let _ = cdp
+                        .send_command("Overlay.hideHighlight", None, Some(&page_sid))
+                        .await;
+                }
+                return;
+            }
         }
     }
     let _ = ready_tx.send(());
@@ -1821,30 +2037,45 @@ async fn run_selection_cdp_observer(
                                 if let Ok(val) = call_res {
                                     if let Some(raw_sel) = val.pointer("/result/value") {
                                         if let Ok(sel) = extract_and_sanitize_selection(raw_sel) {
+                                            if !input_mgr
+                                                .is_lease_epoch_live(expected_lease_epoch)
+                                                .await
                                             {
+                                                break;
+                                            }
+                                            let committed = {
                                                 let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
                                                 if let Some(entry) = map.get_mut(&session_id) {
                                                     if entry.active
                                                         && entry.navigation_revision == expected_nav_rev
                                                         && entry.selection_revision == expected_sel_rev
+                                                        && entry.lease_epoch == Some(expected_lease_epoch)
+                                                        && GLOBAL_SELECTION_MANAGER.ended_lease_epoch(&session_id) < expected_lease_epoch
                                                     {
                                                         entry.selection_revision = entry.selection_revision.saturating_add(1);
                                                         entry.active = false;
                                                         entry.backend_node_id = Some(bn_id);
                                                         entry.preview = Some(sel);
+                                                        true
+                                                    } else {
+                                                        false
                                                     }
+                                                } else {
+                                                    false
                                                 }
+                                            };
+                                            if committed {
+                                                let _ = cdp
+                                                    .send_command("Overlay.setInspectMode", Some(json!({ "mode": "none" })), Some(&page_sid))
+                                                    .await;
+                                                let _ = cdp
+                                                    .send_command(
+                                                        "Overlay.highlightNode",
+                                                        Some(json!({ "backendNodeId": bn_id, "highlightConfig": default_highlight_config() })),
+                                                        Some(&page_sid),
+                                                    )
+                                                    .await;
                                             }
-                                            let _ = cdp
-                                                .send_command("Overlay.setInspectMode", Some(json!({ "mode": "none" })), Some(&page_sid))
-                                                .await;
-                                            let _ = cdp
-                                                .send_command(
-                                                    "Overlay.highlightNode",
-                                                    Some(json!({ "backendNodeId": bn_id, "highlightConfig": default_highlight_config() })),
-                                                    Some(&page_sid),
-                                                )
-                                                .await;
                                         }
                                     }
                                 }

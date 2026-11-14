@@ -68,6 +68,7 @@ const {
   acquireControl,
   releaseControl,
   controlSocket,
+  getSelectedText,
   pcmPlayerMocks,
   storeListeners,
   cognitoListeners,
@@ -127,6 +128,7 @@ const {
     },
     acquireControl: vi.fn(),
     releaseControl: vi.fn(),
+    getSelectedText: vi.fn(),
     controlSocket: {
       readyState: 1,
       bufferedAmount: 0,
@@ -203,6 +205,7 @@ vi.mock("../api/browser-host-client.js", async (original) => ({
   mintViewerAttachmentTickets: mintTickets,
   acquireBrowserControl: acquireControl,
   releaseBrowserControl: releaseControl,
+  getBrowserSelectedText: getSelectedText,
 }));
 vi.mock("@/api/browser-host-client.js", async (original) => ({
   ...(await original<typeof BrowserHostClientModule>()),
@@ -213,6 +216,7 @@ vi.mock("@/api/browser-host-client.js", async (original) => ({
   mintViewerAttachmentTickets: mintTickets,
   acquireBrowserControl: acquireControl,
   releaseBrowserControl: releaseControl,
+  getBrowserSelectedText: getSelectedText,
 }));
 vi.mock("../browser-host/canvas-view.js", () => ({
   CanvasView: ({
@@ -238,8 +242,8 @@ vi.mock("../browser-host/canvas-view.js", () => ({
 }));
 vi.mock("../browser-host/pcm-player.js", () => ({
   PcmPlayer: class {
-    prime() {
-      pcmPlayerMocks.prime();
+    prime(allowBeforeLive?: boolean) {
+      pcmPlayerMocks.prime(allowBeforeLive);
     }
     enqueue(data: string) {
       pcmPlayerMocks.enqueue(data);
@@ -390,6 +394,7 @@ import {
   requestBrowserProxyFocus,
   updateBrowserStreamSlot,
 } from "./BrowserStreamKeepAliveHost.js";
+import { writeTextToClipboard } from "@/browser-host/text-input-proxy.js";
 import { countRetainedNativeReferences } from "./browser/browser-native-reference-census.js";
 import { clearBrowserControlGateForTesting, runSerializedBrowserControlAcquire } from "./browser/browser-control-gate.js";
 
@@ -1767,6 +1772,286 @@ describe("BrowserStreamKeepAliveHost quality & live mute lifecycle regressions",
 
     expect(getStreamQuality(tuple).preference).toBe("auto");
     expect(getStreamQuality(tuple).status).toBeNull();
+  });
+
+  it("unmutes stream controller when tab.phase transitions connecting -> live, primes on pre-live unlock, pointerup, and TextInputProxy keydown", async () => {
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "connecting" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    expect(streamState.setAudioMuted).toHaveBeenLastCalledWith(true);
+
+    pcmPlayerMocks.prime.mockClear();
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).toHaveBeenCalledWith(true);
+
+    streamState.setAudioMuted.mockClear();
+    patchTabInTest("tab-1", { phase: "live" });
+    await render();
+    expect(streamState.setAudioMuted).toHaveBeenLastCalledWith(false);
+
+    pcmPlayerMocks.prime.mockClear();
+    const canvas = slot.querySelector("canvas")!;
+    await act(async () => {
+      canvas.dispatchEvent(new MouseEvent("pointerup", { clientX: 400, clientY: 300, button: 0, bubbles: true }));
+    });
+    expect(pcmPlayerMocks.prime).toHaveBeenCalledTimes(1);
+
+    pcmPlayerMocks.prime.mockClear();
+    const proxy = slot.querySelector("textarea")!;
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    });
+    expect(pcmPlayerMocks.prime).toHaveBeenCalledTimes(1);
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("copies selected text via Ctrl+C on TextInputProxy with clipboard API and execCommand fallback", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-ctrl-c" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    getSelectedText.mockResolvedValueOnce({ text: "copied from chromium" });
+    const proxy = slot.querySelector("textarea")!;
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await tick(10);
+    expect(getSelectedText).toHaveBeenCalledWith(owner, "session-1", "lease-ctrl-c");
+    expect(writeText).toHaveBeenCalledWith("copied from chromium");
+
+    // Fallback to execCommand("copy") when navigator.clipboard.writeText rejects
+    writeText.mockRejectedValueOnce(new Error("Clipboard restricted"));
+    const execCopy = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCopy });
+    getSelectedText.mockResolvedValueOnce({ text: "fallback text" });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await tick(10);
+    expect(execCopy).toHaveBeenCalledWith("copy");
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("W1 & W2: clears cached selection on empty live result, rejects late navRev copy, and skips execCommand fallback when masked", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const execCopy = vi.fn().mockReturnValue(true);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCopy });
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-w1" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    const proxy = slot.querySelector("textarea")!;
+    // 1. Populate cache via Ctrl+C
+    getSelectedText.mockResolvedValueOnce({ text: "old selected text" });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await tick(10);
+    expect(writeText).toHaveBeenCalledWith("old selected text");
+
+    // 2. Empty live response clears cache so subsequent native copy event does NOT write stale text
+    getSelectedText.mockResolvedValueOnce({ text: "" });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await tick(10);
+
+    const setData = vi.fn();
+    const copyEvent = new Event("copy", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
+    Object.defineProperty(copyEvent, "clipboardData", { value: { setData } });
+    await act(async () => {
+      proxy.dispatchEvent(copyEvent);
+    });
+    expect(setData).not.toHaveBeenCalled();
+
+    // 3. Late async getBrowserSelectedText response after navigationRevision bump is ignored
+    writeText.mockClear();
+    const deferredCopy = Promise.withResolvers<{ text: string }>();
+    getSelectedText.mockReturnValueOnce(deferredCopy.promise);
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    patchTabInTest("tab-1", {
+      snapshot: { ...readTab("tab-1").snapshot!, navigationRevision: "999" },
+    });
+    await render();
+    await act(async () => {
+      deferredCopy.resolve({ text: "stale nav text" });
+    });
+    expect(writeText).not.toHaveBeenCalled();
+    const copyAfterNav = new Event("copy", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
+    Object.defineProperty(copyAfterNav, "clipboardData", { value: { setData } });
+    await act(async () => {
+      proxy.dispatchEvent(copyAfterNav);
+    });
+    expect(setData).not.toHaveBeenCalled();
+
+    // 4. W2: writeText rejects after Cognito mask activates -> execCommand fallback NOT executed
+    const deferredWrite = Promise.withResolvers<void>();
+    writeText.mockReturnValueOnce(deferredWrite.promise);
+    getSelectedText.mockResolvedValueOnce({ text: "secret page text" });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await act(async () => {
+      streamState.suppressed = true;
+      cognitoListeners.forEach((fn) => fn());
+    });
+    await render();
+    await act(async () => {
+      deferredWrite.reject(new Error("Denied"));
+    });
+    expect(execCopy).not.toHaveBeenCalled();
+    streamState.suppressed = false;
+    cognitoListeners.forEach((fn) => fn());
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("denies pre-live prime(true) when muted, masked, minimized, inactive desktop, or owner-mismatched", async () => {
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "connecting" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).toHaveBeenCalledWith(true);
+    // 1. Muted
+    pcmPlayerMocks.prime.mockClear();
+    pcmPlayerMocks.flush.mockClear();
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, true);
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).not.toHaveBeenCalled();
+    expect(pcmPlayerMocks.flush).toHaveBeenCalled();
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+
+    // 2. Cognito masked
+    pcmPlayerMocks.prime.mockClear();
+    streamState.suppressed = true;
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).not.toHaveBeenCalled();
+    streamState.suppressed = false;
+
+    // 3. Minimized or inactive desktop
+    pcmPlayerMocks.prime.mockClear();
+    store.session.windows["window-1"].minimized = true;
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).not.toHaveBeenCalled();
+    store.session.windows["window-1"].minimized = false;
+
+    (store.session as unknown as Record<string, unknown>).activeDesktopId = "desktop-other";
+    store.session.windows["window-1"].desktopId = "desktop-1";
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).not.toHaveBeenCalled();
+    delete (store.session as unknown as Record<string, unknown>).activeDesktopId;
+
+    // 4. Owner mismatch
+    const curApp = readAppState();
+    store.updateAppState("window-1", { ...curApp, ownerScope: scope2 } as unknown as Record<string, unknown>);
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).not.toHaveBeenCalled();
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("W-C2-1: selectionCacheGenRef rejects deferred copy response after input invalidation and rejects older non-empty after newer empty", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-wc21" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    const proxy = slot.querySelector("textarea")!;
+    const setData = vi.fn();
+
+    // 1. Deferred response after non-copy input invalidation
+    const deferredInputRace = Promise.withResolvers<{ text: string }>();
+    getSelectedText.mockReturnValueOnce(deferredInputRace.promise);
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    });
+    await act(async () => {
+      deferredInputRace.resolve({ text: "stale after input" });
+    });
+    expect(writeText).not.toHaveBeenCalled();
+    const copyAfterInput = new Event("copy", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
+    Object.defineProperty(copyAfterInput, "clipboardData", { value: { setData } });
+    await act(async () => {
+      proxy.dispatchEvent(copyAfterInput);
+    });
+    expect(setData).not.toHaveBeenCalled();
+
+    // 2. Older non-empty response resolving AFTER newer empty response must NOT repopulate cache or write clipboard
+    const olderNonEmpty = Promise.withResolvers<{ text: string }>();
+    const newerEmpty = Promise.withResolvers<{ text: string }>();
+    getSelectedText.mockReturnValueOnce(olderNonEmpty.promise).mockReturnValueOnce(newerEmpty.promise);
+
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await act(async () => {
+      newerEmpty.resolve({ text: "" });
+    });
+    await act(async () => {
+      olderNonEmpty.resolve({ text: "older non-empty text" });
+    });
+    expect(writeText).not.toHaveBeenCalled();
+    const copyAfterOrder = new Event("copy", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
+    Object.defineProperty(copyAfterOrder, "clipboardData", { value: { setData } });
+    await act(async () => {
+      proxy.dispatchEvent(copyAfterOrder);
+    });
+    expect(setData).not.toHaveBeenCalled();
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("W-C2-3: writeTextToClipboard skips execCommand when focusin listener revokes authority during fallback focus", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("Denied")) },
+    });
+    const execCopy = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCopy });
+
+    let authorized = true;
+    const onFocusIn = () => {
+      authorized = false;
+    };
+    document.addEventListener("focusin", onFocusIn);
+    try {
+      const ok = await writeTextToClipboard("secret", () => authorized);
+      expect(ok).toBe(false);
+      expect(execCopy).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("focusin", onFocusIn);
+    }
   });
 });
 

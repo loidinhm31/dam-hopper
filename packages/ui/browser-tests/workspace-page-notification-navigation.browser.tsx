@@ -112,7 +112,7 @@ const mocks = vi.hoisted(() => {
     },
     searchTextShortcut: "mod+shift+f",
     searchFilenameShortcut: "mod+p",
-    terminalWorkspaceShortcut: "mod+`",
+    openTerminalShortcut: "ctrl+shift+t",
     terminalFilePanelShortcut: "mod+shift+e",
     revealActiveFileShortcut: "alt+f1",
   };

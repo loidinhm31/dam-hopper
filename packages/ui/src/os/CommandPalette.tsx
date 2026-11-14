@@ -1,4 +1,3 @@
-import type { ConnectionRef } from "@/api/ownership.js";
 import {
   useState,
   useMemo,
@@ -23,6 +22,7 @@ import { getConnectionSnapshot, getApi } from "@/api/connections.js";
 import { isCanonicalUuid } from "@/api/terminal-session-contract.js";
 import { listActionDescriptors, resolveActionBinding } from "./actions.js";
 import { canExecuteAction, executeAction } from "./action-executor.js";
+import { resolveActiveActionContext } from "./action-dispatch.js";
 import { APP_ICONS } from "./app-icons.js";
 import type { ActionContext, OsAppId } from "./types.js";
 export type PaletteMode =
@@ -133,29 +133,10 @@ export function CommandPalette({
   }, [query, activeMode]);
 
   // Built-in Commands Provider
-  const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: "default" };
-  let desktopOwner: ConnectionRef | null = null;
-  if (desktopCtx.profileId) {
-    try {
-      const snap = getConnectionSnapshot(desktopCtx.profileId);
-      if (snap && snap.status === "connected") {
-        desktopOwner = snap.owner;
-      }
-    } catch {
-      // Fall back gracefully
-    }
-  }
-
   const commandItems = useMemo<PaletteItem[]>(() => {
+    const actionContext = resolveActiveActionContext(null);
     const actionCommands: PaletteItem[] = listActionDescriptors().map((desc) => {
       const binding = resolveActionBinding(desc.id, useSettingsStore.getState());
-      const actionContext: ActionContext = {
-        kind: "desktop",
-        desktopId: activeDesktop?.id ?? "desktop-1",
-        windowContext: desktopCtx,
-        owner: desktopOwner,
-        target: desktopCtx.target,
-      };
       const check = canExecuteAction({ id: desc.id, context: actionContext });
       return {
         id: `cmd-action-${desc.id}`,

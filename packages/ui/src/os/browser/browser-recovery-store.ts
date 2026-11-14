@@ -1,5 +1,7 @@
 import { areBrowserOwnerScopesEqual } from "./browser-owner-scope.js";
 import { validateBrowserRecoveryDisk } from "./browser-recovery-validation.js";
+import type { OsWindow } from "../types.js";
+import { useWindowStore } from "../window-store.js";
 import {
   BROWSER_RECOVERY_VERSION,
   MAX_BROWSER_METADATA_BYTES,
@@ -95,8 +97,63 @@ export async function stageRecoveryOperation(
   });
 }
 
-/** Settle an exact proven-settled operation under the recovery lock. */
-export async function settleRecoveryOperation(operationId: string): Promise<void> {
+function readWindowClosingState(win: OsWindow | undefined): { operationId?: string; status?: string } | null {
+  if (!win || win.appId !== "browser" || !win.appState || typeof win.appState !== "object") return null;
+  if (!("closing" in win.appState) || !win.appState.closing || typeof win.appState.closing !== "object") return null;
+  const closing = win.appState.closing;
+  const operationId = "operationId" in closing && typeof closing.operationId === "string" ? closing.operationId : undefined;
+  const status = "status" in closing && typeof closing.status === "string" ? closing.status : undefined;
+  return status ? { operationId, status } : null;
+}
+
+export interface SettleRecoveryAuthorizedOptions {
+  operationIds: readonly string[];
+  expectedScope: BrowserOwnerScope;
+  skipActiveClosingWindows?: boolean;
+  allowUnknownClosingForWindowId?: string;
+  shouldSettle?: (op: BrowserRecoveryOperation) => boolean;
+}
+
+/**
+ * Proven-completion settlement: removes an operation whose remote close/create outcome was already
+ * proven complete (intentionally permitted while a coordinator's window still carries closing="pending").
+ * Enforces expectedScope and optional shouldSettle inside the recovery Web Lock.
+ */
+export async function settleProvenRecoveryOperation(
+  operationId: string,
+  expectedScope: BrowserOwnerScope,
+  shouldSettle?: () => boolean,
+): Promise<boolean> {
+  return await withBrowserRecoveryLock(() => {
+    if (shouldSettle && !shouldSettle()) return false;
+    const disk = loadBrowserRecoveryDisk();
+    let removed = false;
+    const remainingOps = disk.operations.filter((o) => {
+      if (o.operationId === operationId && areBrowserOwnerScopesEqual(o.ownerScope, expectedScope)) {
+        removed = true;
+        return false;
+      }
+      return true;
+    });
+    if (removed) {
+      saveBrowserRecoveryDisk({
+        ...disk,
+        operations: remainingOps,
+      });
+    }
+    return removed;
+  });
+}
+
+/** Legacy/test wrapper for proven-completion singular settlement; production callers should pass expectedScope. */
+export async function settleRecoveryOperation(
+  operationId: string,
+  expectedScope?: BrowserOwnerScope,
+): Promise<void> {
+  if (expectedScope) {
+    await settleProvenRecoveryOperation(operationId, expectedScope);
+    return;
+  }
   await withBrowserRecoveryLock(() => {
     const disk = loadBrowserRecoveryDisk();
     const remainingOps = disk.operations.filter((o) => o.operationId !== operationId);
@@ -104,6 +161,66 @@ export async function settleRecoveryOperation(operationId: string): Promise<void
       ...disk,
       operations: remainingOps,
     });
+  });
+}
+
+/** Guarded user-dismissal settlement: atomically verifies owner scope and blocks active pending closes inside the lock. */
+export async function settleRecoveryOperationsIfAuthorized(
+  options: SettleRecoveryAuthorizedOptions,
+): Promise<BrowserRecoveryOperation[]> {
+  return await withBrowserRecoveryLock(() => {
+    const disk = loadBrowserRecoveryDisk();
+    const idSet = new Set(options.operationIds);
+    const windows = useWindowStore.getState().session?.windows ?? {};
+    const pendingClosingOpIds = new Set<string>();
+    for (const w of Object.values(windows)) {
+      const closing = readWindowClosingState(w);
+      if (closing?.status === "pending" && closing.operationId) {
+        pendingClosingOpIds.add(closing.operationId);
+      }
+    }
+    const settled: BrowserRecoveryOperation[] = [];
+    const remainingOps: BrowserRecoveryOperation[] = [];
+    for (const op of disk.operations) {
+      if (!idSet.has(op.operationId)) {
+        remainingOps.push(op);
+        continue;
+      }
+      if (!areBrowserOwnerScopesEqual(op.ownerScope, options.expectedScope)) {
+        remainingOps.push(op);
+        continue;
+      }
+      if (pendingClosingOpIds.has(op.operationId)) {
+        remainingOps.push(op);
+        continue;
+      }
+      const opWindowClosing = readWindowClosingState(windows[op.windowId]);
+      if (opWindowClosing) {
+        if (opWindowClosing.status === "pending") {
+          remainingOps.push(op);
+          continue;
+        }
+        if (
+          options.skipActiveClosingWindows ||
+          options.allowUnknownClosingForWindowId !== op.windowId
+        ) {
+          remainingOps.push(op);
+          continue;
+        }
+      }
+      if (options.shouldSettle && !options.shouldSettle(op)) {
+        remainingOps.push(op);
+        continue;
+      }
+      settled.push(op);
+    }
+    if (settled.length > 0) {
+      saveBrowserRecoveryDisk({
+        ...disk,
+        operations: remainingOps,
+      });
+    }
+    return settled;
   });
 }
 

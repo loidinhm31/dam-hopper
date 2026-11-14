@@ -1762,6 +1762,284 @@ mod live {
         }
         live.finish().await;
     }
+
+    #[tokio::test]
+    async fn real_chromium_selected_text_reads_page_selection_and_excludes_password_input() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let token = live.acquire("viewer-1").await;
+
+        // Populate page with regular text, textarea, text input, and password input.
+        live.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": r#"(() => {
+                        document.body.innerHTML = `
+                            <p id="copyable">Hello Chromium Selection!</p>
+                            <textarea id="notes">Textarea selected text</textarea>
+                            <input id="text-in" type="text" value="Plain input value" />
+                            <input id="pwd" type="password" value="top-secret-password" />
+                        `;
+                    })()"#
+                })),
+                Some(&live.page_sid),
+            )
+            .await
+            .unwrap();
+
+        let get_selected = |lease: &str| {
+            let url = format!("http://{}/api/browser/sessions/{}/selected-text", live.addr, live.session_id);
+            let client = reqwest::Client::new();
+            let lease = lease.to_string();
+            async move {
+                let resp = client
+                    .get(url)
+                    .header(X_BROWSER_LEASE.as_str(), lease)
+                    .send()
+                    .await
+                    .unwrap();
+                let status = resp.status().as_u16();
+                let bytes = resp.bytes().await.unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                (status, body)
+            }
+        };
+
+        // 1. Select text in <p id="copyable"> via DOM Selection range.
+        live.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": r#"(() => {
+                        const p = document.getElementById('copyable');
+                        const range = document.createRange();
+                        range.selectNodeContents(p);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    })()"#
+                })),
+                Some(&live.page_sid),
+            )
+            .await
+            .unwrap();
+        let (st1, b1) = get_selected(&token).await;
+        assert_eq!(st1, 200);
+        assert_eq!(b1["text"], "Hello Chromium Selection!");
+
+        // 2. Select text inside <textarea>.
+        live.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": r#"(() => {
+                        window.getSelection().removeAllRanges();
+                        const ta = document.getElementById('notes');
+                        ta.focus();
+                        ta.setSelectionRange(0, 17);
+                    })()"#
+                })),
+                Some(&live.page_sid),
+            )
+            .await
+            .unwrap();
+        let (st2, b2) = get_selected(&token).await;
+        assert_eq!(st2, 200);
+        assert_eq!(b2["text"], "Textarea selected");
+
+        // 3. Select text inside <input type="text">.
+        live.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": r#"(() => {
+                        window.getSelection().removeAllRanges();
+                        const inp = document.getElementById('text-in');
+                        inp.focus();
+                        inp.setSelectionRange(6, 11);
+                    })()"#
+                })),
+                Some(&live.page_sid),
+            )
+            .await
+            .unwrap();
+        let (st3, b3) = get_selected(&token).await;
+        assert_eq!(st3, 200);
+        assert_eq!(b3["text"], "input");
+
+        // 4. Select text inside <input type="password"> -> MUST return "".
+        live.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": r#"(() => {
+                        window.getSelection().removeAllRanges();
+                        const pwd = document.getElementById('pwd');
+                        pwd.focus();
+                        pwd.select();
+                    })()"#
+                })),
+                Some(&live.page_sid),
+            )
+            .await
+            .unwrap();
+        let (st4, b4) = get_selected(&token).await;
+        assert_eq!(st4, 200);
+        assert_eq!(b4["text"], "", "password input selection must never be returned");
+
+        // 5. Clear selection -> returns "".
+        live.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": r#"(() => {
+                        window.getSelection().removeAllRanges();
+                        if (document.activeElement) document.activeElement.blur();
+                    })()"#
+                })),
+                Some(&live.page_sid),
+            )
+            .await
+            .unwrap();
+        let (st5, b5) = get_selected(&token).await;
+        assert_eq!(st5, 200);
+        assert_eq!(b5["text"], "");
+
+        live.finish().await;
+    }
+
+    #[tokio::test]
+    async fn real_chromium_selected_text_bounds_large_and_surrogate_pair_selections_without_cdp_loss() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let token = live.acquire("viewer-1").await;
+
+        let get_selected = |lease: &str| {
+            let url = format!(
+                "http://{}/api/browser/sessions/{}/selected-text",
+                live.addr, live.session_id
+            );
+            let client = reqwest::Client::new();
+            let lease = lease.to_string();
+            async move {
+                let resp = client
+                    .get(url)
+                    .header(X_BROWSER_LEASE.as_str(), lease)
+                    .send()
+                    .await
+                    .unwrap();
+                let status = resp.status().as_u16();
+                let bytes = resp.bytes().await.unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                (status, body)
+            }
+        };
+
+        // 1. Select >5 MiB ASCII text in the page (> 4 MiB CDP transport limit).
+        live.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": r#"(() => {
+                        const big = 'A'.repeat(5 * 1024 * 1024 + 4096);
+                        document.body.innerHTML = `<pre id="huge">${big}</pre><p id="small">CDP still alive!</p><textarea id="huge-ta"></textarea>`;
+                        document.getElementById('huge-ta').value = big;
+                        const pre = document.getElementById('huge');
+                        const range = document.createRange();
+                        range.selectNodeContents(pre);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    })()"#
+                })),
+                Some(&live.page_sid),
+            )
+            .await
+            .unwrap();
+
+        let (st_big, body_big) = get_selected(&token).await;
+        assert_eq!(st_big, 200, "{body_big}");
+        let big_text = body_big["text"].as_str().unwrap();
+        assert!(big_text.len() <= 65_536);
+        assert_eq!(big_text.len(), 65_536);
+        assert!(!live.client.is_closed(), "CDP transport must stay healthy after >5 MiB selection");
+
+        // 2. Also verify >5 MiB <textarea> selection is bounded in JS before CDP serialization.
+        live.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": r#"(() => {
+                        window.getSelection().removeAllRanges();
+                        const ta = document.getElementById('huge-ta');
+                        ta.focus();
+                        ta.setSelectionRange(0, ta.value.length);
+                    })()"#
+                })),
+                Some(&live.page_sid),
+            )
+            .await
+            .unwrap();
+        let (st_ta, body_ta) = get_selected(&token).await;
+        assert_eq!(st_ta, 200);
+        assert_eq!(body_ta["text"].as_str().unwrap().len(), 65_536);
+
+        // 3. Surrogate-pair boundary: 65535 ASCII + 200 4-byte emojis -> cut must walk back cleanly
+        //    so no unpaired surrogate / U+FFFD replacement character is produced.
+        live.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": r#"(() => {
+                        if (document.activeElement) document.activeElement.blur();
+                        const sur = 'a'.repeat(65535) + '🦀'.repeat(200);
+                        const p = document.createElement('p');
+                        p.id = 'sur';
+                        p.textContent = sur;
+                        document.body.appendChild(p);
+                        const range = document.createRange();
+                        range.selectNodeContents(p);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    })()"#
+                })),
+                Some(&live.page_sid),
+            )
+            .await
+            .unwrap();
+        let (st_sur, body_sur) = get_selected(&token).await;
+        assert_eq!(st_sur, 200);
+        let sur_text = body_sur["text"].as_str().unwrap();
+        assert!(sur_text.len() <= 65_536);
+        assert_eq!(sur_text.len(), 65_535);
+        assert!(!sur_text.contains('\u{FFFD}'));
+
+        // 4. Same session & CDP connection still works for a normal selection right after.
+        live.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": r#"(() => {
+                        const p = document.getElementById('small');
+                        const range = document.createRange();
+                        range.selectNodeContents(p);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    })()"#
+                })),
+                Some(&live.page_sid),
+            )
+            .await
+            .unwrap();
+        let (st_small, body_small) = get_selected(&token).await;
+        assert_eq!(st_small, 200);
+        assert_eq!(body_small["text"], "CDP still alive!");
+
+        live.finish().await;
+    }
 }
 
 /// Release semantics against a mock CDP browser: exact captured key/code/button/position on the
@@ -1873,7 +2151,9 @@ mod native_release {
             hold(&manager, &native, &token).await;
             assert!(input_commands(&native).is_empty(), "{path}: nothing released while the lease is live");
             match path {
-                "release" => manager.release_lease(&token).await.unwrap(),
+                "release" => {
+                    manager.release_lease(&token).await.unwrap();
+                }
                 "revoke" => manager.revoke_lease().await.unwrap(),
                 "holder" => manager.revoke_lease_if_holder("viewer-1").await.unwrap(),
                 "gap" => {
@@ -1972,5 +2252,175 @@ mod native_release {
         assert!(manager.release_failure().await.is_none());
         let key_ups = input_commands(&native).iter().filter(|c| c["params"]["type"] == "keyUp").count();
         assert!(key_ups >= 1, "retry released the key");
+    }
+}
+
+mod selected_text_revalidation {
+    use super::*;
+    use dam_hopper_server::api::browser_host::get_or_register_producer;
+    use dam_hopper_server::browser_host::cdp::CdpClient;
+    use dam_hopper_server::browser_host::screencast::ScreencastProducer;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::sync::Notify;
+    use tokio_tungstenite::tungstenite::Message;
+
+    async fn setup_paused_eval_session(
+        username: &str,
+    ) -> (
+        tempfile::TempDir,
+        axum::Router,
+        String,
+        String,
+        String,
+        Arc<Notify>,
+        Arc<Notify>,
+    ) {
+        global_session_registry().reset_for_test().await;
+        let tmp = tempdir().unwrap();
+        let (auth_service, token) = make_user_token(username, UserRole::Admin, true);
+        let state = create_test_state(tmp.path().to_path_buf(), false)
+            .with_auth_service(Arc::new(auth_service));
+        let app = build_router_with_origins(state, vec![]);
+
+        let eval_entered = Arc::new(Notify::new());
+        let eval_release = Arc::new(Notify::new());
+        let entered_clone = eval_entered.clone();
+        let release_clone = eval_release.clone();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else { return };
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let cmd: Value = serde_json::from_str(&text).unwrap();
+                let id = cmd["id"].clone();
+                let method = cmd["method"].as_str().unwrap_or_default().to_string();
+                let sid = cmd.get("sessionId").cloned();
+                let result = if method == "Target.attachToTarget" {
+                    json!({ "sessionId": "paused-eval-page-sid" })
+                } else if method == "Runtime.evaluate" {
+                    entered_clone.notify_one();
+                    release_clone.notified().await;
+                    json!({ "result": { "type": "string", "value": "late-secret-selection" } })
+                } else {
+                    json!({})
+                };
+                let mut resp = json!({ "id": id, "result": result });
+                if let Some(s) = sid {
+                    resp.as_object_mut().unwrap().insert("sessionId".into(), s);
+                }
+                if ws.send(Message::Text(resp.to_string().into())).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let client = CdpClient::connect(&format!("ws://127.0.0.1:{port}"))
+            .await
+            .expect("mock cdp");
+        let (dto, _) = global_session_registry()
+            .insert_running_for_test(
+                username,
+                false,
+                "inc-reval",
+                1,
+                &CreateSessionRequest {
+                    creation_key: uuid::Uuid::new_v4().to_string(),
+                    url: "http://example.com".to_string(),
+                    viewport: ViewportRequest { width: 1280, height: 900, dpr: 1.0 },
+                },
+                &[],
+            )
+            .await
+            .unwrap();
+        let session_id = dto.browser_session_id;
+        let producer = Arc::new(ScreencastProducer::new(
+            session_id.clone(),
+            "inc-reval".to_string(),
+            1,
+            1,
+            client,
+            "target-reval".to_string(),
+            TargetGeometry {
+                css_width: 1280.0, css_height: 900.0, offset_top: 0.0, scroll_x: 0.0,
+                scroll_y: 0.0, page_scale: 1.0, visual_offset_x: 0.0, visual_offset_y: 0.0,
+                dpr: 1.0,
+            },
+        ));
+        let _ = producer.ensure_page_session().await.unwrap();
+        get_or_register_producer(&session_id, producer).await;
+
+        let input_mgr = get_or_create_input_manager(&session_id).await;
+        let (lease_token, _) = input_mgr.acquire_lease("viewer-1", "human").await.unwrap();
+        input_mgr.set_selected_text("previous-cached").await;
+
+        (tmp, app, token, session_id, lease_token, eval_entered, eval_release)
+    }
+
+    #[tokio::test]
+    async fn selected_text_rejects_when_lease_revoked_during_cdp_eval() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let (_tmp, app, token, session_id, lease_token, eval_entered, eval_release) =
+            setup_paused_eval_session("admin-reval-lease").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/browser/sessions/{session_id}/selected-text"))
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .header(&X_BROWSER_LEASE, &lease_token)
+            .body(Body::empty())
+            .unwrap();
+        let pending = tokio::spawn(async move { app.oneshot(req).await.unwrap() });
+
+        eval_entered.notified().await;
+        let input_mgr = get_or_create_input_manager(&session_id).await;
+        input_mgr.revoke_lease().await.unwrap();
+        eval_release.notify_one();
+
+        let resp = pending.await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap(),
+        )
+        .unwrap();
+        assert_ne!(body["text"], "late-secret-selection");
+        // Cache must not be overwritten with the post-revocation eval result.
+        let (new_lease, _) = input_mgr.acquire_lease("viewer-2", "human").await.unwrap();
+        assert_eq!(input_mgr.get_selected_text(&new_lease).await.unwrap(), "previous-cached");
+    }
+
+    #[tokio::test]
+    async fn selected_text_rejects_when_navigation_revision_changes_during_cdp_eval() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let (_tmp, app, token, session_id, lease_token, eval_entered, eval_release) =
+            setup_paused_eval_session("admin-reval-nav").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/browser/sessions/{session_id}/selected-text"))
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .header(&X_BROWSER_LEASE, &lease_token)
+            .body(Body::empty())
+            .unwrap();
+        let pending = tokio::spawn(async move { app.oneshot(req).await.unwrap() });
+
+        eval_entered.notified().await;
+        let bumped = global_session_registry()
+            .record_cdp_navigation(&session_id, Some("http://example.com/moved"), &[])
+            .await;
+        assert_eq!(bumped, Some(2));
+        eval_release.notify_one();
+
+        let resp = pending.await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["kind"], "sessionConflict");
+        assert_ne!(body["text"], "late-secret-selection");
+        let input_mgr = get_or_create_input_manager(&session_id).await;
+        assert_eq!(input_mgr.get_selected_text(&lease_token).await.unwrap(), "previous-cached");
     }
 }

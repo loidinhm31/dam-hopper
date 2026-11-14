@@ -13,7 +13,7 @@ import {
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
-  DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  DEFAULT_OPEN_TERMINAL_SHORTCUT,
 } from "../lib/shortcuts.js";
 
 // ============================================================================
@@ -71,7 +71,7 @@ export type BindingValue = string | null;
 // ============================================================================
 
 export interface ActionBindingsSettingsProjection {
-  readonly terminalWorkspaceShortcut?: string | null;
+  readonly openTerminalShortcut?: string | null;
   readonly terminalFilePanelShortcut?: string | null;
   readonly searchTextShortcut?: string | null;
   readonly gitPanelShortcut?: string | null;
@@ -151,8 +151,8 @@ function buildActionCatalog(): Record<OsActionId, ActionDescriptor> {
     {
       appId: "terminals",
       requirement: "profile",
-      bindingSource: { kind: "scalar", property: "terminalWorkspaceShortcut" },
-      defaultBinding: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+      bindingSource: { kind: "scalar", property: "openTerminalShortcut" },
+      defaultBinding: DEFAULT_OPEN_TERMINAL_SHORTCUT,
     },
     {
       appId: "editor",

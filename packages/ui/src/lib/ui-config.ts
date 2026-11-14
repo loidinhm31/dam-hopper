@@ -17,7 +17,7 @@ import {
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
-  DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  DEFAULT_OPEN_TERMINAL_SHORTCUT,
   DEFAULT_OS_PALETTE_SHORTCUT,
   DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
   formatShortcut,
@@ -163,7 +163,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   runtimeItemOrder: {},
   searchTextShortcut: DEFAULT_SEARCH_TEXT_SHORTCUT,
   searchFilenameShortcut: DEFAULT_SEARCH_FILENAME_SHORTCUT,
-  terminalWorkspaceShortcut: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  openTerminalShortcut: DEFAULT_OPEN_TERMINAL_SHORTCUT,
   terminalFilePanelShortcut: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   projectPanelShortcut: DEFAULT_PROJECT_PANEL_SHORTCUT,
   revealActiveFileShortcut: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
@@ -280,6 +280,7 @@ export function normalizeCognitoModeStyle(value: unknown): CognitoModeStyle {
 export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
   const canonicalUi: Record<string, unknown> = { ...ui };
   for (const key of LEGACY_AGENT_KEYS) delete canonicalUi[key];
+  delete canonicalUi.terminalWorkspaceShortcut;
 
   return {
     ...DEFAULT_UI_CONFIG,
@@ -330,10 +331,10 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
       "searchFilenameShortcut",
       DEFAULT_SEARCH_FILENAME_SHORTCUT,
     ),
-    terminalWorkspaceShortcut: resolveNullableShortcut(
+    openTerminalShortcut: resolveNullableShortcut(
       ui,
-      "terminalWorkspaceShortcut",
-      DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+      "openTerminalShortcut",
+      DEFAULT_OPEN_TERMINAL_SHORTCUT,
     ),
     terminalFilePanelShortcut: resolveNullableShortcut(
       ui,

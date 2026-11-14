@@ -10,6 +10,7 @@ import {
   saveBrowserRecoveryDisk,
   settleRecoveryOperation,
   stageRecoveryOperation,
+  settleRecoveryOperationsIfAuthorized,
   withBrowserRecoveryLock,
 } from "./browser-recovery-store.js";
 import type {
@@ -17,6 +18,7 @@ import type {
   BrowserRecoveryOperation,
   RememberedBrowserGroup,
 } from "./browser-tab-types.js";
+import { useWindowStore } from "../window-store.js";
 
 describe("browser-recovery-store", () => {
   const scopeA: BrowserOwnerScope = {
@@ -132,5 +134,50 @@ describe("browser-recovery-store", () => {
     });
     expect(res.success).toBe(false);
     expect(isOwnerAddressSuppressed(scopeA)).toBe(true);
+  });
+
+  it("settleRecoveryOperationsIfAuthorized enforces expectedScope and blocks active closing.status === pending windows", async () => {
+    const origWindows = useWindowStore.getState().session.windows;
+    try {
+      useWindowStore.setState({
+        session: {
+          ...useWindowStore.getState().session,
+          windows: {
+            "w-pending": {
+              id: "w-pending",
+              appId: "browser",
+              title: "Pending",
+              desktopId: "d1",
+              mode: "tile",
+              minimized: false,
+              ctx: { profileId: "p1" },
+              appState: { closing: { operationId: "op-win-pending", status: "pending" }, tabs: [], activeTabId: "t1" },
+            },
+          },
+        },
+      });
+
+      await stageRecoveryOperation({ operationId: "op-win-pending", ownerScope: scopeA, kind: "close-window", windowId: "w-pending", status: "unknown" });
+      await stageRecoveryOperation({ operationId: "op-child-pending", ownerScope: scopeA, kind: "close-tab", windowId: "w-pending", tabId: "t1", sessionId: "s1", status: "unknown" });
+      await stageRecoveryOperation({ operationId: "op-foreign", ownerScope: scopeB, kind: "create", windowId: "w-other", tabId: "t2", status: "unknown" });
+      await stageRecoveryOperation({ operationId: "op-ok", ownerScope: scopeA, kind: "create", windowId: "w-ok", tabId: "t3", status: "unknown" });
+
+      const settled = await settleRecoveryOperationsIfAuthorized({
+        operationIds: ["op-win-pending", "op-child-pending", "op-foreign", "op-ok"],
+        expectedScope: scopeA,
+        skipActiveClosingWindows: true,
+      });
+
+      expect(settled.map((o) => o.operationId)).toEqual(["op-ok"]);
+      expect(loadBrowserRecoveryDisk().operations.map((o) => o.operationId)).toEqual([
+        "op-win-pending",
+        "op-child-pending",
+        "op-foreign",
+      ]);
+    } finally {
+      useWindowStore.setState({
+        session: { ...useWindowStore.getState().session, windows: origWindows },
+      });
+    }
   });
 });

@@ -2353,3 +2353,656 @@ async fn actor_recovery_invalidates_production_selection_before_replacement() {
     assert!(!pty_has_reference(&fx.state, terminal));
     fx.close().await;
 }
+
+#[tokio::test]
+async fn release_control_clears_active_and_picked_selection_and_hides_overlay() {
+    use dam_hopper_server::browser_host::selection::{
+        is_selection_live, pending_artifact_registration_count,
+    };
+
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("release-clears-sel", None).await;
+    let term_id = "shell:release-clears-sel";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+
+    // 1. Start interactive selection (no inspectPoint) -> active == true, searchForNode sent
+    let (st_start, body_start) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
+        &fx.cookie,
+        Some(json!({
+            "leaseToken": fx.lease_token,
+            "navigationRevision": "1"
+        })),
+    )
+    .await;
+    assert_eq!(st_start, StatusCode::OK, "{body_start}");
+    assert_eq!(body_start["selectionActive"], true);
+
+    for _ in 0..50 {
+        if fx
+            .cdp
+            .inspect_modes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m == "searchForNode")
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // Release control -> active becomes false and overlay inspect/highlight cleared
+    let (st_rel, _) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/release", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "leaseToken": fx.lease_token })),
+    )
+    .await;
+    assert_eq!(st_rel, StatusCode::OK);
+
+    let (_, sess_after_rel1) = api_request(
+        fx.state.clone(),
+        "GET",
+        &format!("/api/browser/sessions/{}", fx.session_id),
+        &fx.cookie,
+        None,
+    )
+    .await;
+    assert_eq!(sess_after_rel1["selection"]["active"], false);
+    assert!(sess_after_rel1["selection"]["preview"].is_null());
+    {
+        let methods = fx.cdp.received_methods.lock().unwrap();
+        assert!(methods.iter().any(|m| m == "Overlay.hideHighlight"));
+        let modes = fx.cdp.inspect_modes.lock().unwrap();
+        assert_eq!(modes.last().map(String::as_str), Some("none"));
+    }
+
+    // 2. Re-acquire lease, pick an element (preview = Some, active = false, Overlay.highlightNode),
+    //    create an unclaimed pending artifact, move navigationRevision in registry, then release!
+    let (st_acq2, lease2) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/acquire", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "viewerId": "v2", "holderKind": "human" })),
+    )
+    .await;
+    assert_eq!(st_acq2, StatusCode::OK);
+    let lease2_token = lease2["leaseToken"].as_str().unwrap().to_string();
+
+    let (st_pick, pick_body) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
+        &fx.cookie,
+        Some(json!({
+            "leaseToken": lease2_token,
+            "navigationRevision": "1",
+            "inspectPoint": { "x": 15, "y": 25 }
+        })),
+    )
+    .await;
+    assert_eq!(st_pick, StatusCode::OK, "{pick_body}");
+    assert_eq!(pick_body["selectionActive"], false);
+    assert!(pick_body["preview"].is_object());
+    let sel_rev = pick_body["selectionRevision"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+    assert_eq!(pending_artifact_registration_count(&fx.session_id).await, 1);
+
+    // Move registry navigationRevision so selection/cancel would 409, proving release_control
+    // still clears selection and hides overlay even after navigationRevision moved.
+    let new_rev = dam_hopper_server::api::browser_host::global_session_registry()
+        .record_cdp_navigation(&fx.session_id, Some("http://example.com/moved"), &[])
+        .await;
+    assert_eq!(new_rev, Some(2));
+
+    let methods_before = fx.cdp.received_methods.lock().unwrap().len();
+
+    let (st_rel2, _) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/release", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "leaseToken": lease2_token })),
+    )
+    .await;
+    assert_eq!(st_rel2, StatusCode::OK);
+
+    assert!(!is_selection_live(&fx.session_id, &fx.username, 1, sel_rev).await);
+    assert_eq!(pending_artifact_registration_count(&fx.session_id).await, 0);
+    assert_eq!(fx.handoff(&artifact_id).await, StatusCode::NOT_FOUND);
+
+    let new_methods = fx.cdp.received_methods.lock().unwrap()[methods_before..].to_vec();
+    assert!(
+        new_methods.iter().any(|m| m == "Overlay.setInspectMode"),
+        "expected Overlay.setInspectMode none after release: {new_methods:?}"
+    );
+    assert!(
+        new_methods.iter().any(|m| m == "Overlay.hideHighlight"),
+        "expected Overlay.hideHighlight after release: {new_methods:?}"
+    );
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn cancel_selection_hides_highlight_after_element_picked() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("cancel-picked", None).await;
+
+    let (st_pick, pick_body) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
+        &fx.cookie,
+        Some(json!({
+            "leaseToken": fx.lease_token,
+            "navigationRevision": "1",
+            "inspectPoint": { "x": 10, "y": 10 }
+        })),
+    )
+    .await;
+    assert_eq!(st_pick, StatusCode::OK, "{pick_body}");
+    assert_eq!(pick_body["selectionActive"], false);
+    assert!(pick_body["preview"].is_object());
+
+    let methods_before = fx.cdp.received_methods.lock().unwrap().len();
+    assert!(fx.cdp.received_methods.lock().unwrap().iter().any(|m| m == "Overlay.highlightNode"));
+
+    let (st_cancel, cancel_body) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/selection/cancel", fx.session_id),
+        &fx.cookie,
+        Some(json!({
+            "leaseToken": fx.lease_token,
+            "navigationRevision": "1"
+        })),
+    )
+    .await;
+    assert_eq!(st_cancel, StatusCode::OK, "{cancel_body}");
+    assert_eq!(cancel_body["selectionActive"], false);
+
+    let (_, sess_after) = api_request(
+        fx.state.clone(),
+        "GET",
+        &format!("/api/browser/sessions/{}", fx.session_id),
+        &fx.cookie,
+        None,
+    )
+    .await;
+    assert_eq!(sess_after["selection"]["active"], false);
+    assert!(sess_after["selection"]["preview"].is_null());
+
+    let new_methods = fx.cdp.received_methods.lock().unwrap()[methods_before..].to_vec();
+    assert!(new_methods.iter().any(|m| m == "Overlay.setInspectMode"));
+    assert!(new_methods.iter().any(|m| m == "Overlay.hideHighlight"));
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn lease_expiry_clears_selection_and_hides_overlay() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("expiry-clears-sel", None).await;
+
+    // Release initial long-TTL lease and replace input manager with a short-TTL one.
+    let _ = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/release", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "leaseToken": fx.lease_token })),
+    )
+    .await;
+    dam_hopper_server::api::browser_host::global_input_managers()
+        .write()
+        .await
+        .insert(
+            fx.session_id.clone(),
+            dam_hopper_server::browser_host::input::SessionInputManager::new_shared(
+                std::time::Duration::from_millis(500),
+            ),
+        );
+
+    let (st_acq, lease_body) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/acquire", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "viewerId": "v-short", "holderKind": "human" })),
+    )
+    .await;
+    assert_eq!(st_acq, StatusCode::OK);
+    let short_token = lease_body["leaseToken"].as_str().unwrap().to_string();
+
+    let (st_start, _) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
+        &fx.cookie,
+        Some(json!({
+            "leaseToken": short_token,
+            "navigationRevision": "1"
+        })),
+    )
+    .await;
+    assert_eq!(st_start, StatusCode::OK);
+
+    for _ in 0..40 {
+        let (_, sess) = api_request(
+            fx.state.clone(),
+            "GET",
+            &format!("/api/browser/sessions/{}", fx.session_id),
+            &fx.cookie,
+            None,
+        )
+        .await;
+        if sess["selection"]["active"] == false
+            && fx
+                .cdp
+                .received_methods
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|m| m == "Overlay.hideHighlight")
+        {
+            fx.close().await;
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    panic!("lease expiry did not clear selection and hide overlay in time");
+}
+
+#[tokio::test]
+async fn stale_lease_end_cleanup_does_not_cancel_successor_lease_selection() {
+    use dam_hopper_server::api::browser_host::get_or_create_input_manager;
+    use dam_hopper_server::browser_host::selection::{
+        clear_selection_on_lease_end, is_selection_live, pending_artifact_registration_count,
+    };
+
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("h5-successor", None).await;
+    let term_id = "shell:h5-successor";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let input_mgr = get_or_create_input_manager(&fx.session_id).await;
+    let old_lease_epoch = input_mgr.validate_lease_epoch(&fx.lease_token).await.unwrap();
+
+    // Release old lease, then successor lease acquires and starts selection + picks element + artifact.
+    let (st_rel1, _) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/release", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "leaseToken": fx.lease_token })),
+    )
+    .await;
+    assert_eq!(st_rel1, StatusCode::OK);
+
+    let (st_acq2, lease2) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/acquire", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "viewerId": "v-successor", "holderKind": "human" })),
+    )
+    .await;
+    assert_eq!(st_acq2, StatusCode::OK);
+    let lease2_token = lease2["leaseToken"].as_str().unwrap().to_string();
+
+    // Successor picks an element and creates a pending artifact.
+    let (st_pick, pick_body) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
+        &fx.cookie,
+        Some(json!({
+            "leaseToken": lease2_token,
+            "navigationRevision": "1",
+            "inspectPoint": { "x": 12, "y": 14 }
+        })),
+    )
+    .await;
+    assert_eq!(st_pick, StatusCode::OK, "{pick_body}");
+    let sel_rev = pick_body["selectionRevision"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+    assert_eq!(pending_artifact_registration_count(&fx.session_id).await, 1);
+
+    // Delayed cleanup from old lease arrives after successor already started selection!
+    let methods_before = fx.cdp.received_methods.lock().unwrap().len();
+    clear_selection_on_lease_end(&fx.state, &fx.session_id, &fx.username, old_lease_epoch).await;
+
+    // Successor selection, artifact, and overlay highlight MUST remain intact.
+    assert!(is_selection_live(&fx.session_id, &fx.username, 1, sel_rev).await);
+    assert_eq!(pending_artifact_registration_count(&fx.session_id).await, 1);
+    let methods_after = fx.cdp.received_methods.lock().unwrap()[methods_before..].to_vec();
+    assert!(
+        !methods_after.iter().any(|m| m == "Overlay.hideHighlight"),
+        "delayed old-lease cleanup must not hide successor highlight: {methods_after:?}"
+    );
+
+    // Also test interactive active selection on successor is untouched by old-lease cleanup.
+    let (st_active, _) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
+        &fx.cookie,
+        Some(json!({
+            "leaseToken": lease2_token,
+            "navigationRevision": "1"
+        })),
+    )
+    .await;
+    assert_eq!(st_active, StatusCode::OK);
+    clear_selection_on_lease_end(&fx.state, &fx.session_id, &fx.username, old_lease_epoch).await;
+    let (_, sess) = api_request(
+        fx.state.clone(),
+        "GET",
+        &format!("/api/browser/sessions/{}", fx.session_id),
+        &fx.cookie,
+        None,
+    )
+    .await;
+    assert_eq!(sess["selection"]["active"], true);
+
+    let _ = artifact_id;
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn stale_start_selection_overtaken_by_lease_release_stays_inactive() {
+    use dam_hopper_server::browser_host::selection::GLOBAL_SELECTION_MANAGER;
+
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("h5-stale-start", None).await;
+
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let entered_c = entered.clone();
+    let release_c = release.clone();
+    *GLOBAL_SELECTION_MANAGER
+        ._before_start_publish_hook
+        .lock()
+        .unwrap() = Some(Arc::new(move || {
+        let e = entered_c.clone();
+        let r = release_c.clone();
+        Box::pin(async move {
+            e.notify_one();
+            r.notified().await;
+        })
+    }));
+
+    let st_state = fx.state.clone();
+    let st_cookie = fx.cookie.clone();
+    let st_sid = fx.session_id.clone();
+    let st_lease = fx.lease_token.clone();
+    let start_task = tokio::spawn(async move {
+        api_request(
+            st_state,
+            "POST",
+            &format!("/api/browser/sessions/{st_sid}/selection/start"),
+            &st_cookie,
+            Some(json!({
+                "leaseToken": st_lease,
+                "navigationRevision": "1"
+            })),
+        )
+        .await
+    });
+
+    // Wait until start_selection passed renew_lease + get_session and paused before publish.
+    entered.notified().await;
+    *GLOBAL_SELECTION_MANAGER
+        ._before_start_publish_hook
+        .lock()
+        .unwrap() = None;
+
+    // Release the lease while start_selection is paused!
+    let (rel_st, _) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/release", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "leaseToken": fx.lease_token })),
+    )
+    .await;
+    assert_eq!(rel_st, StatusCode::OK);
+
+    // Resume the stale start_selection -> must fail closed and leave selection inactive!
+    release.notify_one();
+    let (start_st, start_body) = start_task.await.unwrap();
+    assert_eq!(start_st, StatusCode::CONFLICT, "{start_body}");
+
+    let (_, sess_after) = api_request(
+        fx.state.clone(),
+        "GET",
+        &format!("/api/browser/sessions/{}", fx.session_id),
+        &fx.cookie,
+        None,
+    )
+    .await;
+    assert!(
+        sess_after["selection"].is_null()
+            || (sess_after["selection"]["active"] == false
+                && sess_after["selection"]["preview"].is_null()),
+        "stale start_selection resurrected selection after release: {sess_after}"
+    );
+    assert!(
+        !fx.cdp
+            .inspect_modes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m == "searchForNode"),
+        "stale start_selection must never enable native inspect mode"
+    );
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn failed_native_release_still_clears_picked_and_active_selection_and_hides_overlay() {
+    use dam_hopper_server::api::browser_host::get_or_create_input_manager;
+    use dam_hopper_server::browser_host::cdp::CdpClient;
+    use dam_hopper_server::browser_host::input::{InputEvent, InputMessage};
+    use dam_hopper_server::browser_host::input_native_release::NativeInputTarget;
+    use dam_hopper_server::browser_host::protocol::TargetGeometry;
+    use dam_hopper_server::browser_host::selection::{
+        is_selection_live, pending_artifact_registration_count,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("h-c2-2-rel-fail", None).await;
+    let term_id = "shell:h-c2-2-rel-fail";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+
+    // Mock native input CDP that fails Input.* when fail_input is set.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fail_input = Arc::new(AtomicBool::new(false));
+    let fail_clone = fail_input.clone();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let fail = fail_clone.clone();
+            tokio::spawn(async move {
+                let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                while let Some(Ok(WsMessage::Text(text))) = ws.next().await {
+                    let cmd: Value = serde_json::from_str(&text).unwrap();
+                    let method = cmd["method"].as_str().unwrap_or_default();
+                    let reply = if method.starts_with("Input.") && fail.load(Ordering::SeqCst) {
+                        json!({"id": cmd["id"], "error": {"code": -32000, "message": "injected native release failure"}})
+                    } else {
+                        json!({"id": cmd["id"], "result": {}})
+                    };
+                    if ws.send(WsMessage::Text(reply.to_string().into())).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    let native_client = CdpClient::connect(&format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    let native_target = NativeInputTarget {
+        client: native_client,
+        page_session_id: "NATIVE-FAIL-PAGE".to_string(),
+        geometry: TargetGeometry {
+            css_width: 1280.0,
+            css_height: 900.0,
+            offset_top: 0.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            page_scale: 1.0,
+            visual_offset_x: 0.0,
+            visual_offset_y: 0.0,
+            dpr: 1.0,
+        },
+    };
+
+    let input_mgr = get_or_create_input_manager(&fx.session_id).await;
+    input_mgr.capture_native_target(native_target.clone()).await;
+    input_mgr
+        .enqueue_input(InputMessage {
+            browser_session_id: fx.session_id.clone(),
+            browser_incarnation: "inc".to_string(),
+            profile_epoch: 1,
+            subscription_epoch: "sub-1".to_string(),
+            lease_token: fx.lease_token.clone(),
+            input_seq: 1,
+            viewport_epoch: 1,
+            event: InputEvent::KeyDown {
+                key: "a".to_string(),
+                code: "KeyA".to_string(),
+                modifiers: 0,
+            },
+        })
+        .await
+        .unwrap();
+    input_mgr.drain_inputs().await;
+
+    // Pick element + create unclaimed pending artifact.
+    let sel_rev = fx.select(1).await;
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+    assert!(is_selection_live(&fx.session_id, &fx.username, 1, sel_rev).await);
+    assert_eq!(pending_artifact_registration_count(&fx.session_id).await, 1);
+
+    let methods_before = fx.cdp.received_methods.lock().unwrap().len();
+
+    // Trigger native release failure on explicit /control/release!
+    fail_input.store(true, Ordering::SeqCst);
+    let (rel_status, rel_body) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/release", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "leaseToken": fx.lease_token })),
+    )
+    .await;
+    assert_eq!(rel_status, StatusCode::SERVICE_UNAVAILABLE, "{rel_body}");
+    assert_eq!(rel_body["kind"], "inputUnavailable");
+    assert!(input_mgr.release_failure().await.is_some());
+
+    // Even though release returned 503 inputUnavailable, the lease ended so selection,
+    // pending artifact, and CDP overlay MUST all be cleared!
+    assert!(!is_selection_live(&fx.session_id, &fx.username, 1, sel_rev).await);
+    assert_eq!(pending_artifact_registration_count(&fx.session_id).await, 0);
+    assert_eq!(fx.handoff(&artifact_id).await, StatusCode::NOT_FOUND);
+    let (_, sess_after) = api_request(
+        fx.state.clone(),
+        "GET",
+        &format!("/api/browser/sessions/{}", fx.session_id),
+        &fx.cookie,
+        None,
+    )
+    .await;
+    assert_eq!(sess_after["selection"]["active"], false);
+    assert!(sess_after["selection"]["preview"].is_null());
+
+    let new_methods = fx.cdp.received_methods.lock().unwrap()[methods_before..].to_vec();
+    assert!(new_methods.iter().any(|m| m == "Overlay.setInspectMode"));
+    assert!(new_methods.iter().any(|m| m == "Overlay.hideHighlight"));
+
+    // Clear native failure, re-acquire, start active selection, hold key again, fail release ->
+    // active selection is ALSO cleared!
+    fail_input.store(false, Ordering::SeqCst);
+    let (acq2_st, acq2_body) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/acquire", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "viewerId": "v2", "holderKind": "human" })),
+    )
+    .await;
+    assert_eq!(acq2_st, StatusCode::OK, "{acq2_body}");
+    let lease2 = acq2_body["leaseToken"].as_str().unwrap().to_string();
+
+    input_mgr.capture_native_target(native_target).await;
+    input_mgr
+        .enqueue_input(InputMessage {
+            browser_session_id: fx.session_id.clone(),
+            browser_incarnation: "inc".to_string(),
+            profile_epoch: 1,
+            subscription_epoch: "sub-2".to_string(),
+            lease_token: lease2.clone(),
+            input_seq: 1,
+            viewport_epoch: 1,
+            event: InputEvent::KeyDown {
+                key: "b".to_string(),
+                code: "KeyB".to_string(),
+                modifiers: 0,
+            },
+        })
+        .await
+        .unwrap();
+    input_mgr.drain_inputs().await;
+
+    let (st_active, _) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
+        &fx.cookie,
+        Some(json!({
+            "leaseToken": lease2,
+            "navigationRevision": "1"
+        })),
+    )
+    .await;
+    assert_eq!(st_active, StatusCode::OK);
+
+    fail_input.store(true, Ordering::SeqCst);
+    let (rel2_st, _) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/control/release", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "leaseToken": lease2 })),
+    )
+    .await;
+    assert_eq!(rel2_st, StatusCode::SERVICE_UNAVAILABLE);
+    let (_, sess_after2) = api_request(
+        fx.state.clone(),
+        "GET",
+        &format!("/api/browser/sessions/{}", fx.session_id),
+        &fx.cookie,
+        None,
+    )
+    .await;
+    assert_eq!(sess_after2["selection"]["active"], false);
+    assert!(sess_after2["selection"]["preview"].is_null());
+
+    fx.close().await;
+}

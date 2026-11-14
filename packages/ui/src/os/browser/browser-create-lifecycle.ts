@@ -1,4 +1,4 @@
-import { createBrowserSession } from "@/api/browser-host-client.js";
+import { BrowserHostClientError, createBrowserSession } from "@/api/browser-host-client.js";
 import type { BrowserSessionDto, CreateSessionRequest } from "@/api/browser-host-types.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { generateUUID } from "@/lib/utils.js";
@@ -6,7 +6,7 @@ import { closeBrowserTarget } from "./browser-close-lifecycle.js";
 import { isCapturedBrowserOwnerCurrent } from "./browser-owner-scope.js";
 import {
   loadBrowserRecoveryDisk,
-  settleRecoveryOperation,
+  settleProvenRecoveryOperation,
   stageRecoveryOperation,
 } from "./browser-recovery-store.js";
 import type {
@@ -58,7 +58,7 @@ export function processWithheldCleanups(currentScope: BrowserOwnerScope, current
         if (outcome.kind === "closed" || outcome.kind === "released") {
           const idx = withheldCleanups.indexOf(item);
           if (idx >= 0) withheldCleanups.splice(idx, 1);
-          void settleRecoveryOperation(item.operationId).catch(() => {});
+          void settleProvenRecoveryOperation(item.operationId, item.scope).catch(() => {});
         }
       });
     }
@@ -104,7 +104,7 @@ export function dispatchBrowserCreateIntent(params: {
       });
 
       if (!isCapturedBrowserOwnerCurrent(params.owner, params.scope)) {
-        await settleRecoveryOperation(operationId).catch(() => {});
+        await settleProvenRecoveryOperation(operationId, params.scope).catch(() => {});
         return { kind: "rejected", error: "Owner or connection generation expired during lock acquisition" };
       }
 
@@ -113,7 +113,7 @@ export function dispatchBrowserCreateIntent(params: {
       const tabStillCurrent = params.isTabCurrent();
 
       if (ownerStillCurrent && tabStillCurrent) {
-        await settleRecoveryOperation(operationId);
+        await settleProvenRecoveryOperation(operationId, params.scope);
         if (isCapturedBrowserOwnerCurrent(params.owner, params.scope) && params.isTabCurrent()) {
           return { kind: "success", session, adopted: true };
         }
@@ -148,7 +148,7 @@ export function dispatchBrowserCreateIntent(params: {
           runtime: runtimeIdentity,
         });
         if (cleanupRes.kind === "closed" || cleanupRes.kind === "released") {
-          await settleRecoveryOperation(operationId).catch(() => {});
+          await settleProvenRecoveryOperation(operationId, params.scope).catch(() => {});
         }
       } else {
         withheldCleanups.push({
@@ -166,12 +166,26 @@ export function dispatchBrowserCreateIntent(params: {
     } catch (err: unknown) {
       const status = typeof err === "object" && err !== null && "status" in err && typeof err.status === "number"
         ? err.status : undefined;
+      const errKind = err instanceof BrowserHostClientError
+        ? err.kind
+        : (typeof err === "object" && err !== null && "kind" in err && typeof err.kind === "string"
+          ? err.kind
+          : undefined);
 
-      if (status !== undefined && status >= 400 && status < 500) {
-        await settleRecoveryOperation(operationId).catch(() => {});
-        return { kind: "rejected", status, error: err instanceof Error ? err.message : String(err), capacity: status === 429 };
+      if (
+        (status !== undefined && status >= 400 && status < 500) ||
+        status === 503 ||
+        errKind === "browserUnavailable" ||
+        errKind === "cleanupPending"
+      ) {
+        await settleProvenRecoveryOperation(operationId, params.scope).catch(() => {});
+        return {
+          kind: "rejected",
+          status,
+          error: err instanceof Error ? err.message : String(err),
+          capacity: status === 429 || errKind === "browserBusy",
+        };
       }
-
       const currentDisk = loadBrowserRecoveryDisk();
       const existingOp = currentDisk.operations.find((o) => o.operationId === operationId);
 

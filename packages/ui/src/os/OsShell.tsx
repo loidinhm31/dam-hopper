@@ -1720,7 +1720,11 @@ export function OsShell() {
       const defaultTarget: FsTargetRef = activeProject
         ? normalizeFsTarget({ profileId, project: activeProject })
         : { kind: "workspace", profileId };
-      const targetCtx: WindowContext = activeDesktop?.defaultCtx ?? {
+      const desktopDefaultCtx =
+        activeDesktop?.defaultCtx && activeDesktop.defaultCtx.profileId
+          ? activeDesktop.defaultCtx
+          : undefined;
+      const targetCtx: WindowContext = desktopDefaultCtx ?? {
         profileId,
         projectId: activeProject ?? undefined,
         target: defaultTarget,

@@ -1264,8 +1264,8 @@ fn ui_config_defaults() {
     assert_eq!(ui.search_text_shortcut.as_deref(), Some("Mod+Shift+KeyF"));
     assert_eq!(ui.search_filename_shortcut.as_deref(), Some("DoubleShift"));
     assert_eq!(
-        ui.terminal_workspace_shortcut.as_deref(),
-        Some("Mod+Shift+Backquote")
+        ui.open_terminal_shortcut.as_deref(),
+        Some("Ctrl+Shift+KeyT")
     );
     assert_eq!(
         ui.terminal_file_panel_shortcut.as_deref(),
@@ -1331,7 +1331,7 @@ fn ui_config_serde_roundtrip() {
             editor_zoom_wheel_enabled: false,
             search_text_shortcut: Some("Ctrl+Alt+KeyS".to_string()),
             search_filename_shortcut: Some("Ctrl+KeyP".to_string()),
-            terminal_workspace_shortcut: Some("Ctrl+Shift+Backquote".to_string()),
+            open_terminal_shortcut: Some("Ctrl+Shift+KeyT".to_string()),
             terminal_file_panel_shortcut: Some("Ctrl+Shift+KeyE".to_string()),
             project_panel_shortcut: Some("Ctrl+Shift+KeyZ".to_string()),
             reveal_active_file_shortcut: Some("Alt+F1".to_string()),
@@ -1471,8 +1471,8 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.search_text_shortcut.as_deref(), Some("Ctrl+Alt+KeyS"));
     assert_eq!(ui.search_filename_shortcut.as_deref(), Some("Ctrl+KeyP"));
     assert_eq!(
-        ui.terminal_workspace_shortcut.as_deref(),
-        Some("Ctrl+Shift+Backquote")
+        ui.open_terminal_shortcut.as_deref(),
+        Some("Ctrl+Shift+KeyT")
     );
     assert_eq!(
         ui.terminal_file_panel_shortcut.as_deref(),
@@ -1536,7 +1536,7 @@ editor_font_size = 14
 editor_zoom_wheel_enabled = true
 search_text_shortcut = "Ctrl+Shift+KeyF"
 search_filename_shortcut = "Ctrl+KeyP"
-terminal_workspace_shortcut = "Ctrl+Shift+Backquote"
+open_terminal_shortcut = "Ctrl+Shift+KeyT"
 terminal_file_panel_shortcut = "Ctrl+Shift+KeyE"
 project_panel_shortcut = "Ctrl+Shift+KeyZ"
 reveal_active_file_shortcut = "Alt+F1"
@@ -1557,8 +1557,8 @@ mobile_custom_keyboard_row_gap = 6
     assert_eq!(ui.search_text_shortcut.as_deref(), Some("Ctrl+Shift+KeyF"));
     assert_eq!(ui.search_filename_shortcut.as_deref(), Some("Ctrl+KeyP"));
     assert_eq!(
-        ui.terminal_workspace_shortcut.as_deref(),
-        Some("Ctrl+Shift+Backquote")
+        ui.open_terminal_shortcut.as_deref(),
+        Some("Ctrl+Shift+KeyT")
     );
     assert_eq!(
         ui.terminal_file_panel_shortcut.as_deref(),

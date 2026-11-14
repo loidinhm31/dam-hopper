@@ -36,6 +36,7 @@ const {
   registerStreamSlot,
   updateStreamSlot,
   audioBlockedState,
+  selectionState,
 } = vi.hoisted(() => ({
   owner: { profileId: "profile-1", generation: 1 },
   connState: {
@@ -68,12 +69,21 @@ const {
     acquireBrowserControl: vi.fn(),
     renewBrowserControl: vi.fn(),
     releaseBrowserControl: vi.fn(),
+    getBrowserSelectedText: vi.fn(),
   },
   requestProxyFocus: vi.fn(),
   requestAudioUnlock: vi.fn(),
   registerStreamSlot: vi.fn(() => () => {}),
   updateStreamSlot: vi.fn(),
   audioBlockedState: { blocked: false, listeners: new Set<() => void>() },
+  selectionState: {
+    selectionActive: false,
+    preview: null as unknown,
+    preparedArtifact: null as unknown,
+    pending: false,
+    cancelSelection: vi.fn(),
+    startSelection: vi.fn(),
+  },
 }));
 
 vi.mock("@/api/browser-host-client.js", async (original) => ({
@@ -123,6 +133,7 @@ vi.mock("../BrowserStreamKeepAliveHost.js", () => ({
   registerBrowserStreamSlot: registerStreamSlot,
   updateBrowserStreamSlot: updateStreamSlot,
   clearBrowserViewFenceForProfile: () => {},
+  isBrowserViewFenced: () => false,
   requestBrowserProxyFocus: requestProxyFocus,
   requestBrowserAudioUnlock: requestAudioUnlock,
   isBrowserAudioBlocked: () => audioBlockedState.blocked,
@@ -133,7 +144,7 @@ vi.mock("../BrowserStreamKeepAliveHost.js", () => ({
 }));
 vi.mock("@/browser-host/selection-controller.js", () => ({
   collectHostTerminalCandidates: () => [],
-  useHostBrowserSelection: () => ({}),
+  useHostBrowserSelection: () => selectionState,
 }));
 
 import { BrowserApp } from "./BrowserApp.js";
@@ -199,6 +210,12 @@ async function rerender() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  selectionState.selectionActive = false;
+  selectionState.preview = null;
+  selectionState.preparedArtifact = null;
+  selectionState.pending = false;
+  selectionState.cancelSelection = vi.fn();
+  selectionState.startSelection = vi.fn();
   clearNavigationsForTesting();
   clearInventoryAcksForTesting();
   clearCloseLifecycleForTesting();
@@ -867,5 +884,568 @@ describe("BrowserApp native chrome & tab continuity", () => {
 
     selector = container.querySelector<HTMLSelectElement>('[data-testid="browser-quality-selector"]');
     expect(selector?.value).toBe("auto");
+  });
+
+  it("unlocks audio on address submit, reload, and control acquire when unmuted and unmasked", async () => {
+    requestAudioUnlock.mockClear();
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-1",
+          kind: "ordinary",
+          phase: "new-tab",
+          draft: { value: "https://youtube.com", dirty: true },
+          actionSequence: 0,
+        },
+      ],
+    });
+    await rerender();
+
+    const addrInput = container.querySelector<HTMLInputElement>('[data-testid="browser-address-input"]')!;
+    await act(async () => {
+      addrInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(requestAudioUnlock).toHaveBeenCalledWith("window-1", "tab-1", owner, undefined);
+
+    requestAudioUnlock.mockClear();
+    store.session.windows["window-1"].appState = canonicalAppState();
+    await rerender();
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-reload-btn"]') as HTMLButtonElement).click();
+    });
+    expect(requestAudioUnlock).toHaveBeenCalledWith("window-1", "tab-1", owner, "session-1");
+
+    requestAudioUnlock.mockClear();
+    api.acquireBrowserControl.mockResolvedValueOnce({ leaseToken: "lease-audio", expiresAtUnixMs: Date.now() + 30_000 });
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-take-control-btn"]') as HTMLButtonElement).click();
+    });
+    expect(requestAudioUnlock).toHaveBeenCalledWith("window-1", "tab-1", owner, "session-1");
+  });
+
+  it("renders browser-tools-panel in horizontal right-side container alongside tabpanel", async () => {
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+
+    const toolsPanel = container.querySelector('[data-testid="browser-tools-panel"]');
+    const tabPanel = container.querySelector('[role="tabpanel"]');
+    expect(toolsPanel).not.toBeNull();
+    expect(tabPanel).not.toBeNull();
+    expect(toolsPanel!.parentElement).toBe(tabPanel!.parentElement);
+    expect(toolsPanel!.parentElement!.className).toContain("flex-row");
+    expect(tabPanel!.nextElementSibling).toBe(toolsPanel);
+  });
+
+  it("settles recovery ops on Acknowledge duplicate risk, Dismiss all, and New Tab dismiss banner", async () => {
+    saveBrowserRecoveryDisk({
+      version: 1,
+      groups: [],
+      addressSuppressedScopes: [],
+      operations: [
+        { operationId: "op-create-1", ownerScope: scopeA, kind: "create", windowId: "window-old", tabId: "tab-old", status: "unknown" },
+        { operationId: "op-create-2", ownerScope: scopeA, kind: "create", windowId: "window-1", tabId: "tab-unk", status: "unknown" },
+      ],
+    });
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        { tabId: "tab-1", kind: "ordinary", phase: "new-tab", draft: { value: "", dirty: false }, actionSequence: 0 },
+        { tabId: "tab-unk", kind: "ordinary", phase: "create-unknown", draft: { value: "https://x.test", dirty: false }, actionSequence: 1 },
+      ],
+      activeTabId: "tab-1",
+    });
+    await rerender();
+
+    expect(container.querySelector('[data-testid="browser-new-tab-recovery-notice"]')?.textContent).toContain("2 unresolved");
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-recovery-ack-op-create-1"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+    expect(loadBrowserRecoveryDisk().operations.map((o) => o.operationId)).toEqual(["op-create-2"]);
+
+    // Add another op to test Dismiss all
+    saveBrowserRecoveryDisk({
+      version: 1,
+      groups: [],
+      addressSuppressedScopes: [],
+      operations: [
+        { operationId: "op-create-2", ownerScope: scopeA, kind: "create", windowId: "window-1", tabId: "tab-unk", status: "unknown" },
+        { operationId: "op-create-3", ownerScope: scopeA, kind: "create", windowId: "window-old", tabId: "tab-old2", status: "unknown" },
+      ],
+    });
+    await act(async () => {
+      window.dispatchEvent(new StorageEvent("storage", { key: BROWSER_RECOVERY_STORAGE_KEY }));
+    });
+    await rerender();
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-recovery-dismiss-all-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+    expect(loadBrowserRecoveryDisk().operations).toHaveLength(0);
+    expect(container.querySelector('[data-testid="browser-new-tab-recovery-notice"]')).toBeNull();
+
+    // New-tab banner dismiss button also settles ops
+    saveBrowserRecoveryDisk({
+      version: 1,
+      groups: [],
+      addressSuppressedScopes: [],
+      operations: [
+        { operationId: "op-create-4", ownerScope: scopeA, kind: "create", windowId: "window-old", tabId: "tab-old3", status: "unknown" },
+      ],
+    });
+    await act(async () => {
+      window.dispatchEvent(new StorageEvent("storage", { key: BROWSER_RECOVERY_STORAGE_KEY }));
+    });
+    await rerender();
+    const dismissNoticeBtn = container.querySelector<HTMLButtonElement>('[data-testid="browser-new-tab-dismiss-recovery-btn"]');
+    expect(dismissNoticeBtn).not.toBeNull();
+    await act(async () => { dismissNoticeBtn!.click(); });
+    await rerender();
+    expect(loadBrowserRecoveryDisk().operations).toHaveLength(0);
+    expect(container.querySelector('[data-testid="browser-new-tab-recovery-notice"]')).toBeNull();
+  });
+
+  it("copies selected text via Copy Selection button", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-1",
+          kind: "ordinary",
+          committedUrl: live.url,
+          sessionId: "session-1",
+          title: "Page",
+          phase: "live",
+          isController: true,
+          leaseToken: "lease-copy-1",
+          draft: { value: live.url, dirty: false },
+          actionSequence: 0,
+          snapshot: live,
+        },
+      ],
+    });
+    await rerender();
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+
+    api.getBrowserSelectedText.mockResolvedValueOnce({ text: "hello" });
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-copy-selection-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+    expect(api.getBrowserSelectedText).toHaveBeenCalledWith(owner, "session-1", "lease-copy-1");
+    expect(writeText).toHaveBeenCalledWith("hello");
+    expect(container.querySelector('[data-testid="browser-copy-selection-status"]')?.textContent).toBe(
+      "Copied 5 chars to clipboard",
+    );
+
+    api.getBrowserSelectedText.mockResolvedValueOnce({ text: "" });
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-copy-selection-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-copy-selection-status"]')?.textContent).toBe(
+      "No text selected",
+    );
+  });
+
+  it("cancels active selection before releasing control and on external lease loss", async () => {
+    const cancelOrder: string[] = [];
+    selectionState.selectionActive = true;
+    selectionState.cancelSelection = vi.fn(async () => {
+      cancelOrder.push("cancel");
+      selectionState.selectionActive = false;
+    });
+    api.releaseBrowserControl.mockImplementationOnce(async () => {
+      cancelOrder.push("release");
+    });
+
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-1",
+          kind: "ordinary",
+          committedUrl: live.url,
+          sessionId: "session-1",
+          title: "Page",
+          phase: "live",
+          isController: true,
+          leaseToken: "lease-sel-1",
+          draft: { value: live.url, dirty: false },
+          actionSequence: 0,
+          snapshot: live,
+        },
+      ],
+    });
+    await rerender();
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-release-control-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+    expect(cancelOrder).toEqual(["cancel", "release"]);
+
+    // External lease loss cancels selection
+    selectionState.selectionActive = true;
+    selectionState.cancelSelection.mockClear();
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-1",
+          kind: "ordinary",
+          committedUrl: live.url,
+          sessionId: "session-1",
+          title: "Page",
+          phase: "live",
+          isController: false,
+          leaseToken: undefined,
+          draft: { value: live.url, dirty: false },
+          actionSequence: 0,
+          snapshot: live,
+        },
+      ],
+    });
+    await rerender();
+    expect(selectionState.cancelSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("H1: refuses settling operations belonging to same-window or other-window pending closes and skips active closing windows on bulk dismiss", async () => {
+    const scopeB = { ...scopeA, principal: "mallory" };
+    void scopeB;
+    saveBrowserRecoveryDisk({
+      version: 1,
+      groups: [],
+      addressSuppressedScopes: [],
+      operations: [
+        { operationId: "op-win-pending", ownerScope: scopeA, kind: "close-window", windowId: "window-1", status: "unknown" },
+        { operationId: "op-other-pending", ownerScope: scopeA, kind: "close-window", windowId: "window-2", status: "unknown" },
+        { operationId: "op-other-unknown", ownerScope: scopeA, kind: "close-window", windowId: "window-3", status: "unknown" },
+        { operationId: "op-normal", ownerScope: scopeA, kind: "create", windowId: "window-gone", tabId: "tab-g", status: "unknown" },
+      ],
+    });
+    store.session.windows["window-1"].appState = canonicalAppState({
+      closing: { operationId: "op-win-pending", status: "pending" },
+      tabs: [{ tabId: "tab-1", kind: "ordinary", phase: "new-tab", draft: { value: "", dirty: false }, actionSequence: 0 }],
+    });
+    store.session.windows["window-2"] = {
+      ...store.session.windows["window-1"]!,
+      id: "window-2",
+      appState: canonicalAppState({ closing: { operationId: "op-other-pending", status: "pending" } }),
+    };
+    store.session.windows["window-3"] = {
+      ...store.session.windows["window-1"]!,
+      id: "window-3",
+      appState: canonicalAppState({ closing: { operationId: "op-other-unknown", status: "unknown" } }),
+    };
+    await rerender();
+
+    // Open tools and try clicking ack on same-window pending close & other-window pending close
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-recovery-ack-op-win-pending"]') as HTMLButtonElement).click();
+      (container.querySelector('[data-testid="browser-recovery-ack-op-other-pending"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+    expect(store.closeWindow).not.toHaveBeenCalled();
+    expect(loadBrowserRecoveryDisk().operations.map((o) => o.operationId)).toEqual([
+      "op-win-pending",
+      "op-other-pending",
+      "op-other-unknown",
+      "op-normal",
+    ]);
+
+    // Dismiss all settles ONLY op-normal; active closing windows (pending & unknown) remain untouched
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-recovery-dismiss-all-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+    expect(loadBrowserRecoveryDisk().operations.map((o) => o.operationId)).toEqual([
+      "op-win-pending",
+      "op-other-pending",
+      "op-other-unknown",
+    ]);
+
+    // New Tab Dismiss also leaves other-window closing ops untouched while settling non-closing op
+    saveBrowserRecoveryDisk({
+      version: 1,
+      groups: [],
+      addressSuppressedScopes: [],
+      operations: [
+        { operationId: "op-other-pending", ownerScope: scopeA, kind: "close-window", windowId: "window-2", status: "unknown" },
+        { operationId: "op-other-unknown", ownerScope: scopeA, kind: "close-window", windowId: "window-3", status: "unknown" },
+        { operationId: "op-normal-2", ownerScope: scopeA, kind: "create", windowId: "window-gone", tabId: "tab-g2", status: "unknown" },
+      ],
+    });
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [{ tabId: "tab-1", kind: "ordinary", phase: "new-tab", draft: { value: "", dirty: false }, actionSequence: 0 }],
+    });
+    await act(async () => {
+      window.dispatchEvent(new StorageEvent("storage", { key: BROWSER_RECOVERY_STORAGE_KEY }));
+    });
+    await rerender();
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-new-tab-dismiss-recovery-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+    expect(loadBrowserRecoveryDisk().operations.map((o) => o.operationId)).toEqual([
+      "op-other-pending",
+      "op-other-unknown",
+    ]);
+    delete store.session.windows["window-2"];
+    delete store.session.windows["window-3"];
+  });
+
+  it("H3: aborts settlement and never removes foreign owner tab when owner changes during queued Web Lock", async () => {
+    const scopeB = { ...scopeA, principal: "mallory" };
+    saveBrowserRecoveryDisk({
+      version: 1,
+      groups: [],
+      addressSuppressedScopes: [],
+      operations: [
+        { operationId: "op-race-1", ownerScope: scopeA, kind: "create", windowId: "window-1", tabId: "tab-unk", status: "unknown" },
+      ],
+    });
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        { tabId: "tab-1", kind: "ordinary", phase: "new-tab", draft: { value: "", dirty: false }, actionSequence: 0 },
+        { tabId: "tab-unk", kind: "ordinary", phase: "create-unknown", draft: { value: "https://a.test", dirty: false }, actionSequence: 1 },
+      ],
+      activeTabId: "tab-1",
+    });
+    await rerender();
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+
+    const lockGate = Promise.withResolvers<void>();
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: async (_n: string, _o: unknown, cb: () => Promise<unknown>) => {
+          await lockGate.promise;
+          return cb();
+        },
+      },
+    });
+
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-recovery-ack-op-race-1"]') as HTMLButtonElement).click();
+    });
+
+    // Rebind window and verified identity to foreign owner B while lock is waiting
+    connState.verifiedBrowserIdentity = { principal: "mallory", namespace: "prod" };
+    store.session.windows["window-1"].appState = canonicalAppState({
+      ownerScope: scopeB,
+      tabs: [
+        { tabId: "tab-1", kind: "ordinary", phase: "new-tab", draft: { value: "", dirty: false }, actionSequence: 0 },
+        { tabId: "tab-unk", kind: "ordinary", phase: "create-unknown", draft: { value: "https://b.test", dirty: false }, actionSequence: 1 },
+      ],
+      activeTabId: "tab-1",
+    });
+    await act(async () => {
+      lockGate.resolve();
+    });
+    await rerender();
+
+    // Foreign owner op was NOT settled and foreign owner tab-unk was NOT removed
+    expect(loadBrowserRecoveryDisk().operations.map((o) => o.operationId)).toEqual(["op-race-1"]);
+    const afterWinState = store.session.windows["window-1"].appState as unknown as BrowserWindowState;
+    expect(afterWinState.tabs.some((t) => t.tabId === "tab-unk")).toBe(true);
+  });
+
+  it("H2 & W2: rejects stale clipboard copy after lease loss, tab switch, or async writeText rejection under mask", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const execCopy = vi.fn().mockReturnValue(true);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCopy });
+
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-1",
+          kind: "ordinary",
+          committedUrl: live.url,
+          sessionId: "session-1",
+          title: "Page 1",
+          phase: "live",
+          isController: true,
+          leaseToken: "lease-1",
+          draft: { value: live.url, dirty: false },
+          actionSequence: 0,
+          snapshot: live,
+        },
+        {
+          tabId: "tab-2",
+          kind: "ordinary",
+          committedUrl: live.url,
+          sessionId: "session-2",
+          title: "Page 2",
+          phase: "live",
+          isController: true,
+          leaseToken: "lease-2",
+          draft: { value: live.url, dirty: false },
+          actionSequence: 0,
+          snapshot: { ...live, browserSessionId: "session-2" },
+        },
+      ],
+      activeTabId: "tab-1",
+    });
+    await rerender();
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+
+    // 1. Lease lost while getBrowserSelectedText is in flight -> no clipboard write or status
+    const deferred1 = Promise.withResolvers<{ text: string }>();
+    api.getBrowserSelectedText.mockReturnValueOnce(deferred1.promise);
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-copy-selection-btn"]') as HTMLButtonElement).click();
+    });
+    const st1 = store.session.windows["window-1"].appState as unknown as BrowserWindowState;
+    store.session.windows["window-1"].appState = {
+      ...st1,
+      tabs: [{ ...st1.tabs[0]!, isController: false, leaseToken: undefined }, st1.tabs[1]!],
+    };
+    await rerender();
+    await act(async () => {
+      deferred1.resolve({ text: "leaked secret" });
+    });
+    expect(writeText).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="browser-copy-selection-status"]')).toBeNull();
+
+    // 2. Tab switch while copy-1 pending, start copy-2 -> resolving copy-1 does NOT clear copy-2 pending
+    store.session.windows["window-1"].appState = {
+      ...st1,
+      tabs: [{ ...st1.tabs[0]!, isController: true, leaseToken: "lease-1" }, st1.tabs[1]!],
+      activeTabId: "tab-1",
+    };
+    await rerender();
+    const deferredTab1 = Promise.withResolvers<{ text: string }>();
+    const deferredTab2 = Promise.withResolvers<{ text: string }>();
+    api.getBrowserSelectedText.mockReturnValueOnce(deferredTab1.promise).mockReturnValueOnce(deferredTab2.promise);
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-copy-selection-btn"]') as HTMLButtonElement).click();
+    });
+    // Switch to tab-2 and start second copy
+    store.session.windows["window-1"].appState = {
+      ...st1,
+      tabs: [{ ...st1.tabs[0]!, isController: true, leaseToken: "lease-1" }, st1.tabs[1]!],
+      activeTabId: "tab-2",
+    };
+    await rerender();
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-copy-selection-btn"]') as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      deferredTab1.resolve({ text: "old tab text" });
+    });
+    await rerender();
+    expect(writeText).not.toHaveBeenCalled();
+    expect((container.querySelector('[data-testid="browser-copy-selection-btn"]') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      deferredTab2.resolve({ text: "tab 2 text" });
+    });
+    await rerender();
+    expect(writeText).toHaveBeenCalledExactlyOnceWith("tab 2 text");
+
+    // 3. W2: writeText rejects after Cognito mask activates -> execCommand fallback NOT executed
+    writeText.mockClear();
+    execCopy.mockClear();
+    const deferredWrite = Promise.withResolvers<void>();
+    writeText.mockReturnValueOnce(deferredWrite.promise);
+    api.getBrowserSelectedText.mockResolvedValueOnce({ text: "masked secret" });
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-copy-selection-btn"]') as HTMLButtonElement).click();
+    });
+    cognitoState.active = true;
+    await rerender();
+    await act(async () => {
+      deferredWrite.reject(new Error("Clipboard denied"));
+    });
+    expect(execCopy).not.toHaveBeenCalled();
+  });
+
+  it("H-C2-1: aborts Retry close parent finalization and never closes rebound window when owner changes during queued Web Lock", async () => {
+    const scopeB = { ...scopeA, principal: "mallory" };
+    saveBrowserRecoveryDisk({
+      version: 1,
+      groups: [],
+      addressSuppressedScopes: [],
+      operations: [
+        { operationId: "op-win", ownerScope: scopeA, kind: "close-window", windowId: "window-1", status: "unknown" },
+        { operationId: "op-tab", ownerScope: scopeA, kind: "close-tab", windowId: "window-1", tabId: "tab-1", sessionId: "session-1", status: "unknown" },
+      ],
+    });
+    store.session.windows["window-1"].appState = canonicalAppState({
+      closing: { operationId: "op-win", status: "unknown" },
+    });
+    await rerender();
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    await rerender();
+
+    // Let child op-tab settle; stall parent tryFinalizeParentWindowOp on Web Lock when only op-win remains
+    let lockCount = 0;
+    const parentReached = Promise.withResolvers<void>();
+    const parentLockGate = Promise.withResolvers<void>();
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: async (_n: string, _o: unknown, cb: () => Promise<unknown>) => {
+          lockCount += 1;
+          if (lockCount === 4) {
+            parentReached.resolve();
+            await parentLockGate.promise;
+          }
+          return cb();
+        },
+      },
+    });
+
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-recovery-retry-op-win"]') as HTMLButtonElement).click();
+    });
+    await parentReached.promise;
+    // Rebind window and verified owner to B while parent finalizer is waiting on the Web Lock
+    connState.verifiedBrowserIdentity = { principal: "mallory", namespace: "prod" };
+    store.session.windows["window-1"].appState = canonicalAppState({
+      ownerScope: scopeB,
+      closing: { operationId: "op-win", status: "unknown" },
+    });
+    await act(async () => {
+      parentLockGate.resolve();
+      const flush = Promise.withResolvers<void>();
+      setTimeout(flush.resolve, 15);
+      await flush.promise;
+    });
+    await rerender();
+
+    expect(store.closeWindow).not.toHaveBeenCalled();
+    expect(isOperationRiskAcknowledged("op-win")).toBe(false);
+    expect(loadBrowserRecoveryDisk().operations.map((o) => o.operationId)).toEqual(["op-win"]);
   });
 });

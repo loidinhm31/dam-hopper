@@ -322,4 +322,39 @@ describe("BrowserTools quality controls & diagnostics", () => {
 
     expect(onCloseTools).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps Cancel Select clickable while selectionActive even if control is lost, and wires Copy Selection button and status", () => {
+    const onToggleSelection = vi.fn();
+    const onCopySelection = vi.fn();
+
+    renderTools({
+      activeTab: { ...baseTab, isController: false, leaseToken: undefined },
+      selectionActive: true,
+      onToggleSelection,
+      onCopySelection,
+    });
+
+    const selectBtn = container?.querySelector<HTMLButtonElement>('[data-testid="browser-select-element-btn"]');
+    expect(selectBtn?.textContent).toBe("Cancel Select");
+    expect(selectBtn?.disabled).toBe(false);
+    act(() => { selectBtn!.click(); });
+    expect(onToggleSelection).toHaveBeenCalledTimes(1);
+
+    const copyBtn = container?.querySelector<HTMLButtonElement>('[data-testid="browser-copy-selection-btn"]');
+    expect(copyBtn?.disabled).toBe(true);
+
+    renderTools({
+      activeTab: { ...baseTab, isController: true, leaseToken: "lease-1" },
+      selectionActive: false,
+      copyStatus: { kind: "success", message: "Copied 5 chars to clipboard" },
+      onCopySelection,
+    });
+    const copyBtnLive = container?.querySelector<HTMLButtonElement>('[data-testid="browser-copy-selection-btn"]');
+    expect(copyBtnLive?.disabled).toBe(false);
+    act(() => { copyBtnLive!.click(); });
+    expect(onCopySelection).toHaveBeenCalledTimes(1);
+    expect(container?.querySelector('[data-testid="browser-copy-selection-status"]')?.textContent).toBe(
+      "Copied 5 chars to clipboard",
+    );
+  });
 });

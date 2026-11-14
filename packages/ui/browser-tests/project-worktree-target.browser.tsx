@@ -46,7 +46,7 @@ const testState = vi.hoisted(() => ({
   settings: {
     searchTextShortcut: "mod+shift+f",
     searchFilenameShortcut: "mod+p",
-    terminalWorkspaceShortcut: "mod+`",
+    openTerminalShortcut: "ctrl+shift+t",
     terminalFilePanelShortcut: "mod+shift+e",
     gitPanelShortcut: "mod+shift+g",
     portsPanelShortcut: "mod+shift+p",

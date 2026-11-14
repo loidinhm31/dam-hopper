@@ -11,7 +11,7 @@ describe("withUiConfigDefaults", () => {
     const ui = withUiConfigDefaults();
     expect(ui.searchTextShortcut).toBe("Mod+Shift+KeyF");
     expect(ui.searchFilenameShortcut).toBe("DoubleShift");
-    expect(ui.terminalWorkspaceShortcut).toBe("Mod+Shift+Backquote");
+    expect(ui.openTerminalShortcut).toBe("Ctrl+Shift+KeyT");
     expect(ui.terminalFilePanelShortcut).toBe("Mod+Shift+KeyE");
     expect(ui.projectPanelShortcut).toBe("Mod+Shift+KeyZ");
     expect(ui.revealActiveFileShortcut).toBe("Alt+F1");
@@ -80,7 +80,7 @@ describe("withUiConfigDefaults", () => {
       runtimeItemOrder: { web: ["session:one"] },
       searchTextShortcut: "ctrl+shift+p",
       searchFilenameShortcut: "doubleShift",
-      terminalWorkspaceShortcut: "ctrl+shift+backquote",
+      openTerminalShortcut: "ctrl+shift+t",
       terminalFilePanelShortcut: "ctrl+shift+e",
       projectPanelShortcut: "ctrl+shift+b",
       revealActiveFileShortcut: "alt+f1",
@@ -124,7 +124,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.runtimeItemOrder).toEqual({ web: ["session:one"] });
     expect(ui.searchTextShortcut).toBe("Ctrl+Shift+KeyP");
     expect(ui.searchFilenameShortcut).toBe("DoubleShift");
-    expect(ui.terminalWorkspaceShortcut).toBe("Ctrl+Shift+Backquote");
+    expect(ui.openTerminalShortcut).toBe("Ctrl+Shift+KeyT");
     expect(ui.terminalFilePanelShortcut).toBe("Ctrl+Shift+KeyE");
     expect(ui.projectPanelShortcut).toBe("Ctrl+Shift+KeyB");
     expect(ui.revealActiveFileShortcut).toBe("Alt+F1");
@@ -387,11 +387,11 @@ describe("withUiConfigDefaults", () => {
   it("preserves explicit null on shortcuts and does not resurrect defaults", () => {
     const ui = withUiConfigDefaults({
       searchTextShortcut: null,
-      terminalWorkspaceShortcut: null,
+      openTerminalShortcut: null,
       osPaletteShortcut: null,
     });
     expect(ui.searchTextShortcut).toBeNull();
-    expect(ui.terminalWorkspaceShortcut).toBeNull();
+    expect(ui.openTerminalShortcut).toBeNull();
     expect(ui.osPaletteShortcut).toBeNull();
     // Omitted shortcut still gets default
     expect(ui.gitPanelShortcut).toBe("Mod+Shift+KeyG");

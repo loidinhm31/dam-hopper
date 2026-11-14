@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +22,21 @@ pub const MAX_INSERT_TEXT_BYTES: usize = 4096;
 pub const MAX_FIND_QUERY_CHARS: usize = 256;
 pub const MAX_SELECTED_TEXT_BYTES: usize = 64 * 1024; // 64 KiB
 
+pub type LeaseEndHook =
+    Arc<dyn Fn(u64) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+static NEXT_LEASE_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+
+fn truncate_utf8_bytes(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MouseButton {
@@ -210,6 +227,7 @@ pub fn map_fraction_to_css_coords(
 
 #[derive(Debug, Clone)]
 pub struct LeaseState {
+    pub lease_epoch: u64,
     pub lease_token: String,
     pub viewer_id: String,
     pub holder_kind: String, // "human" | "agent"
@@ -282,6 +300,7 @@ impl HeldInputState {
 
 pub struct SessionInputManager {
     lease: Mutex<Option<LeaseState>>,
+    last_ended_lease: Mutex<Option<(String, u64)>>,
     last_processed_seq: Mutex<u64>,
     expected_viewport_epoch: Mutex<Option<u64>>,
     queue: Mutex<VecDeque<InputMessage>>,
@@ -298,6 +317,7 @@ pub struct SessionInputManager {
     /// Publishes the live lease's expiry to the active expiry watcher.
     expiry: watch::Sender<Option<Instant>>,
     expiry_watcher_started: AtomicBool,
+    lease_end_hook: std::sync::Mutex<Option<LeaseEndHook>>,
 }
 
 impl Default for SessionInputManager {
@@ -314,6 +334,7 @@ impl SessionInputManager {
     pub fn with_lease_ttl(lease_ttl: Duration) -> Self {
         Self {
             lease: Mutex::new(None),
+            last_ended_lease: Mutex::new(None),
             last_processed_seq: Mutex::new(0),
             expected_viewport_epoch: Mutex::new(None),
             queue: Mutex::new(VecDeque::new()),
@@ -325,6 +346,7 @@ impl SessionInputManager {
             recovery_suspended: AtomicBool::new(false),
             expiry: watch::channel(None).0,
             expiry_watcher_started: AtomicBool::new(false),
+            lease_end_hook: std::sync::Mutex::new(None),
         }
     }
 
@@ -341,6 +363,10 @@ impl SessionInputManager {
             spawn_expiry_watcher(Arc::downgrade(self), self.expiry.subscribe());
         }
     }
+    pub fn set_lease_end_hook(&self, hook: LeaseEndHook) {
+        *self.lease_end_hook.lock().unwrap() = Some(hook);
+    }
+
 
     pub async fn is_lease_holder(&self, viewer_id: &str) -> bool {
         let guard = self.lease.lock().await;
@@ -348,6 +374,10 @@ impl SessionInputManager {
     }
 
     pub async fn validate_lease(&self, lease_token: &str) -> Result<(), InputError> {
+        self.validate_lease_epoch(lease_token).await.map(|_| ())
+    }
+
+    pub async fn validate_lease_epoch(&self, lease_token: &str) -> Result<u64, InputError> {
         let now = Instant::now();
         let lease_guard = self.lease.lock().await;
         let lease = lease_guard.as_ref().ok_or(InputError::LeaseNotFound)?;
@@ -357,7 +387,15 @@ impl SessionInputManager {
         if lease.expires_at <= now {
             return Err(InputError::LeaseExpired);
         }
-        Ok(())
+        Ok(lease.lease_epoch)
+    }
+
+    pub async fn is_lease_epoch_live(&self, lease_epoch: u64) -> bool {
+        let now = Instant::now();
+        let lease_guard = self.lease.lock().await;
+        lease_guard
+            .as_ref()
+            .is_some_and(|l| l.lease_epoch == lease_epoch && l.expires_at > now)
     }
 
     /// Acquires cooperative control lease.
@@ -395,8 +433,10 @@ impl SessionInputManager {
         let expires_at = now + self.lease_ttl;
         let expires_at_unix_ms =
             chrono::Utc::now().timestamp_millis() + self.lease_ttl.as_millis() as i64;
+        let lease_epoch = NEXT_LEASE_EPOCH.fetch_add(1, Ordering::SeqCst);
 
         *lease_guard = Some(LeaseState {
+            lease_epoch,
             lease_token: lease_token.clone(),
             viewer_id: viewer_id.to_string(),
             holder_kind: holder_kind.to_string(),
@@ -426,6 +466,17 @@ impl SessionInputManager {
         lease_token: &str,
         effective_deadline: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<i64, InputError> {
+        self.renew_lease_with_epoch(lease_token, effective_deadline)
+            .await
+            .map(|(exp, _)| exp)
+    }
+
+    /// Renews active lease for current holder and returns `(expires_at_unix_ms, lease_epoch)`.
+    pub async fn renew_lease_with_epoch(
+        &self,
+        lease_token: &str,
+        effective_deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(i64, u64), InputError> {
         let mut lease_guard = self.lease.lock().await;
         let now = Instant::now();
         let now_utc = chrono::Utc::now();
@@ -454,7 +505,7 @@ impl SessionInputManager {
         self.expiry.send_replace(Some(lease.expires_at));
         let expires_at_unix_ms = now_utc.timestamp_millis() + ttl.as_millis() as i64;
 
-        Ok(expires_at_unix_ms)
+        Ok((expires_at_unix_ms, lease.lease_epoch))
     }
 
     /// Drains all currently queued input messages and resets queued bytes counter.
@@ -525,37 +576,58 @@ impl SessionInputManager {
 
     /// Releases active lease: held keys/buttons are released on the original native identity
     /// BEFORE the held state is forgotten. A failed release is `ReleaseFailed`, never success.
-    pub async fn release_lease(&self, lease_token: &str) -> Result<(), InputError> {
-        self.end_lease(|lease| match lease {
-            Some(lease) if lease.lease_token != lease_token => Err(InputError::NotLeaseHolder),
-            _ => Ok(true),
-        })
-        .await
+    pub async fn release_lease(&self, lease_token: &str) -> Result<Option<u64>, InputError> {
+        let ended = self
+            .end_lease(
+                |lease| match lease {
+                    Some(lease) if lease.lease_token != lease_token => Err(InputError::NotLeaseHolder),
+                    _ => Ok(true),
+                },
+                false,
+            )
+            .await?;
+        if ended.is_some() {
+            return Ok(ended);
+        }
+        let last = self.last_ended_lease.lock().await;
+        Ok(last
+            .as_ref()
+            .and_then(|(tok, epoch)| (tok == lease_token).then_some(*epoch)))
     }
 
     /// Forces revocation of the active lease (auth cancel, session end) with native release.
     pub async fn revoke_lease(&self) -> Result<(), InputError> {
-        self.end_lease(|_| Ok(true)).await
+        self.end_lease(|_| Ok(true), true).await.map(|_| ())
     }
 
     /// Revokes the lease only while `viewer_id` still holds it (decided atomically).
     pub async fn revoke_lease_if_holder(&self, viewer_id: &str) -> Result<(), InputError> {
-        self.end_lease(|lease| Ok(lease.is_some_and(|l| l.viewer_id == viewer_id)))
-            .await
+        self.end_lease(
+            |lease| Ok(lease.is_some_and(|l| l.viewer_id == viewer_id)),
+            true,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Ends the lease at its deadline (active expiry), releasing held native input.
     pub async fn expire_if_due(&self) -> Result<(), InputError> {
         let now = Instant::now();
-        self.end_lease(|lease| Ok(lease.is_some_and(|l| l.expires_at <= now)))
-            .await
+        self.end_lease(
+            |lease| Ok(lease.is_some_and(|l| l.expires_at <= now)),
+            true,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// In-memory half of a revoke: the lease and queued input end immediately (no further
     /// input is accepted) while the native release is left to [`Self::release_native`]. For
     /// fences that must not wait on the browser.
     pub async fn fence_lease(&self) {
-        *self.lease.lock().await = None;
+        if let Some(ended) = self.lease.lock().await.take() {
+            *self.last_ended_lease.lock().await = Some((ended.lease_token, ended.lease_epoch));
+        }
         self.expiry.send_replace(None);
         self.queue.lock().await.clear();
         *self.total_queued_bytes.lock().await = 0;
@@ -578,19 +650,34 @@ impl SessionInputManager {
     async fn end_lease(
         &self,
         decide: impl FnOnce(Option<&LeaseState>) -> Result<bool, InputError>,
-    ) -> Result<(), InputError> {
+        run_hook: bool,
+    ) -> Result<Option<u64>, InputError> {
         let gate = self.native_gate.lock().await;
-        {
+        let ended_lease = {
             let mut lease = self.lease.lock().await;
             if !decide(lease.as_ref())? {
-                return Ok(());
+                return Ok(None);
             }
-            *lease = None;
+            lease.take()
+        };
+        let ended_epoch = ended_lease.as_ref().map(|l| l.lease_epoch);
+        if let Some(ended) = ended_lease {
+            *self.last_ended_lease.lock().await = Some((ended.lease_token, ended.lease_epoch));
         }
         self.expiry.send_replace(None);
         self.queue.lock().await.clear();
         *self.total_queued_bytes.lock().await = 0;
-        self.dispatch_held_release(&gate, false).await
+        let res = self.dispatch_held_release(&gate, false).await;
+        drop(gate);
+        if run_hook || res.is_err() {
+            if let Some(epoch) = ended_epoch {
+                let hook = self.lease_end_hook.lock().unwrap().clone();
+                if let Some(hook) = hook {
+                    hook(epoch).await;
+                }
+            }
+        }
+        res.map(|()| ended_epoch)
     }
 
     /// Snapshot under the lock, dispatch with it dropped, re-lock and forget exactly what was
@@ -754,7 +841,7 @@ impl SessionInputManager {
             let token = msg.lease_token;
             // Only the lease that violated the contract ends; a newer holder is untouched.
             let _ = self
-                .end_lease(|lease| Ok(lease.is_some_and(|l| l.lease_token == token)))
+                .end_lease(|lease| Ok(lease.is_some_and(|l| l.lease_token == token)), true)
                 .await;
             return Err(violation);
         }
@@ -797,21 +884,23 @@ impl SessionInputManager {
         }
     }
 
-    /// Sets cached selected text (bounded to 64 KiB).
-    pub async fn set_selected_text(&self, text: &str) {
-        let mut truncated = text.to_string();
-        if truncated.len() > MAX_SELECTED_TEXT_BYTES {
-            truncated.truncate(MAX_SELECTED_TEXT_BYTES);
-        }
-        *self.selected_text.lock().await = truncated;
+    /// Sets cached selected text (bounded to 64 KiB on a UTF-8 char boundary).
+    pub async fn set_selected_text(&self, text: &str) -> String {
+        let truncated = truncate_utf8_bytes(text, MAX_SELECTED_TEXT_BYTES);
+        *self.selected_text.lock().await = truncated.clone();
+        truncated
     }
 
     /// Reads selected text if caller presents valid lease token.
     pub async fn get_selected_text(&self, lease_token: &str) -> Result<String, InputError> {
+        let now = Instant::now();
         let lease_guard = self.lease.lock().await;
         let lease = lease_guard.as_ref().ok_or(InputError::LeaseNotFound)?;
         if lease.lease_token != lease_token {
             return Err(InputError::NotLeaseHolder);
+        }
+        if lease.expires_at <= now {
+            return Err(InputError::LeaseExpired);
         }
         Ok(self.selected_text.lock().await.clone())
     }
@@ -989,5 +1078,33 @@ mod tests {
         // Out-of-bounds rejected
         assert!(map_fraction_to_css_coords(-0.1, 0.5, &geo).is_err());
         assert!(map_fraction_to_css_coords(0.5, 1.1, &geo).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_set_selected_text_truncates_multibyte_utf8_without_panic() {
+        let mgr = SessionInputManager::new();
+        let (token, _) = mgr.acquire_lease("viewer1", "human").await.unwrap();
+
+        // 1-byte prefix + 4-byte emojis straddling MAX_SELECTED_TEXT_BYTES (65536):
+        // byte 65536 lands inside an emoji (1 + 16384*4 = 65537 > 65536).
+        let mut s = String::from("a");
+        for _ in 0..16_384 {
+            s.push('🦀');
+        }
+        assert!(s.len() > MAX_SELECTED_TEXT_BYTES);
+        assert!(!s.is_char_boundary(MAX_SELECTED_TEXT_BYTES));
+
+        let clamped = mgr.set_selected_text(&s).await;
+        assert!(clamped.len() <= MAX_SELECTED_TEXT_BYTES);
+        assert_eq!(clamped.len(), 1 + 16_383 * 4);
+        assert!(std::str::from_utf8(clamped.as_bytes()).is_ok());
+        assert_eq!(mgr.get_selected_text(&token).await.unwrap(), clamped);
+
+        // Also test 3-byte UTF-8 characters straddling boundary.
+        let s3 = "€".repeat(25_000);
+        let clamped3 = mgr.set_selected_text(&s3).await;
+        assert!(clamped3.len() <= MAX_SELECTED_TEXT_BYTES);
+        assert_eq!(clamped3.len() % 3, 0);
+        assert_eq!(mgr.get_selected_text(&token).await.unwrap(), clamped3);
     }
 }

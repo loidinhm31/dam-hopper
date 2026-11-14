@@ -763,8 +763,8 @@ fn default_search_text_shortcut() -> Option<String> {
 fn default_search_filename_shortcut() -> Option<String> {
     Some("DoubleShift".to_string())
 }
-fn default_terminal_workspace_shortcut() -> Option<String> {
-    Some("Mod+Shift+Backquote".to_string())
+fn default_open_terminal_shortcut() -> Option<String> {
+    Some("Ctrl+Shift+KeyT".to_string())
 }
 fn default_terminal_file_panel_shortcut() -> Option<String> {
     Some("Mod+Shift+KeyE".to_string())
@@ -1099,12 +1099,12 @@ pub struct UiConfig {
     )]
     pub search_filename_shortcut: Option<String>,
     #[serde(
-        default = "default_terminal_workspace_shortcut",
-        alias = "terminal_workspace_shortcut",
-        alias = "terminalWorkspaceShortcut",
+        default = "default_open_terminal_shortcut",
+        alias = "open_terminal_shortcut",
+        alias = "openTerminalShortcut",
         deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub terminal_workspace_shortcut: Option<String>,
+    pub open_terminal_shortcut: Option<String>,
     #[serde(
         default = "default_terminal_file_panel_shortcut",
         alias = "terminal_file_panel_shortcut",
@@ -1318,7 +1318,7 @@ impl Default for UiConfig {
             editor_zoom_wheel_enabled: default_editor_zoom_wheel_enabled(),
             search_text_shortcut: default_search_text_shortcut(),
             search_filename_shortcut: default_search_filename_shortcut(),
-            terminal_workspace_shortcut: default_terminal_workspace_shortcut(),
+            open_terminal_shortcut: default_open_terminal_shortcut(),
             terminal_file_panel_shortcut: default_terminal_file_panel_shortcut(),
             project_panel_shortcut: default_project_panel_shortcut(),
             reveal_active_file_shortcut: default_reveal_active_file_shortcut(),

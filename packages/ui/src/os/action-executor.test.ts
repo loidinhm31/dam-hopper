@@ -508,5 +508,42 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
         expect(loadBrowserRecoveryDisk().groups).toHaveLength(1);
       }
     });
+
+    it("switches an existing Search window from filename mode to content mode on app.search.open", async () => {
+      useWindowStore.getState().openWindow(
+        {
+          id: "search-win-1",
+          appId: "search",
+          title: "Search",
+          ctx: { profileId: "prof-1", projectId: "demo" },
+          mode: "float",
+          appState: { mode: "filename", searchMode: "filename" },
+        },
+        "desk-1",
+      );
+
+      const res = await executeAction({
+        id: "app.search.open",
+        context: {
+          kind: "running-window",
+          desktopId: "desk-1",
+          windowId: "files-1",
+          owner: { profileId: "prof-1", generation: 1 },
+          windowContext: {
+            profileId: "prof-1",
+            projectId: "demo",
+            target: { kind: "project", profileId: "prof-1", project: "demo" },
+          },
+          target: { kind: "project", profileId: "prof-1", project: "demo" },
+        },
+      });
+
+      expect(res).toEqual({ kind: "focused", windowId: "search-win-1" });
+      const win = useWindowStore.getState().session.windows["search-win-1"];
+      expect(win.appState?.mode).toBe("content");
+      expect(win.appState?.searchMode).toBe("content");
+      expect(win.appState?.scope).toBe("project");
+      expect(typeof win.appState?.deliveryId).toBe("string");
+    });
   });
 });

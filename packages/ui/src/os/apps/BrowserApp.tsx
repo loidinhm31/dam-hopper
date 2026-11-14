@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   acquireBrowserControl,
+  getBrowserSelectedText,
   getBrowserSession,
   releaseBrowserControl,
   renewBrowserControl,
@@ -10,6 +11,7 @@ import { getApi, isCurrentConnection, useConnectionSnapshot } from "@/api/connec
 import type { SessionInfo } from "@/api/client.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { collectHostTerminalCandidates, useHostBrowserSelection, type HostTerminalCandidate } from "@/browser-host/selection-controller.js";
+import { writeTextToClipboard } from "@/browser-host/text-input-proxy.js";
 import { isDocumentVisible, subscribeDocumentVisibility } from "@/browser-host/visibility-demand.js";
 import { generateUUID } from "@/lib/utils.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
@@ -42,10 +44,12 @@ import {
   BROWSER_RECOVERY_STORAGE_KEY,
   clearRememberedPagesAndSuppress,
   loadBrowserRecoveryDisk,
-  settleRecoveryOperation,
+  settleProvenRecoveryOperation,
+  settleRecoveryOperationsIfAuthorized,
   stageRecoveryOperation,
 } from "../browser/browser-recovery-store.js";
 import {
+  acknowledgeUnknownOperationRisk,
   commitTargetAdmission,
   getVerifiedBrowserSession,
   isOperationRiskAcknowledged,
@@ -73,6 +77,7 @@ import {
 import {
   clearBrowserViewFenceForProfile,
   isBrowserAudioBlocked,
+  isBrowserViewFenced,
   registerBrowserStreamSlot,
   requestBrowserAudioUnlock,
   requestBrowserProxyFocus,
@@ -134,6 +139,10 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
   const [controlPending, setControlPending] = useState(false);
   const [liveSessions, setLiveSessions] = useState<SessionInfo[]>([]);
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>("");
+  const [copyPending, setCopyPending] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const copyInFlightRef = useRef(false);
+  const copyAttemptRef = useRef(0);
   const controlAttemptRef = useRef(0);
   const controlInFlightRef = useRef(false);
   const activeTabId = activeTab.tabId;
@@ -200,7 +209,12 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
   }, []);
 
   useLayoutEffect(() => {
+
     setNavigationError(null);
+    setCopyStatus(null);
+    copyAttemptRef.current += 1;
+    copyInFlightRef.current = false;
+    setCopyPending(false);
     controlAttemptRef.current += 1;
     controlInFlightRef.current = false;
     setControlPending(false);
@@ -362,13 +376,19 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
 
   const handleSubmitAddress = useCallback(() => {
     clearBrowserViewFenceForProfile(owner.profileId);
+    if (!audioMuted && !masked) {
+      requestBrowserAudioUnlock(window.id, activeTabId, owner, sessionId);
+    }
     void submitTabAddress({ ...navParams, rawInput: activeDraftValue });
-  }, [activeDraftValue, navParams, owner.profileId]);
+  }, [activeDraftValue, activeTabId, audioMuted, masked, navParams, owner, sessionId, window.id]);
 
   const handleReload = useCallback(() => {
     clearBrowserViewFenceForProfile(owner.profileId);
+    if (!audioMuted && !masked) {
+      requestBrowserAudioUnlock(window.id, activeTabId, owner, sessionId);
+    }
     void reloadBrowserTab(navParams);
-  }, [navParams, owner.profileId]);
+  }, [activeTabId, audioMuted, masked, navParams, owner, sessionId, window.id]);
 
   const handleBack = useCallback(() => void navigateTabHistory({ ...navParams, direction: "back" }), [navParams]);
   const handleForward = useCallback(() => void navigateTabHistory({ ...navParams, direction: "forward" }), [navParams]);
@@ -503,7 +523,7 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
           runtime: capturedRuntime,
         });
         if (outcome.kind === "closed" || outcome.kind === "released") {
-          await settleRecoveryOperation(operationId).catch(() => {});
+          await settleProvenRecoveryOperation(operationId, expectedScope).catch(() => {});
           const latestWin = useWindowStore.getState().session.windows[window.id];
           if (latestWin) {
             const latestState = readCanonicalBrowserWindowState(latestWin.appState, fallbackTabIdRef.current);
@@ -529,6 +549,9 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
 
   const handleAcquireControl = useCallback(async () => {
     if (!sessionId || masked || !isVisible || canonicalState.closing || controlInFlightRef.current) return;
+    if (!audioMuted) {
+      requestBrowserAudioUnlock(window.id, activeTabId, owner, sessionId);
+    }
     const verified = captureVerifiedBrowserOwner(owner.profileId);
     if (!verified || verified.owner.generation !== owner.generation) return;
     const attemptId = ++controlAttemptRef.current;
@@ -589,13 +612,16 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
         setControlPending(false);
       }
     }
-  }, [activeTab.actionSequence, activeTab.isController, activeTab.leaseToken, activeTab.snapshot, activeTab.viewerId, activeTabId, canonicalState.closing, isVisible, masked, owner.generation, owner.profileId, sessionId, window.id]);
+  }, [activeTab.actionSequence, activeTab.isController, activeTab.leaseToken, activeTab.snapshot, activeTab.viewerId, activeTabId, audioMuted, canonicalState.closing, isVisible, masked, owner, sessionId, window.id]);
 
   const handleReleaseControl = useCallback(async () => {
     if (!sessionId || !leaseToken) return;
     controlAttemptRef.current += 1;
     controlInFlightRef.current = false;
     setControlPending(false);
+    if (selection.selectionActive || selection.preview || selection.preparedArtifact) {
+      await selection.cancelSelection?.();
+    }
     const capturedTabId = activeTabId;
     const capturedSessionId = sessionId;
     const capturedLease = leaseToken;
@@ -624,7 +650,14 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
         }
       }
     }
-  }, [activeTab.snapshot?.browserIncarnation, activeTab.snapshot?.profileEpoch, activeTabId, leaseToken, owner, sessionId, window.id]);
+  }, [activeTab.snapshot?.browserIncarnation, activeTab.snapshot?.profileEpoch, activeTabId, leaseToken, owner, selection, sessionId, window.id]);
+
+  const { selectionActive, preview: selectionPreview, preparedArtifact: selectionArtifact, cancelSelection } = selection;
+  useEffect(() => {
+    if ((!isController || !leaseToken) && (selectionActive || selectionPreview || selectionArtifact)) {
+      void cancelSelection?.();
+    }
+  }, [isController, leaseToken, selectionActive, selectionPreview, selectionArtifact, cancelSelection]);
 
   useEffect(() => {
     if (!isController || !leaseToken || !sessionId) return;
@@ -771,6 +804,149 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
     }
   }, [owner.generation, owner.profileId]);
 
+  const handleDismissNewTabRecovery = useCallback(async () => {
+    if (masked || !verifiedScope) return;
+    const verified = captureVerifiedBrowserOwner(owner.profileId);
+    if (!verified || verified.owner.generation !== owner.generation || !areBrowserOwnerScopesEqual(verified.scope, verifiedScope)) {
+      return;
+    }
+    try {
+      const ops = loadBrowserRecoveryDisk().operations.filter((op) =>
+        areBrowserOwnerScopesEqual(op.ownerScope, verified.scope),
+      );
+      if (ops.length === 0) return;
+      const settled = await settleRecoveryOperationsIfAuthorized({
+        operationIds: ops.map((op) => op.operationId),
+        expectedScope: verified.scope,
+        skipActiveClosingWindows: true,
+        shouldSettle: () => {
+          const live = captureVerifiedBrowserOwner(owner.profileId);
+          return Boolean(live && live.owner.generation === owner.generation && areBrowserOwnerScopesEqual(live.scope, verified.scope));
+        },
+      });
+      const postVerified = captureVerifiedBrowserOwner(owner.profileId);
+      if (!postVerified || postVerified.owner.generation !== owner.generation || !areBrowserOwnerScopesEqual(postVerified.scope, verified.scope)) {
+        return;
+      }
+      for (const op of settled) {
+        acknowledgeUnknownOperationRisk(op.operationId);
+        if (op.tabId && op.windowId === window.id) {
+          const curWin = useWindowStore.getState().session.windows[window.id];
+          if (curWin && curWin.ctx.profileId === owner.profileId) {
+            const curState = readCanonicalBrowserWindowState(curWin.appState, fallbackTabIdRef.current);
+            if (!curState.ownerScope || areBrowserOwnerScopesEqual(curState.ownerScope, verified.scope)) {
+              const target = findBrowserTab(curState, op.tabId);
+              if (target && (target.phase === "create-unknown" || target.phase === "close-unknown")) {
+                writeCanonicalWindowState(window.id, removeBrowserTab(curState, op.tabId));
+              }
+            }
+          }
+        }
+      }
+      setRecoveryTick((n) => n + 1);
+    } catch {
+      // ignore if recovery storage unreadable
+    }
+  }, [masked, owner.generation, owner.profileId, verifiedScope, window.id]);
+
+  const handleCopySelection = useCallback(async () => {
+    if (!sessionId || !isController || !leaseToken || masked || copyInFlightRef.current) return;
+    if (!isCurrentConnection(owner)) return;
+    const attemptId = ++copyAttemptRef.current;
+    copyInFlightRef.current = true;
+    setCopyPending(true);
+    setCopyStatus(null);
+    const capturedOwner: ConnectionRef = { profileId: owner.profileId, generation: owner.generation };
+    const capturedTabId = activeTabId;
+    const capturedSessionId = sessionId;
+    const capturedLease = leaseToken;
+    const capturedNavRev = String(activeTab.snapshot?.navigationRevision ?? "");
+    const capturedViewportEpoch = String(activeTab.snapshot?.viewportEpoch ?? "");
+    const capturedIncarnation = activeTab.snapshot?.browserIncarnation ?? "";
+    const capturedProfileEpoch = String(activeTab.snapshot?.profileEpoch ?? "");
+    const capturedActionSeq = activeTab.actionSequence;
+    const isCopyAuthorityCurrent = (): boolean => {
+      if (attemptId !== copyAttemptRef.current) return false;
+      if (!isCurrentConnection(capturedOwner)) return false;
+      if (
+        useCognitoModeStore.getState().active ||
+        useLockScreenStore.getState().isLocked ||
+        isBrowserViewFenced(capturedOwner.profileId, capturedOwner.generation) ||
+        maskedRef.current ||
+        !isVisibleRef.current
+      ) {
+        return false;
+      }
+      const curWin = useWindowStore.getState().session.windows[window.id];
+      if (!curWin || curWin.appId !== "browser" || curWin.ctx.profileId !== capturedOwner.profileId || curWin.minimized) {
+        return false;
+      }
+      const curState = readCanonicalBrowserWindowState(curWin.appState, fallbackTabIdRef.current);
+      if (curState.closing || curState.activeTabId !== capturedTabId) {
+        return false;
+      }
+      const verified = captureVerifiedBrowserOwner(capturedOwner.profileId);
+      if (
+        !verified ||
+        verified.owner.generation !== capturedOwner.generation ||
+        (curState.ownerScope && !areBrowserOwnerScopesEqual(curState.ownerScope, verified.scope))
+      ) {
+        return false;
+      }
+      const curTab = findBrowserTab(curState, capturedTabId);
+      return Boolean(
+        curTab &&
+          curTab.phase === "live" &&
+          curTab.isController &&
+          curTab.leaseToken === capturedLease &&
+          curTab.sessionId === capturedSessionId &&
+          curTab.actionSequence === capturedActionSeq &&
+          String(curTab.snapshot?.navigationRevision ?? "") === capturedNavRev &&
+          String(curTab.snapshot?.viewportEpoch ?? "") === capturedViewportEpoch &&
+          (curTab.snapshot?.browserIncarnation ?? "") === capturedIncarnation &&
+          String(curTab.snapshot?.profileEpoch ?? "") === capturedProfileEpoch &&
+          (curTab.snapshot?.status === undefined || curTab.snapshot.status === "running"),
+      );
+    };
+    try {
+      const res = await getBrowserSelectedText(capturedOwner, capturedSessionId, capturedLease);
+      if (!isCopyAuthorityCurrent()) return;
+      if (!res.text) {
+        setCopyStatus({ kind: "success", message: "No text selected" });
+        return;
+      }
+      const copied = await writeTextToClipboard(res.text, isCopyAuthorityCurrent);
+      if (!isCopyAuthorityCurrent()) return;
+      if (copied) {
+        setCopyStatus({ kind: "success", message: `Copied ${res.text.length} chars to clipboard` });
+      } else {
+        setCopyStatus({ kind: "error", message: "Clipboard write unavailable" });
+      }
+    } catch (err) {
+      if (isCopyAuthorityCurrent()) {
+        setCopyStatus({ kind: "error", message: sanitizeBrowserError(err, "Failed to read selected text.") });
+      }
+    } finally {
+      if (attemptId === copyAttemptRef.current) {
+        copyInFlightRef.current = false;
+        setCopyPending(false);
+      }
+    }
+  }, [
+    activeTab.actionSequence,
+    activeTab.snapshot?.browserIncarnation,
+    activeTab.snapshot?.navigationRevision,
+    activeTab.snapshot?.profileEpoch,
+    activeTab.snapshot?.viewportEpoch,
+    activeTabId,
+    isController,
+    leaseToken,
+    masked,
+    owner,
+    sessionId,
+    window.id,
+  ]);
+
   const handleAttachInventorySession = useCallback((sess: BrowserSessionDto) => {
     const curWin = useWindowStore.getState().session.windows[window.id];
     const curState = readCanonicalBrowserWindowState(curWin?.appState, fallbackTabIdRef.current);
@@ -892,46 +1068,15 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
         </div>
       )}
 
-      {toolsOpen && (
-        <BrowserTools
-          panelId={toolsPanelId}
-          windowId={window.id}
-          owner={owner}
-          verifiedScope={verifiedScope}
-          activeTab={activeTab}
-          windowClosing={canonicalState.closing}
-          privacyMasked={privacyMasked}
-          ownerMismatch={ownerMismatch}
-          navigationError={navigationError}
-          selectionPending={Boolean(selection.pending)}
-          selectionActive={Boolean(selection.selectionActive)}
-          controlPending={controlPending}
-          clearPending={clearPending}
-          clearStatus={clearStatus}
-          onAcquireControl={() => void handleAcquireControl()}
-          onReleaseControl={() => void handleReleaseControl()}
-          onToggleSelection={() => { if (selection.selectionActive) void selection.cancelSelection(); else void selection.startSelection(); }}
-          onClearRemembered={() => void handleClearRemembered()}
-          onCloseTools={() => { setToolsOpen(false); requestAnimationFrame(() => toolsButtonRef.current?.focus()); }}
-          onAttachSession={handleAttachInventorySession}
-          onWindowStateUpdated={() => setRecoveryTick((n) => n + 1)}
-          onCloseUnknownWindowAllowed={() => useWindowStore.getState().closeWindow(window.id)}
-          qualityPreference={qualityState.preference}
-          qualityStatus={qualityState.status}
-          qualityPending={qualityState.pending}
-          onQualityPreferenceChange={handleQualityPreferenceChange}
-        />
-      )}
-
-      <div id={panelDomId} role="tabpanel" aria-labelledby={tabDomId} className="flex-1 min-h-0 relative flex flex-col">
-        <div
-          ref={slotRef}
-          data-os-browser-slot={window.id}
-          data-testid={`browser-slot-${window.id}`}
-          data-selection-active={selection.selectionActive ? "true" : "false"}
-          className={showStreamSlot ? "flex-1 min-h-0 relative bg-black" : "hidden"}
-        />
-
+      <div className="flex-1 min-h-0 relative flex flex-row overflow-hidden">
+        <div id={panelDomId} role="tabpanel" aria-labelledby={tabDomId} className="flex-1 min-w-0 min-h-0 relative flex flex-col">
+          <div
+            ref={slotRef}
+            data-os-browser-slot={window.id}
+            data-testid={`browser-slot-${window.id}`}
+            data-selection-active={selection.selectionActive ? "true" : "false"}
+            className={showStreamSlot ? "flex-1 min-h-0 relative bg-black" : "hidden"}
+          />
         {!showStreamSlot && activeTab.phase === "new-tab" && (
           <BrowserNewTabPage
             draftValue={activeDraftValue}
@@ -946,6 +1091,7 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
             onEscapeDraft={() => resetTabDraftToCommitted(window.id, activeTabId, fallbackTabIdRef.current)}
             onClearRemembered={() => void handleClearRemembered()}
             onOpenRecovery={() => setToolsOpen(true)}
+              onDismissRecovery={() => void handleDismissNewTabRecovery()}
           />
         )}
 
@@ -999,14 +1145,12 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
             </div>
           </div>
         )}
-      </div>
-
-      {showSelectionPanel && (
-        <div data-testid="browser-selection-panel" className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-text)] space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <div className="font-semibold text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">CDP Selection Preview</div>
-            <button type="button" data-testid="browser-selection-close-btn" onClick={() => void selection.cancelSelection()} className="px-1.5 py-0.5 rounded text-[10px] border border-[var(--color-border)] hover:bg-[var(--color-surface-2)]">Clear</button>
-          </div>
+          {showSelectionPanel && (
+            <div data-testid="browser-selection-panel" className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-text)] space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-semibold text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">CDP Selection Preview</div>
+              <button type="button" data-testid="browser-selection-close-btn" onClick={() => void selection.cancelSelection()} className="px-1.5 py-0.5 rounded text-[10px] border border-[var(--color-border)] hover:bg-[var(--color-surface-2)]">Clear</button>
+            </div>
           {selection.notice && <p role="status" data-testid="browser-selection-notice" className="text-[11px] text-emerald-400">{selection.notice}</p>}
           {selection.error && <p role="alert" data-testid="browser-selection-error" className="text-[11px] text-red-400">{selection.error}</p>}
           {selection.preview && (
@@ -1056,8 +1200,43 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
               )}
             </div>
           )}
+            </div>
+          )}
         </div>
-      )}
+        {toolsOpen && (
+          <BrowserTools
+            panelId={toolsPanelId}
+            windowId={window.id}
+            owner={owner}
+            verifiedScope={verifiedScope}
+            activeTab={activeTab}
+            windowClosing={canonicalState.closing}
+            privacyMasked={privacyMasked}
+            ownerMismatch={ownerMismatch}
+            navigationError={navigationError}
+            selectionPending={Boolean(selection.pending)}
+            selectionActive={Boolean(selection.selectionActive)}
+            controlPending={controlPending}
+            clearPending={clearPending}
+            clearStatus={clearStatus}
+            onAcquireControl={() => void handleAcquireControl()}
+            onReleaseControl={() => void handleReleaseControl()}
+            onToggleSelection={() => { if (selection.selectionActive) void selection.cancelSelection(); else void selection.startSelection(); }}
+            onClearRemembered={() => void handleClearRemembered()}
+            onCloseTools={() => { setToolsOpen(false); requestAnimationFrame(() => toolsButtonRef.current?.focus()); }}
+            onAttachSession={handleAttachInventorySession}
+            onWindowStateUpdated={() => setRecoveryTick((n) => n + 1)}
+            onCloseUnknownWindowAllowed={() => useWindowStore.getState().closeWindow(window.id)}
+            qualityPreference={qualityState.preference}
+            qualityStatus={qualityState.status}
+            qualityPending={qualityState.pending}
+            onQualityPreferenceChange={handleQualityPreferenceChange}
+            copyPending={copyPending}
+            copyStatus={copyStatus}
+            onCopySelection={() => void handleCopySelection()}
+          />
+        )}
+      </div>
     </div>
   );
 }

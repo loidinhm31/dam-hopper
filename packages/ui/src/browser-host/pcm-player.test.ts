@@ -257,4 +257,28 @@ describe("PcmPlayer", () => {
     expect(ctx.sources).toHaveLength(1);
     expect(player.queuedSeconds()).toBe(0);
   });
+
+  it("prime(true) creates and resumes AudioContext before canPlay is true while keeping enqueue gated", async () => {
+    let canPlay = false;
+    const player = new PcmPlayer({ canPlay: () => canPlay });
+    const chunk = encodePcm16LeBase64([100, 200, 300, 400]);
+
+    player.prime();
+    expect(MockAudioContext.instances).toHaveLength(0);
+
+    player.prime(true);
+    expect(MockAudioContext.instances).toHaveLength(1);
+    const ctx = MockAudioContext.instances[0];
+    ctx.state = "suspended";
+    player.prime(true);
+    expect(ctx.resume).toHaveBeenCalledTimes(1);
+
+    // Enqueue still gated while canPlay is false
+    player.enqueue(chunk);
+    expect(ctx.sources).toHaveLength(0);
+
+    canPlay = true;
+    player.enqueue(chunk);
+    expect(ctx.sources).toHaveLength(1);
+  });
 });

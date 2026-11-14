@@ -11,6 +11,10 @@ export interface TextInputProxyProps {
   autoFocus?: boolean;
   onFocus?: () => void;
   onBlur?: () => void;
+  onUserGesture?: () => void;
+  onCopyShortcut?: () => void;
+  onSelectionInvalidate?: () => void;
+  onCopy?: React.ClipboardEventHandler<HTMLTextAreaElement>;
 }
 
 export interface TextInputProxyHandle {
@@ -25,11 +29,56 @@ function isLocalPasteShortcut(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     (event.shiftKey && event.key === "Insert");
 }
 
+export async function writeTextToClipboard(
+  text: string,
+  isAuthorized?: () => boolean,
+): Promise<boolean> {
+  if (isAuthorized && !isAuthorized()) return false;
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      if (isAuthorized && !isAuthorized()) return false;
+      return true;
+    } catch {
+      // Fall through to execCommand fallback
+    }
+  }
+  if (isAuthorized && !isAuthorized()) return false;
+  if (typeof document === "undefined" || !document.body) return false;
+  const activeEl = document.activeElement as HTMLElement | null;
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.top = "-9999px";
+  ta.style.left = "-9999px";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  try {
+    ta.focus();
+    ta.select();
+    if (isAuthorized && !isAuthorized()) return false;
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    ta.remove();
+    if (
+      (!isAuthorized || isAuthorized()) &&
+      activeEl &&
+      typeof activeEl.focus === "function" &&
+      activeEl.isConnected
+    ) {
+      activeEl.focus();
+    }
+  }
+}
+
 export const TextInputProxy = React.forwardRef<
   TextInputProxyHandle,
   TextInputProxyProps
 >(function TextInputProxy(
-  { controller, autoFocus = false, onFocus, onBlur },
+  { controller, autoFocus = false, onFocus, onBlur, onUserGesture, onCopyShortcut, onSelectionInvalidate, onCopy },
   forwardedRef,
 ) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -78,12 +127,13 @@ export const TextInputProxy = React.forwardRef<
       if (text && controller) {
         controller.handleInsertText(text);
         pendingCommitRef.current = { text, source: "composition" };
+        onSelectionInvalidate?.();
       }
       if (textareaRef.current) {
         textareaRef.current.value = "";
       }
     },
-    [controller],
+    [controller, onSelectionInvalidate],
   );
 
   const handleBeforeInput = useCallback(
@@ -97,6 +147,7 @@ export const TextInputProxy = React.forwardRef<
         // React can synthesize beforeInput from the same compositionEnd.
         if (pending?.source !== "composition" || pending.text !== data) {
           controller.handleInsertText(data);
+          onSelectionInvalidate?.();
         }
         pendingCommitRef.current = { text: data, source: "beforeInput" };
         if (textareaRef.current) {
@@ -104,7 +155,7 @@ export const TextInputProxy = React.forwardRef<
         }
       }
     },
-    [controller],
+    [controller, onSelectionInvalidate],
   );
 
   const handleInput = useCallback(
@@ -120,19 +171,32 @@ export const TextInputProxy = React.forwardRef<
       pendingCommitRef.current = null;
       if (val && controller && pending?.text !== val) {
         controller.handleInsertText(val);
+        onSelectionInvalidate?.();
       }
       e.currentTarget.value = "";
     },
-    [controller, reset],
+    [controller, onSelectionInvalidate, reset],
   );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (isComposingRef.current) return;
+      onUserGesture?.();
       if (!controller) return;
       // Local clipboard text is forwarded by onPaste. Never also trigger paste
       // from the remote browser's independent clipboard.
       if (isLocalPasteShortcut(e)) return;
+
+      const isCopyShortcut =
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "c";
+      if (isCopyShortcut) {
+        onCopyShortcut?.();
+      } else if (!["Shift", "Control", "Meta", "Alt"].includes(e.key)) {
+        onSelectionInvalidate?.();
+      }
 
       // Allow standard browser copy/paste/select-all
       const isClipboardShortcut =
@@ -144,7 +208,7 @@ export const TextInputProxy = React.forwardRef<
         e.preventDefault();
       }
     },
-    [controller],
+    [controller, onCopyShortcut, onSelectionInvalidate, onUserGesture],
   );
 
   const handleKeyUp = useCallback(
@@ -169,12 +233,13 @@ export const TextInputProxy = React.forwardRef<
       const text = e.clipboardData?.getData("text/plain");
       if (text) {
         controller.handleInsertText(text);
+        onSelectionInvalidate?.();
       }
       if (textareaRef.current) {
         textareaRef.current.value = "";
       }
     },
-    [controller],
+    [controller, onSelectionInvalidate],
   );
 
   const handleBlur = useCallback(() => {
@@ -199,6 +264,7 @@ export const TextInputProxy = React.forwardRef<
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}
       onPaste={handlePaste}
+      onCopy={onCopy}
       onFocus={onFocus}
       onBlur={handleBlur}
       tabIndex={0}

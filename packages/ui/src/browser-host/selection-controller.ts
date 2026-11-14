@@ -759,10 +759,12 @@ export function useHostBrowserSelection({
       void discardUnclaimedArtifact(preparedArtifact, false, owner);
     }
     setSelectionActive(false);
+    setSelectionRevision("0");
     setPreview(null);
     setPreparedArtifact(null);
     setCapturedTarget(null);
     setInserted(false);
+    setPending(false);
     setError(null);
     setNotice(null);
 

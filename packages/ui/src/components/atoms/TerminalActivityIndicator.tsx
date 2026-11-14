@@ -1,4 +1,5 @@
 import type { TerminalRef } from "@/api/ownership.js";
+import type { TerminalTarget } from "@/api/terminal-session-contract.js";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import {
   getTerminalOutputActivityRevision,
@@ -39,6 +40,7 @@ interface TerminalProjectActivityTab {
   readonly session?: { readonly alive: boolean };
   readonly profileId?: string;
   readonly terminalRef?: TerminalRef;
+  readonly terminalTarget?: TerminalTarget;
 }
 
 export function TerminalProjectActivityIndicator({
@@ -46,7 +48,16 @@ export function TerminalProjectActivityIndicator({
 }: {
   tabs: readonly TerminalProjectActivityTab[];
 }) {
-  const sessionIds = useMemo(() => tabs.map((tab) => tab.sessionId), [tabs]);
+  const sessionIds = useMemo(
+    () =>
+      tabs.map(
+        (tab) =>
+          tab.terminalTarget ??
+          tab.terminalRef ??
+          (tab.profileId ? { profileId: tab.profileId, id: tab.sessionId } : tab.sessionId),
+      ),
+    [tabs],
+  );
   const subscribe = useCallback(
     (listener: () => void) =>
       subscribeToTerminalOutputActivitySessions(sessionIds, listener),
@@ -63,7 +74,8 @@ export function TerminalProjectActivityIndicator({
         (tab) =>
           getTerminalOutputActivityStatus(
             getTerminalOutputActivitySnapshot(
-              tab.terminalRef ??
+              tab.terminalTarget ??
+                tab.terminalRef ??
                 (tab.profileId
                   ? { profileId: tab.profileId, id: tab.sessionId }
                   : tab.sessionId),
@@ -96,6 +108,7 @@ interface TerminalActivityIndicatorProps {
   alive?: boolean;
   profileId?: string;
   terminalRef?: TerminalRef;
+  terminalTarget?: TerminalTarget;
 }
 
 export function TerminalActivityIndicator({
@@ -103,9 +116,15 @@ export function TerminalActivityIndicator({
   alive,
   profileId,
   terminalRef,
+  terminalTarget,
 }: TerminalActivityIndicatorProps) {
-  const target =
-    terminalRef ?? (profileId ? { profileId, id: sessionId } : sessionId);
+  const target = useMemo(
+    () =>
+      terminalTarget ??
+      terminalRef ??
+      (profileId ? { profileId, id: sessionId } : sessionId),
+    [terminalTarget, terminalRef, profileId, sessionId],
+  );
   const subscribe = useCallback(
     (listener: () => void) =>
       subscribeToTerminalOutputActivity(target, listener),

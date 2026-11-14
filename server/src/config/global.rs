@@ -171,7 +171,7 @@ fn serialize_global_config_for_toml(config: &GlobalConfig) -> Result<toml::Value
 pub(crate) const KNOWN_SCALAR_SHORTCUT_KEYS: &[&str] = &[
     "search_text_shortcut",
     "search_filename_shortcut",
-    "terminal_workspace_shortcut",
+    "open_terminal_shortcut",
     "terminal_file_panel_shortcut",
     "project_panel_shortcut",
     "reveal_active_file_shortcut",
@@ -190,7 +190,11 @@ pub(crate) fn normalize_ui_json_for_toml(value: &mut Value) {
 
     let entries = std::mem::take(ui);
     for (key, mut value) in entries {
-        if key == "fleetTerminalShortcut" || key == "fleet_terminal_shortcut" {
+        if key == "fleetTerminalShortcut"
+            || key == "fleet_terminal_shortcut"
+            || key == "terminalWorkspaceShortcut"
+            || key == "terminal_workspace_shortcut"
+        {
             continue;
         }
 
@@ -201,7 +205,7 @@ pub(crate) fn normalize_ui_json_for_toml(value: &mut Value) {
             "editorZoomWheelEnabled" | "editor_zoom_wheel_enabled" => "editor_zoom_wheel_enabled",
             "searchTextShortcut" | "search_text_shortcut" => "search_text_shortcut",
             "searchFilenameShortcut" | "search_filename_shortcut" => "search_filename_shortcut",
-            "terminalWorkspaceShortcut" | "terminal_workspace_shortcut" => "terminal_workspace_shortcut",
+            "openTerminalShortcut" | "open_terminal_shortcut" => "open_terminal_shortcut",
             "terminalFilePanelShortcut" | "terminal_file_panel_shortcut" => "terminal_file_panel_shortcut",
             "projectPanelShortcut" | "project_panel_shortcut" => "project_panel_shortcut",
             "revealActiveFileShortcut" | "reveal_active_file_shortcut" => "reveal_active_file_shortcut",

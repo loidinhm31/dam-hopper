@@ -103,7 +103,7 @@ const mocks = vi.hoisted(() => {
     appZoomLevel: 100,
     settings: {
       terminalFontSize: 13,
-      terminalWorkspaceShortcut: "Mod+Shift+Backquote",
+      openTerminalShortcut: "Ctrl+Shift+KeyT",
       revealActiveFileShortcut: "Alt+F1",
       gitPanelShortcut: "Mod+Shift+KeyG",
       portsPanelShortcut: "Mod+Shift+KeyP",

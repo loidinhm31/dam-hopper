@@ -35,11 +35,15 @@ export class PcmPlayer {
   private readonly onAutoplayBlockedChange?: (blocked: boolean) => void;
 
   public constructor(options?: PcmPlayerOptions) { this.canPlay = options?.canPlay; this.onAutoplayBlockedChange = options?.onAutoplayBlockedChange; }
-  public prime(): void {
-    if (this.disposed || (this.canPlay && !this.canPlay())) return;
+  public prime(allowBeforeLive = false): void {
+    if (this.disposed || (!allowBeforeLive && this.canPlay && !this.canPlay())) return;
     this.resumeRejected = false;
     const ctx = this.ensureContext(); if (!ctx) return;
-    if (ctx.state === "running") { this.setAutoplayBlocked(false); this.drainPending(ctx); return; }
+    if (ctx.state === "running") {
+      this.setAutoplayBlocked(false);
+      if (!this.canPlay || this.canPlay()) this.drainPending(ctx);
+      return;
+    }
     this.requestResume(ctx, true);
   }
 

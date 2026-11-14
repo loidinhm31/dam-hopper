@@ -489,6 +489,18 @@ export async function executeAction(
           activeTab: "general",
         });
       }
+    } else if (appId === "search" && request.id === "app.search.open") {
+      const editorQuery =
+        request.context.kind === "editor" && request.context.selectedText?.trim()
+          ? request.context.selectedText.trim()
+          : undefined;
+      state.updateAppState(chosen.id, {
+        mode: "content",
+        searchMode: "content",
+        scope: targetCtx.projectId ? "project" : "workspace",
+        ...(editorQuery !== undefined ? { query: editorQuery } : {}),
+        deliveryId: generateUUID(),
+      });
     }
 
     if (chosen.minimized) {
@@ -516,8 +528,19 @@ export async function executeAction(
         activeTab: "general",
       };
     }
+  } else if (appId === "search" && request.id === "app.search.open") {
+    const editorQuery =
+      request.context.kind === "editor" && request.context.selectedText?.trim()
+        ? request.context.selectedText.trim()
+        : undefined;
+    initialAppState = {
+      mode: "content",
+      searchMode: "content",
+      scope: targetCtx.projectId ? "project" : "workspace",
+      ...(editorQuery !== undefined ? { query: editorQuery } : {}),
+      deliveryId: generateUUID(),
+    };
   } else if (appId === "editor") {
-    // Generic editor open with no existing window opens chooser if no selected resource
     if (request.context.kind === "editor" && request.context.filePath) {
       initialAppState = {
         presentation: {

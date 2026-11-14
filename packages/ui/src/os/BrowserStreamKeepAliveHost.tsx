@@ -32,11 +32,13 @@ import {
 import { PcmPlayer } from "../browser-host/pcm-player.js";
 import {
   TextInputProxy,
+  writeTextToClipboard,
   type TextInputProxyHandle,
 } from "../browser-host/text-input-proxy.js";
 import {
   acquireBrowserControl,
   BrowserHostClientError,
+  getBrowserSelectedText,
   getBrowserSession,
   mintViewerAttachmentTickets,
   releaseBrowserControl,
@@ -119,7 +121,7 @@ const proxyFocusListeners = new Map<
 
 const audioUnlockListeners = new Map<
   string,
-  (owner: ConnectionRef, sessionId: string) => void
+  (owner: ConnectionRef, sessionId?: string) => void
 >();
 
 const audioBlockedTabs = new Set<string>();
@@ -167,7 +169,7 @@ export function requestBrowserAudioUnlock(
   windowId: string,
   tabId: string,
   owner: ConnectionRef,
-  sessionId: string,
+  sessionId?: string,
 ): void {
   audioUnlockListeners.get(browserTabSlotKey(windowId, tabId))?.(
     owner,
@@ -495,7 +497,58 @@ function ParkedBrowserStreamItem({
   const pendingPointerRef = useRef<PendingBrowserPointer | null>(null);
   const pcmPlayerRef = useRef<PcmPlayer | null>(null);
   const pointerVisibleRef = useRef(false);
+  const pointerDownPosRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const cachedSelectedTextRef = useRef<{
+    text: string;
+    sessionId: string;
+    leaseToken: string;
+    navigationRevision: string;
+    browserIncarnation: string;
+    profileEpoch: string;
+    scopeKey: string;
+  } | null>(null);
+  const selectedTextRefreshTimerRef = useRef<number | null>(null);
+  const selectionCacheGenRef = useRef(0);
 
+  const clearSelectedTextCache = useCallback(() => {
+    selectionCacheGenRef.current += 1;
+    clearTimeout(selectedTextRefreshTimerRef.current ?? undefined);
+    selectedTextRefreshTimerRef.current = null;
+    cachedSelectedTextRef.current = null;
+  }, []);
+
+  const readSelectionAuthority = useCallback(() => {
+    const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+    const verified = captureVerifiedBrowserOwner(win.ctx.profileId);
+    const liveOwner = ownerRef.current;
+    if (
+      !cur ||
+      !verified ||
+      verified.owner.generation !== liveOwner.generation ||
+      !isCurrentConnection(liveOwner) ||
+      isSuppressedRef.current ||
+      !isEffectiveVisibleRef.current ||
+      cur.appState.closing ||
+      cur.appState.activeTabId !== tab.tabId ||
+      (cur.appState.ownerScope &&
+        !areBrowserOwnerScopesEqual(cur.appState.ownerScope, verified.scope)) ||
+      cur.tab.phase !== "live" ||
+      cur.tab.snapshot?.status !== "running" ||
+      !cur.tab.isController ||
+      !cur.tab.leaseToken ||
+      !cur.tab.sessionId
+    ) {
+      return null;
+    }
+    return {
+      sessionId: cur.tab.sessionId,
+      leaseToken: cur.tab.leaseToken,
+      navigationRevision: String(cur.tab.snapshot.navigationRevision ?? ""),
+      browserIncarnation: cur.tab.snapshot.browserIncarnation ?? "",
+      profileEpoch: String(cur.tab.snapshot.profileEpoch ?? ""),
+      scopeKey: JSON.stringify(verified.scope),
+    };
+  }, [tab.tabId, win.ctx.profileId, win.id]);
   const [streamController, setStreamController] =
     useState<BrowserStreamController | null>(null);
   const [inputController, setInputController] =
@@ -834,6 +887,7 @@ function ParkedBrowserStreamItem({
         lastAudioDocEpochRef.current = null;
         pcmPlayerRef.current?.flush();
         streamControllerRef.current?.resetAudioAuthority();
+        clearSelectedTextCache();
         cancelPendingGesture();
         if (currentAttachedCredsRef.current) {
           detachActiveStreamSynchronously();
@@ -846,6 +900,7 @@ function ParkedBrowserStreamItem({
           pcmPlayerRef.current?.flush();
         }
         streamControllerRef.current?.resetAudioAuthority(nextNavRev);
+        clearSelectedTextCache();
         cancelPendingGesture();
       } else if (nextViewport !== prevViewport) {
         prevViewport = nextViewport;
@@ -910,6 +965,7 @@ function ParkedBrowserStreamItem({
     canPlayAudio,
     canStreamTab,
     cancelPendingGesture,
+    clearSelectedTextCache,
   ]);
 
   // Track slot registration updates and synchronously flush audio on hide/mute
@@ -1002,6 +1058,7 @@ function ParkedBrowserStreamItem({
   useLayoutEffect(() => {
     if (isSuppressed) {
       pcmPlayerRef.current?.flush();
+      clearSelectedTextCache();
       currentAttachedCredsRef.current = null;
       clearStreamQuality(qualityTuple);
     }
@@ -1013,16 +1070,16 @@ function ParkedBrowserStreamItem({
         inputControllerRef.current?.releaseAllHeldInput();
       }
     }
-  }, [isSuppressed, cancelPendingGesture, qualityTuple]);
+  }, [isSuppressed, cancelPendingGesture, clearSelectedTextCache, qualityTuple]);
 
   useLayoutEffect(() => {
     if (!isEffectiveVisible || slot?.audioMuted) {
       pcmPlayerRef.current?.flush();
     }
     if (!isEffectiveVisible) {
+      clearSelectedTextCache();
       currentAttachedCredsRef.current = null;
       cancelPendingGesture();
-      textInputProxyRef.current?.blur();
       inputControllerRef.current?.releaseAllHeldInput();
       setActiveDialog(null);
       setControlError(null);
@@ -1031,19 +1088,21 @@ function ParkedBrowserStreamItem({
     if (streamControllerRef.current) {
       streamControllerRef.current.setVisibility(isEffectiveVisible);
     }
-  }, [isEffectiveVisible, slot?.audioMuted, cancelPendingGesture, qualityTuple]);
+  }, [isEffectiveVisible, slot?.audioMuted, cancelPendingGesture, clearSelectedTextCache, qualityTuple]);
 
   // Retire an old acquisition and flush audio/authority immediately on session identity change.
   useLayoutEffect(() => {
     lastAudioDocEpochRef.current = null;
     pcmPlayerRef.current?.flush();
     streamControllerRef.current?.resetAudioAuthority();
+    clearSelectedTextCache();
     cancelPendingGesture();
     clearStreamQuality(qualityTuple);
     return () => {
       lastAudioDocEpochRef.current = null;
       pcmPlayerRef.current?.flush();
       streamControllerRef.current?.resetAudioAuthority();
+      clearSelectedTextCache();
       cancelPendingGesture();
       clearStreamQuality(qualityTuple);
     };
@@ -1054,13 +1113,14 @@ function ParkedBrowserStreamItem({
     tab.snapshot?.browserIncarnation,
     tab.snapshot?.profileEpoch,
     cancelPendingGesture,
+    clearSelectedTextCache,
     qualityTuple,
   ]);
 
   useLayoutEffect(() => {
     const liveMute = computeLiveMuteState();
     streamControllerRef.current?.setAudioMuted(liveMute);
-  }, [slot?.audioMuted, isEffectiveVisible, isSuppressed, computeLiveMuteState]);
+  }, [slot?.audioMuted, isEffectiveVisible, isSuppressed, tab.phase, tab.snapshot?.status, computeLiveMuteState]);
   useLayoutEffect(() => {
     const verified = captureVerifiedBrowserOwner(win.ctx.profileId);
     if (
@@ -1147,20 +1207,57 @@ function ParkedBrowserStreamItem({
   }, [slotKey, win.id, tab.tabId, isEffectiveVisible, activeDialog]);
 
   useLayoutEffect(() => {
-    const unlockHandler = (reqOwner: ConnectionRef, reqSessionId: string) => {
+    const unlockHandler = (reqOwner: ConnectionRef, reqSessionId?: string) => {
       const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+      const liveSlot = slotRegistry.get(slotKey);
+      const liveSuppressed =
+        useCognitoModeStore.getState().active ||
+        useLockScreenStore.getState().isLocked ||
+        isBrowserViewFenced(reqOwner.profileId, reqOwner.generation);
+      const verified = captureVerifiedBrowserOwner(win.ctx.profileId);
+      const ownerScopeValid = Boolean(
+        verified &&
+          verified.owner.generation === reqOwner.generation &&
+          (!cur?.appState.ownerScope ||
+            areBrowserOwnerScopesEqual(cur.appState.ownerScope, verified.scope)),
+      );
+      const activeDesktopId = useWindowStore.getState().session?.activeDesktopId;
+      const onActiveDesktop = !activeDesktopId || !cur?.win.desktopId || cur.win.desktopId === activeDesktopId;
       if (
-        !canPlayAudio() ||
         !isCurrentConnection(reqOwner) ||
         !cur ||
         cur.win.ctx.profileId !== reqOwner.profileId ||
+        cur.appState.closing ||
+        cur.win.minimized ||
+        !onActiveDesktop ||
         cur.appState.activeTabId !== tab.tabId ||
-        cur.tab.sessionId !== reqSessionId
+        cur.tab.sessionId !== reqSessionId ||
+        !liveSlot ||
+        !liveSlot.element ||
+        Boolean(liveSlot.audioMuted) ||
+        liveSuppressed ||
+        !ownerScopeValid ||
+        !isDocumentVisible()
       ) {
         pcmPlayerRef.current?.flush();
         return;
       }
-      ensurePcmPlayer().prime();
+      if (canPlayAudio()) {
+        ensurePcmPlayer().prime();
+        return;
+      }
+      const preLiveAllowed =
+        cur.tab.phase === "new-tab" ||
+        cur.tab.phase === "creating" ||
+        cur.tab.phase === "connecting" ||
+        cur.tab.phase === "unavailable" ||
+        cur.tab.phase === "capacity" ||
+        cur.tab.phase === "deferred";
+      if (preLiveAllowed) {
+        ensurePcmPlayer().prime(true);
+      } else {
+        pcmPlayerRef.current?.flush();
+      }
     };
     audioUnlockListeners.set(slotKey, unlockHandler);
     return () => {
@@ -1168,7 +1265,7 @@ function ParkedBrowserStreamItem({
         audioUnlockListeners.delete(slotKey);
       }
     };
-  }, [slotKey, win.id, tab.tabId, canPlayAudio, ensurePcmPlayer]);
+  }, [slotKey, win.id, win.ctx.profileId, tab.tabId, canPlayAudio, ensurePcmPlayer]);
 
   // Initialize controllers when canvas is ready (live ref bridges preserve latest generation authority)
   useLayoutEffect(() => {
@@ -1388,6 +1485,7 @@ function ParkedBrowserStreamItem({
           } else if (event.kind === "dialogClosed") {
             setActiveDialog(null);
           } else if (event.kind === "leaseRevoked") {
+            clearSelectedTextCache();
             cancelPendingGesture();
             inputControllerRef.current?.releaseAllHeldInput();
             updateBrowserTabInStore(win.id, tab.tabId, {
@@ -1487,6 +1585,7 @@ function ParkedBrowserStreamItem({
     isSuppressed,
     isEffectiveVisible,
     cancelPendingGesture,
+    clearSelectedTextCache,
     ensurePcmPlayer,
     syncDialogFromSnapshot,
   ]);
@@ -1946,6 +2045,7 @@ function ParkedBrowserStreamItem({
   // Cleanup controllers on final component unmount (when tab or window is closed)
   useEffect(() => {
     return () => {
+      clearSelectedTextCache();
       cancelPendingGesture();
       dispatchedTabCreates.delete(slotKey);
       currentAttachedCredsRef.current = null;
@@ -1963,7 +2063,7 @@ function ParkedBrowserStreamItem({
       streamControllerRef.current = null;
       inputControllerRef.current = null;
     };
-  }, [slotKey, win.id, tab.tabId, cancelPendingGesture]);
+  }, [slotKey, win.id, tab.tabId, cancelPendingGesture, clearSelectedTextCache]);
 
   // Dialog handlers (validated against current visibility/privacy and captured dialog authority)
   const handleDialogConfirm = useCallback(
@@ -2028,6 +2128,8 @@ function ParkedBrowserStreamItem({
       ) {
         return;
       }
+      pointerDownPosRef.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+      clearSelectedTextCache();
       textInputProxyRef.current?.focus();
       if (canPlayAudio()) {
         ensurePcmPlayer().prime();
@@ -2186,11 +2288,62 @@ function ParkedBrowserStreamItem({
         console.warn("[BrowserStream] Click control acquisition failed:", error);
       });
     },
-    [win.id, tab.tabId, canPlayAudio, cancelPendingGesture, ensurePcmPlayer],
+    [win.id, tab.tabId, canPlayAudio, cancelPendingGesture, clearSelectedTextCache, ensurePcmPlayer],
   );
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (canPlayAudio()) {
+        ensurePcmPlayer().prime();
+      }
+      const downPos = pointerDownPosRef.current;
+      if (downPos && downPos.pointerId === e.pointerId) {
+        pointerDownPosRef.current = null;
+        if (Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 4) {
+          const capturedAuth = readSelectionAuthority();
+          if (capturedAuth) {
+            const capturedOwner = { ...ownerRef.current };
+            const capturedGen = ++selectionCacheGenRef.current;
+            clearTimeout(selectedTextRefreshTimerRef.current ?? undefined);
+            selectedTextRefreshTimerRef.current = window.setTimeout(() => {
+              selectedTextRefreshTimerRef.current = null;
+              const liveBefore = readSelectionAuthority();
+              if (
+                selectionCacheGenRef.current !== capturedGen ||
+                !liveBefore ||
+                !isCurrentConnection(capturedOwner) ||
+                liveBefore.sessionId !== capturedAuth.sessionId ||
+                liveBefore.leaseToken !== capturedAuth.leaseToken ||
+                liveBefore.navigationRevision !== capturedAuth.navigationRevision ||
+                liveBefore.browserIncarnation !== capturedAuth.browserIncarnation ||
+                liveBefore.profileEpoch !== capturedAuth.profileEpoch ||
+                liveBefore.scopeKey !== capturedAuth.scopeKey
+              ) {
+                return;
+              }
+              void getBrowserSelectedText(capturedOwner, capturedAuth.sessionId, capturedAuth.leaseToken)
+                .then((res) => {
+                  const liveAfter = readSelectionAuthority();
+                  if (
+                    selectionCacheGenRef.current !== capturedGen ||
+                    !liveAfter ||
+                    !isCurrentConnection(capturedOwner) ||
+                    liveAfter.sessionId !== capturedAuth.sessionId ||
+                    liveAfter.leaseToken !== capturedAuth.leaseToken ||
+                    liveAfter.navigationRevision !== capturedAuth.navigationRevision ||
+                    liveAfter.browserIncarnation !== capturedAuth.browserIncarnation ||
+                    liveAfter.profileEpoch !== capturedAuth.profileEpoch ||
+                    liveAfter.scopeKey !== capturedAuth.scopeKey
+                  ) {
+                    return;
+                  }
+                  cachedSelectedTextRef.current = res.text ? { text: res.text, ...capturedAuth } : null;
+                })
+                .catch(() => {});
+            }, 120);
+          }
+        }
+      }
       const pending = pendingPointerRef.current;
       if (pending && !pending.replayed) {
         if (pending.pointerId === e.pointerId)
@@ -2199,8 +2352,69 @@ function ParkedBrowserStreamItem({
       }
       inputControllerRef.current?.handlePointerUp(e);
     },
-    [],
+    [canPlayAudio, ensurePcmPlayer, readSelectionAuthority],
   );
+
+  const handleProxyUserGesture = useCallback(() => {
+    if (canPlayAudio()) {
+      ensurePcmPlayer().prime();
+    }
+  }, [canPlayAudio, ensurePcmPlayer]);
+
+  const handleProxyCopy = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const liveAuth = readSelectionAuthority();
+      const cached = cachedSelectedTextRef.current;
+      if (
+        !liveAuth ||
+        !cached ||
+        !cached.text ||
+        cached.sessionId !== liveAuth.sessionId ||
+        cached.leaseToken !== liveAuth.leaseToken ||
+        cached.navigationRevision !== liveAuth.navigationRevision ||
+        cached.browserIncarnation !== liveAuth.browserIncarnation ||
+        cached.profileEpoch !== liveAuth.profileEpoch ||
+        cached.scopeKey !== liveAuth.scopeKey
+      ) {
+        return;
+      }
+      e.clipboardData?.setData("text/plain", cached.text);
+      e.preventDefault();
+    },
+    [readSelectionAuthority],
+  );
+
+  const handleProxyCopyShortcut = useCallback(() => {
+    const capturedAuth = readSelectionAuthority();
+    if (!capturedAuth) return;
+    const capturedOwner = { ...ownerRef.current };
+    const capturedGen = ++selectionCacheGenRef.current;
+    const isStillAuthorized = (): boolean => {
+      if (selectionCacheGenRef.current !== capturedGen) return false;
+      const live = readSelectionAuthority();
+      return Boolean(
+        live &&
+          isCurrentConnection(capturedOwner) &&
+          live.sessionId === capturedAuth.sessionId &&
+          live.leaseToken === capturedAuth.leaseToken &&
+          live.navigationRevision === capturedAuth.navigationRevision &&
+          live.browserIncarnation === capturedAuth.browserIncarnation &&
+          live.profileEpoch === capturedAuth.profileEpoch &&
+          live.scopeKey === capturedAuth.scopeKey,
+      );
+    };
+    void getBrowserSelectedText(capturedOwner, capturedAuth.sessionId, capturedAuth.leaseToken)
+      .then(async (res) => {
+        if (!isStillAuthorized()) return;
+        if (!res.text) {
+          cachedSelectedTextRef.current = null;
+          return;
+        }
+        cachedSelectedTextRef.current = { text: res.text, ...capturedAuth };
+        await writeTextToClipboard(res.text, isStillAuthorized);
+      })
+      .catch(() => {});
+  }, [readSelectionAuthority]);
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -2249,6 +2463,10 @@ function ParkedBrowserStreamItem({
         ref={textInputProxyRef}
         controller={inputController}
         onBlur={cancelPendingGesture}
+        onUserGesture={handleProxyUserGesture}
+        onCopyShortcut={handleProxyCopyShortcut}
+        onSelectionInvalidate={clearSelectedTextCache}
+        onCopy={handleProxyCopy}
       />
       {(streamStatus === "error" || streamStatus === "unsupported") && (
         <div

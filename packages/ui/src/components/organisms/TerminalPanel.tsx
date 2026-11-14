@@ -605,8 +605,17 @@ export function TerminalPanel({
       boundTransportRef.current = binding;
       term.options.disableStdin = false;
       resetTerminalStreamReplayGateForAttach(streamReplayGate);
+      const activeRegistrationKey = currentTarget
+        ? terminalTargetKey(currentTarget)
+        : effectiveTerminalRef
+          ? terminalKey(effectiveTerminalRef)
+          : safeSessionId;
+      const aliasRegistrationKey = effectiveTerminalRef
+        ? terminalKey(effectiveTerminalRef)
+        : undefined;
       const outputActivity = registerTerminalOutputActivity(
-        terminalRegistrationKey,
+        activeRegistrationKey,
+        aliasRegistrationKey,
       );
       let disposed = false;
       let restartRecoveryPending = false;
@@ -1147,7 +1156,7 @@ export function TerminalPanel({
         return handleSharedTerminalKeyEvent(e, {
           cognitoModeShortcut: cognitoShortcut,
           cognitoModeActive: cognitoActive,
-          workspaceShortcut: settings.terminalWorkspaceShortcut,
+          workspaceShortcut: settings.openTerminalShortcut,
           revealActiveFileShortcut: settings.revealActiveFileShortcut,
           panelShortcuts: [
             settings.gitPanelShortcut,

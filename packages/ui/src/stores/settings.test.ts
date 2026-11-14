@@ -42,7 +42,7 @@ function resetSettingsStore() {
     editorZoomWheelEnabled: true,
     searchTextShortcut: "Mod+Shift+KeyF",
     searchFilenameShortcut: "DoubleShift",
-    terminalWorkspaceShortcut: "Mod+Shift+Backquote",
+    openTerminalShortcut: "Ctrl+Shift+KeyT",
     terminalFilePanelShortcut: "Mod+Shift+KeyE",
     projectPanelShortcut: "Mod+Shift+KeyZ",
     revealActiveFileShortcut: "Alt+F1",

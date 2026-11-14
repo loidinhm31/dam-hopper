@@ -387,11 +387,11 @@ Searches for text in the page.
 
 ### GET /api/browser/sessions/{id}/selected-text
 
-Reads the current selected text buffer.
+Reads the current page selection via a 1s-bounded CDP `Runtime.evaluate` when an active page session is present (excluding `input[type=password]`, bounded to 64 KiB / valid UTF-8, falling back to the cached value if CDP evaluation fails). Revalidates session authority (`navigationRevision`, `browserIncarnation`, `profileEpoch`) and lease validity after evaluation before caching or returning text.
 
 - **Required Header:** `X-Browser-Lease: <lease-token>`.
 - The `X-Browser-Lease` header is explicitly exposed in server CORS configurations for approved origins.
-- Returns HTTP 403 `kind: "notLeaseHolder"` if header is missing or does not match active lease holder.
+- Returns HTTP 403 (`leaseHeaderRequired`, `leaseNotFound`, `leaseExpired`, or `notLeaseHolder`) if the header is missing or the lease is invalid/expired, and HTTP 409 (`sessionConflict`) if session authority changes during evaluation.
 
 **Response (200 OK):**
 ```json

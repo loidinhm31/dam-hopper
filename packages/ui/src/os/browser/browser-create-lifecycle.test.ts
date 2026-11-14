@@ -168,4 +168,36 @@ describe("browser-create-lifecycle", () => {
     expect(disk.operations).toHaveLength(1);
     expect(disk.operations[0]?.status).toBe("unknown");
   });
+
+  it("settles 503 browserUnavailable and cleanupPending rejections without leaving unknown recovery ops", async () => {
+    vi.spyOn(client, "createBrowserSession").mockRejectedValueOnce(
+      new client.BrowserHostClientError("Host browser unavailable", "browserUnavailable", 503),
+    );
+    const resUnavailable = await dispatchBrowserCreateIntent({
+      owner: sampleOwner,
+      scope: sampleScope,
+      windowId: "w1",
+      tabId: "t-unavail",
+      actionSequence: 1,
+      url: "https://example.com",
+      isTabCurrent: () => true,
+    });
+    expect(resUnavailable.kind).toBe("rejected");
+    expect(loadBrowserRecoveryDisk().operations).toHaveLength(0);
+
+    vi.spyOn(client, "createBrowserSession").mockRejectedValueOnce(
+      new client.BrowserHostClientError("Cleanup pending", "cleanupPending", 503),
+    );
+    const resCleanup = await dispatchBrowserCreateIntent({
+      owner: sampleOwner,
+      scope: sampleScope,
+      windowId: "w1",
+      tabId: "t-cleanup",
+      actionSequence: 2,
+      url: "https://example.com",
+      isTabCurrent: () => true,
+    });
+    expect(resCleanup.kind).toBe("rejected");
+    expect(loadBrowserRecoveryDisk().operations).toHaveLength(0);
+  });
 });

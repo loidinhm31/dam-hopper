@@ -641,6 +641,20 @@ describe("Host Browser Lifecycle & Window Policy Browser Tests", () => {
 
     const panel = document.querySelector('[data-os-window-frame="win-quality-1"] [data-testid="browser-tools-panel"]');
     expect(panel).toBeTruthy();
+    const chrome = document.querySelector('[data-os-window-frame="win-quality-1"] [data-testid="browser-app-win-quality-1"]');
+    const tabPanel = document.querySelector('[data-os-window-frame="win-quality-1"] [role="tabpanel"]');
+    expect(chrome).toBeTruthy();
+    expect(tabPanel).toBeTruthy();
+    const chromeRect = chrome!.getBoundingClientRect();
+    const panelRect = panel!.getBoundingClientRect();
+    const tabPanelRect = tabPanel!.getBoundingClientRect();
+    expect(panelRect.width).toBeGreaterThanOrEqual(250);
+    expect(Math.abs(panelRect.top - tabPanelRect.top)).toBeLessThanOrEqual(2);
+    if (chromeRect.width <= 560) {
+      expect(Math.abs(panelRect.right - tabPanelRect.right)).toBeLessThanOrEqual(2);
+    } else {
+      expect(panelRect.left).toBeGreaterThanOrEqual(tabPanelRect.right - 1);
+    }
 
     const selector = panel?.querySelector<HTMLSelectElement>(
       '[data-testid="browser-quality-selector"]',

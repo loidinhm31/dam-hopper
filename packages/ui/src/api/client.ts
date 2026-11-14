@@ -2069,7 +2069,7 @@ export interface UiConfig {
   editorZoomWheelEnabled: boolean;
   searchTextShortcut?: string | null;
   searchFilenameShortcut?: string | null;
-  terminalWorkspaceShortcut?: string | null;
+  openTerminalShortcut?: string | null;
   terminalFilePanelShortcut?: string | null;
   projectPanelShortcut?: string | null;
   revealActiveFileShortcut?: string | null;

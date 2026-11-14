@@ -106,6 +106,7 @@ export function DraggableTab({
           alive={tab.session?.alive}
           profileId={tab.profileId}
           terminalRef={tab.terminalRef}
+          terminalTarget={tab.terminalTarget}
         />
         <AgentStatusBadge
           terminalRef={

@@ -89,6 +89,26 @@ pub async fn get_or_create_input_manager(session_id: &str) -> Arc<SessionInputMa
         .or_insert_with(|| SessionInputManager::new_shared(crate::browser_host::input::LEASE_TTL))
         .clone()
 }
+fn register_selection_lease_end_hook(
+    input_mgr: &SessionInputManager,
+    state: &AppState,
+    session_id: &str,
+    principal: &str,
+) {
+    let state = state.clone();
+    let session_id = session_id.to_string();
+    let principal = principal.to_string();
+    input_mgr.set_lease_end_hook(Arc::new(move |ended_epoch| {
+        let state = state.clone();
+        let session_id = session_id.clone();
+        let principal = principal.clone();
+        Box::pin(async move {
+            selection::clear_selection_on_lease_end(&state, &session_id, &principal, ended_epoch)
+                .await;
+        })
+    }));
+}
+
 
 pub(crate) fn no_store_response(status: StatusCode, json_val: serde_json::Value) -> Response {
     let mut resp = (status, Json(json_val)).into_response();
@@ -1034,13 +1054,16 @@ pub async fn acquire_control(
         .acquire_lease(&body.viewer_id, &body.holder_kind)
         .await
     {
-        Ok((lease_token, expires_at_unix_ms)) => no_store_response(
-            StatusCode::OK,
-            json!({
-                "leaseToken": lease_token,
-                "expiresAtUnixMs": expires_at_unix_ms,
-            }),
-        ),
+        Ok((lease_token, expires_at_unix_ms)) => {
+            register_selection_lease_end_hook(&input_mgr, &state, &id, &admission.principal);
+            no_store_response(
+                StatusCode::OK,
+                json!({
+                    "leaseToken": lease_token,
+                    "expiresAtUnixMs": expires_at_unix_ms,
+                }),
+            )
+        }
         Err(err) => err.into(),
     }
 }
@@ -1131,7 +1154,18 @@ pub async fn release_control(
 
     let input_mgr = get_or_create_input_manager(&id).await;
     match input_mgr.release_lease(&body.lease_token).await {
-        Ok(_) => no_store_response(StatusCode::OK, json!({ "status": "released" })),
+        Ok(ended_epoch) => {
+            if let Some(ended_epoch) = ended_epoch {
+                selection::clear_selection_on_lease_end(
+                    &state,
+                    &id,
+                    &admission.principal,
+                    ended_epoch,
+                )
+                .await;
+            }
+            no_store_response(StatusCode::OK, json!({ "status": "released" }))
+        }
         Err(err) => err.into(),
     }
 }
@@ -1227,12 +1261,14 @@ pub async fn start_selection(
     }
 
     let input_mgr = get_or_create_input_manager(&id).await;
-    if let Err(err) = input_mgr
-        .renew_lease(&body.lease_token, admission.effective_deadline)
+    let (_, lease_epoch) = match input_mgr
+        .renew_lease_with_epoch(&body.lease_token, admission.effective_deadline)
         .await
     {
-        return err.into();
-    }
+        Ok(v) => v,
+        Err(err) => return err.into(),
+    };
+    register_selection_lease_end_hook(&input_mgr, &state, &id, &admission.principal);
 
     match selection::start_selection(
         &state,
@@ -1241,6 +1277,8 @@ pub async fn start_selection(
         admission.is_dev,
         body.navigation_revision,
         body.inspect_point,
+        &input_mgr,
+        lease_epoch,
     )
     .await
     {
@@ -1463,12 +1501,18 @@ pub async fn get_selected_text(
         Err(resp) => return resp,
     };
 
-    if let Err(err) = global_session_registry()
+    let initial_dto = match global_session_registry()
         .get_session(&id, &admission.principal)
         .await
     {
-        return err.into();
-    }
+        Ok(dto) => dto,
+        Err(err) => return err.into(),
+    };
+    let initial_authority = (
+        initial_dto.navigation_revision.clone(),
+        initial_dto.browser_incarnation.clone(),
+        initial_dto.profile_epoch.clone(),
+    );
 
     let Some(lease_token) = headers.get(&X_BROWSER_LEASE).and_then(|v| v.to_str().ok()) else {
         return browser_error_response(
@@ -1479,10 +1523,114 @@ pub async fn get_selected_text(
     };
 
     let input_mgr = get_or_create_input_manager(&id).await;
-    match input_mgr.get_selected_text(lease_token).await {
-        Ok(text) => no_store_response(StatusCode::OK, json!({ "text": text })),
-        Err(err) => err.into(),
+    let initial_lease_epoch = match input_mgr.validate_lease_epoch(lease_token).await {
+        Ok(ep) => ep,
+        Err(err) => return err.into(),
+    };
+    let mut text = match input_mgr.get_selected_text(lease_token).await {
+        Ok(cached) => cached,
+        Err(err) => return err.into(),
+    };
+
+    if initial_dto.status == "running" {
+        if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
+            const SELECTED_TEXT_JS: &str = r#"(() => {
+  const MAX_CU = 65536;
+  const bound = (str) => {
+    if (str.length <= MAX_CU) return str;
+    let end = MAX_CU;
+    const code = str.charCodeAt(end - 1);
+    if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+    return str.slice(0, end);
+  };
+  try {
+    const active = document.activeElement;
+    if (active && active.tagName === 'INPUT' && (active.type || '').toLowerCase() === 'password') {
+      return '';
     }
+    const sel = window.getSelection();
+    const s = sel ? sel.toString() : '';
+    if (s) {
+      return bound(s);
+    }
+    if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && (active.type || '').toLowerCase() !== 'password'))) {
+      const start = active.selectionStart;
+      const end = active.selectionEnd;
+      if (typeof start === 'number' && typeof end === 'number' && end > start && typeof active.value === 'string') {
+        let sliceEnd = Math.min(end, start + MAX_CU);
+        if (sliceEnd < end) {
+          const code = active.value.charCodeAt(sliceEnd - 1);
+          if (code >= 0xd800 && code <= 0xdbff) sliceEnd -= 1;
+        }
+        return active.value.slice(start, sliceEnd);
+      }
+    }
+    return '';
+  } catch (_) {
+    return '';
+  }
+})()"#;
+
+            let eval_result = if let Ok(Ok(page_sid)) = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                prod.ensure_page_session(),
+            )
+            .await
+            {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    prod.cdp_client.send_command(
+                        "Runtime.evaluate",
+                        Some(json!({
+                            "expression": SELECTED_TEXT_JS,
+                            "returnByValue": true,
+                        })),
+                        Some(&page_sid),
+                    ),
+                )
+                .await
+                .ok()
+                .and_then(|res| res.ok())
+            } else {
+                None
+            };
+
+            // Revalidate session authority and lease after CDP await before caching/returning.
+            let current_dto = match global_session_registry()
+                .get_session(&id, &admission.principal)
+                .await
+            {
+                Ok(dto) => dto,
+                Err(err) => return err.into(),
+            };
+            if current_dto.status != "running"
+                || (
+                    current_dto.navigation_revision,
+                    current_dto.browser_incarnation,
+                    current_dto.profile_epoch,
+                ) != initial_authority
+            {
+                return browser_error_response(
+                    StatusCode::CONFLICT,
+                    "sessionConflict",
+                    "session authority changed during selected-text read",
+                );
+            }
+            match input_mgr.validate_lease_epoch(lease_token).await {
+                Ok(ep) if ep == initial_lease_epoch => {}
+                Ok(_) => return InputError::NotLeaseHolder.into(),
+                Err(err) => return err.into(),
+            }
+
+            if let Some(val) = eval_result {
+                if let Some(live_text) = val.pointer("/result/value").and_then(|v| v.as_str()) {
+                    text = input_mgr.set_selected_text(live_text).await;
+                }
+            }
+        }
+    }
+
+    no_store_response(StatusCode::OK, json!({ "text": text }))
 }
 
 /// POST /api/browser/attachments

@@ -309,6 +309,7 @@ export function useAgentHubWorkspaces(
       tabs.push({
         sessionId: qSessionId,
         terminalRef: termRef,
+        terminalTarget: s.terminationTarget ?? undefined,
         profileId: s.profileId,
         label,
         title: {

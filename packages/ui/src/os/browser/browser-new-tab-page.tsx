@@ -14,12 +14,13 @@ export interface BrowserNewTabPageProps {
   onEscapeDraft: () => void;
   onClearRemembered: () => void;
   onOpenRecovery: () => void;
+  onDismissRecovery?: () => void;
 }
 
 export function BrowserNewTabPage({
   draftValue, navigationError, privacyMasked, ownerMismatch,
   clearPending, clearStatus, unresolvedCount, onDraftChange, onSubmitAddress,
-  onEscapeDraft, onClearRemembered, onOpenRecovery,
+  onEscapeDraft, onClearRemembered, onOpenRecovery, onDismissRecovery,
 }: BrowserNewTabPageProps): ReactElement {
   const inputId = useId();
   const isComposingRef = useRef(false);
@@ -117,14 +118,29 @@ export function BrowserNewTabPage({
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
               {masked ? "Pending browser recovery notice hidden." : `${unresolvedCount} unresolved browser operation(s) require attention.`}
             </span>
-            <button
-              type="button"
-              data-testid="browser-new-tab-open-recovery-btn"
-              onClick={onOpenRecovery}
-              className="shrink-0 rounded border border-[var(--color-warning)]/50 px-2 py-0.5 text-[11px] font-medium hover:bg-[var(--color-warning)]/20"
-            >
-              Open Recovery
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                data-testid="browser-new-tab-open-recovery-btn"
+                onClick={onOpenRecovery}
+                className="shrink-0 rounded border border-[var(--color-warning)]/50 px-2 py-0.5 text-[11px] font-medium hover:bg-[var(--color-warning)]/20"
+              >
+                Open Recovery
+              </button>
+              {onDismissRecovery && (
+                <button
+                  type="button"
+                  data-testid="browser-new-tab-dismiss-recovery-btn"
+                  aria-label="Dismiss recovery notice"
+                  title="Dismiss unresolved recovery operations"
+                  disabled={masked}
+                  onClick={onDismissRecovery}
+                  className="shrink-0 rounded border border-[var(--color-warning)]/50 px-1.5 py-0.5 text-[11px] font-medium hover:bg-[var(--color-warning)]/20 disabled:opacity-40"
+                >
+                  ×
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
