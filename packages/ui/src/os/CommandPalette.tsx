@@ -173,10 +173,13 @@ export function CommandPalette({
           "Add new desktop with approved 60/40 layout (Terminals + Files/Search + Git/Changes)",
         onSelect: () => {
           const newDesktopId = `desktop-${generateUUID().slice(0, 8)}`;
-          const desktopCtx =
-            activeDesktop?.defaultCtx ?? { profileId: "default" };
+          const targetProfileId = activeDesktop?.defaultCtx?.profileId || "default";
+          const desktopCtx = {
+            profileId: targetProfileId,
+            target: { kind: "workspace" as const, profileId: targetProfileId },
+          };
           const { desktop, windows } = createProjectDesktopTemplate(
-            `Project (${desktopCtx.projectId ?? "Workspace"})`,
+            "Workspace",
             desktopCtx,
             newDesktopId,
           );
@@ -287,7 +290,13 @@ export function CommandPalette({
               id: `terminals-omp-${generateUUID().slice(0, 8)}`,
               appId: "terminals",
               title: "OMP Terminal",
-              ctx: activeDesktop?.defaultCtx ?? { profileId: "default" },
+              ctx: {
+                profileId: activeDesktop?.defaultCtx?.profileId || "default",
+                target: {
+                  kind: "workspace",
+                  profileId: activeDesktop?.defaultCtx?.profileId || "default",
+                },
+              },
               mode: "tile",
             },
             session.activeDesktopId,
@@ -312,7 +321,13 @@ export function CommandPalette({
               id: `editor-${generateUUID().slice(0, 8)}`,
               appId: "editor",
               title: "Editor",
-              ctx: activeDesktop?.defaultCtx ?? { profileId: "default" },
+              ctx: {
+                profileId: activeDesktop?.defaultCtx?.profileId || "default",
+                target: {
+                  kind: "workspace",
+                  profileId: activeDesktop?.defaultCtx?.profileId || "default",
+                },
+              },
               mode: useSettingsStore.getState().defaultWindowPlacement ?? "float",
             },
             session.activeDesktopId,

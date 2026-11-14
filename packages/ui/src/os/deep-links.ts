@@ -381,7 +381,7 @@ export function parseOsDeepLink(
     case "project-info":
       intent = createIntent("project:info", {
         profileId,
-        projectId: project ?? "",
+        ...(project ? { projectId: project } : {}),
       });
       break;
 
@@ -619,6 +619,23 @@ export function qualifyOsDeepLink(
     };
   }
 
+  if (parsed.appId === "project-info") {
+    const projectInfoCtx: WindowContext = {
+      profileId: capture.owner.profileId,
+      generation,
+      projectId: parsed.ctx?.projectId,
+      worktreeId: parsed.ctx?.worktreeId,
+    };
+    return {
+      status: "qualified",
+      appId: "project-info",
+      intent: parsed.intent,
+      ctx: projectInfoCtx,
+      ...(parsed.ctx?.projectId
+        ? { appState: { selectedProject: parsed.ctx.projectId } }
+        : {}),
+    };
+  }
   return {
     status: "qualified",
     appId: parsed.appId,

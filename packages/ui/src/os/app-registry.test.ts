@@ -82,7 +82,7 @@ describe("app-registry", () => {
     expect(APP_MANIFESTS.changes.minimumCtx).toBe("project");
     expect(APP_MANIFESTS.git.minimumCtx).toBe("project");
     expect(APP_MANIFESTS["conflict-resolver"].minimumCtx).toBe("project");
-    expect(APP_MANIFESTS["project-info"].minimumCtx).toBe("project");
+    expect(APP_MANIFESTS["project-info"].minimumCtx).toBe("profile");
   });
 
   it("adheres to approved instancing rules", () => {
@@ -100,7 +100,7 @@ describe("app-registry", () => {
     expect(APP_MANIFESTS.git.instancing).toBe("worktree-instance");
 
     expect(APP_MANIFESTS["conflict-resolver"].instancing).toBe("project-instance");
-    expect(APP_MANIFESTS["project-info"].instancing).toBe("project-instance");
+    expect(APP_MANIFESTS["project-info"].instancing).toBe("profile-instance");
     expect(APP_MANIFESTS["session-changes"].instancing).toBe("tuple-instance");
   });
 

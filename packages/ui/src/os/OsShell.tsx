@@ -86,11 +86,9 @@ import { normalizeBrowserCommittedUrl } from "./browser/browser-url-normalizatio
 import { recoverDurableLaunchRecordsOnStartup } from "./recipes/launch-records.js";
 import { generateUUID } from "@/lib/utils.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
-import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { editorDiffTabKey, editorFileTabKey, useEditorStore } from "@/stores/editor.js";
 import { normalizeFsTarget, toServerFsTarget, type FsTargetRef } from "@/api/ownership.js";
-import { normalizeProjectTarget } from "@/api/client.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 export function OsShell() {
   const session = useWindowStore((state) => state.session);
@@ -124,7 +122,6 @@ export function OsShell() {
   const restoreWindow = useWindowStore((state) => state.restoreWindow);
   const profile = useServerProfile();
   const profileId = profile?.id ?? "default";
-  const activeProject = useWorkspaceStore((state) => state.activeProject);
   const { observations } = useAggregatedTerminalSessions();
   const latestObservationsRef = useRef(observations);
   useEffect(() => {
@@ -332,14 +329,12 @@ export function OsShell() {
               project: parsedProject,
               worktreePath: parsed.ctx?.worktreeId,
             })
-          : activeProject
-            ? normalizeFsTarget({ profileId, project: activeProject })
-            : { kind: "workspace", profileId };
+          : { kind: "workspace", profileId: explicitProfile };
 
       const qualified = qualifyOsDeepLink(parsed, {
         owner: snap.owner,
         target: explicitTarget,
-        projectId: parsedProject ?? (activeProject ?? undefined),
+        projectId: parsedProject,
         destinationDesktopId: useWindowStore.getState().session.activeDesktopId,
       });
 
@@ -406,7 +401,6 @@ export function OsShell() {
     focusWindow,
     restoreWindow,
     profileId,
-    activeProject,
     connectionSnap?.status,
   ]);
 
@@ -1082,16 +1076,28 @@ export function OsShell() {
       registerIntentHandler("project:info", (intent) => {
         const targetCtx: WindowContext = {
           profileId: intent.payload.profileId,
-          projectId: intent.payload.projectId,
+          ...(intent.payload.projectId
+            ? { projectId: intent.payload.projectId }
+            : {}),
         };
+        const nextAppState: Record<string, unknown> | undefined =
+          intent.payload.projectId
+            ? { selectedProject: intent.payload.projectId }
+            : undefined;
         const existing = findExistingWindowForApp(
           useWindowStore.getState().session.windows,
           "project-info",
           targetCtx,
         );
         if (existing) {
+          if (existing.desktopId !== useWindowStore.getState().session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
           if (existing.minimized) restoreWindow(existing.id);
           focusWindow(existing.id);
+          if (nextAppState) {
+            useWindowStore.getState().updateAppState(existing.id, nextAppState);
+          }
           return { status: "handled", targetWindowId: existing.id };
         }
         const id = `project-info-${generateUUID().slice(0, 8)}`;
@@ -1102,6 +1108,7 @@ export function OsShell() {
             title: "Project Info",
             ctx: targetCtx,
             mode: getPlacement(),
+            ...(nextAppState ? { appState: nextAppState } : {}),
           },
           useWindowStore.getState().session.activeDesktopId,
         );
@@ -1766,29 +1773,28 @@ export function OsShell() {
 
   const handleLaunchApp = useCallback(
     async (appId: OsAppId, capturedContext?: ActionContext) => {
-      const defaultTarget: FsTargetRef = activeProject
-        ? normalizeFsTarget({ profileId, project: activeProject })
-        : { kind: "workspace", profileId };
-      const desktopDefaultCtx =
-        activeDesktop?.defaultCtx && activeDesktop.defaultCtx.profileId
-          ? activeDesktop.defaultCtx
-          : undefined;
-      const targetCtx: WindowContext = desktopDefaultCtx ?? {
-        profileId,
-        projectId: activeProject ?? undefined,
-        target: defaultTarget,
+      const effectiveProfileId =
+        capturedContext?.windowContext?.profileId ??
+        (activeDesktop?.defaultCtx?.profileId || profileId);
+      const globalTarget: FsTargetRef = {
+        kind: "workspace",
+        profileId: effectiveProfileId,
       };
-      const snap = getConnectionSnapshot(
-        capturedContext?.windowContext?.profileId ?? profileId,
-      );
+      const targetCtx: WindowContext = {
+        profileId: effectiveProfileId,
+        target: globalTarget,
+      };
+      const snap = getConnectionSnapshot(effectiveProfileId);
       const owner =
-        capturedContext?.owner ?? snap?.owner ?? { profileId, generation: 1 };
+        capturedContext?.owner ??
+        snap?.owner ?? { profileId: effectiveProfileId, generation: 1 };
 
       const context: ActionContext = capturedContext ?? {
         kind: "desktop",
         desktopId: session.activeDesktopId,
         windowContext: targetCtx,
         owner,
+        target: globalTarget,
       };
 
       await executeAction({
@@ -1796,7 +1802,7 @@ export function OsShell() {
         context,
       });
     },
-    [profileId, activeProject, activeDesktop, session.activeDesktopId],
+    [profileId, activeDesktop, session.activeDesktopId],
   );
 
 

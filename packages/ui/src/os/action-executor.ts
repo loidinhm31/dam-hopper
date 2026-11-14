@@ -501,6 +501,10 @@ export async function executeAction(
         ...(editorQuery !== undefined ? { query: editorQuery } : {}),
         deliveryId: generateUUID(),
       });
+    } else if (appId === "project-info" && targetCtx.projectId) {
+      state.updateAppState(chosen.id, {
+        selectedProject: targetCtx.projectId,
+      });
     }
 
     if (chosen.minimized) {
@@ -528,6 +532,10 @@ export async function executeAction(
         activeTab: "general",
       };
     }
+  } else if (appId === "project-info" && targetCtx.projectId) {
+    initialAppState = {
+      selectedProject: targetCtx.projectId,
+    };
   } else if (appId === "search" && request.id === "app.search.open") {
     const editorQuery =
       request.context.kind === "editor" && request.context.selectedText?.trim()

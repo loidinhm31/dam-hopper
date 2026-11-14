@@ -23,7 +23,6 @@ import { listActionDescriptors, resolveActionBinding } from "./actions.js";
 import { isImeOrCompositionEvent, isInsideShortcutCapture } from "./input-arbiter.js";
 import type { ActionContext, OsWindow, ShellNonmodalSurface, WindowContext } from "./types.js";
 import { useWindowStore } from "./window-store.js";
-import { useWorkspaceStore } from "@/stores/workspace.js";
 
 // ============================================================================
 // Event Outcome & WeakMap Tracking (Architecture Contract C5)
@@ -247,31 +246,13 @@ export function resolveActiveActionContext(
   const rawDesktopCtx = activeDesk?.defaultCtx;
   const { profileId, owner } = resolveConnectedOwner(rawDesktopCtx?.profileId);
   const effectiveProfileId = profileId || rawDesktopCtx?.profileId || "default";
-  const selectedProj = useWorkspaceStore.getState().selectedProject;
-  const matchingSelectedProj =
-    selectedProj && selectedProj.profileId === effectiveProfileId
-      ? selectedProj.project
-      : undefined;
-  const projectId = rawDesktopCtx?.projectId ?? matchingSelectedProj;
   const target: FsTargetRef | undefined =
-    rawDesktopCtx?.target ??
-    (projectId
-      ? {
-          kind: "project",
-          profileId: effectiveProfileId,
-          project: projectId,
-          ...(rawDesktopCtx?.worktreeId
-            ? { worktreePath: rawDesktopCtx.worktreeId }
-            : {}),
-        }
-      : owner && effectiveProfileId
-        ? { kind: "workspace", profileId: effectiveProfileId }
-        : undefined);
+    owner && effectiveProfileId
+      ? { kind: "workspace", profileId: effectiveProfileId }
+      : undefined;
 
   const desktopCtx: WindowContext = {
-    ...rawDesktopCtx,
     profileId: effectiveProfileId,
-    ...(projectId ? { projectId } : {}),
     ...(target ? { target } : {}),
   };
 

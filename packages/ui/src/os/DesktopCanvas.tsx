@@ -303,15 +303,22 @@ export function DesktopCanvas({
         getContext={() => {
           const currentDesk =
             session.desktops.find((d) => d.id === desktop.id) ?? desktop;
-          const desktopCtx = currentDesk.defaultCtx ?? { profileId: "default" };
-          const snap = desktopCtx.profileId
-            ? getConnectionSnapshot(desktopCtx.profileId)
+          const targetProfileId = currentDesk.defaultCtx?.profileId || "default";
+          const globalTarget = {
+            kind: "workspace" as const,
+            profileId: targetProfileId,
+          };
+          const snap = targetProfileId
+            ? getConnectionSnapshot(targetProfileId)
             : null;
           return {
             desktopId: desktop.id,
             owner: snap?.owner ?? null,
-            target: desktopCtx.target,
-            windowContext: desktopCtx,
+            target: globalTarget,
+            windowContext: {
+              profileId: targetProfileId,
+              target: globalTarget,
+            },
             cwd: null,
             directoryKind: "profile-default",
           };

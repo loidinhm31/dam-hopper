@@ -52,7 +52,16 @@ export function Dock({ onLaunchApp, className = "", position }: DockProps) {
   const handleLaunch = React.useCallback(
     (appId: OsAppId) => {
       const activeDesktopId = session.activeDesktopId;
-      const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: activeProfileId };
+      const targetProfileId =
+        activeDesktop?.defaultCtx?.profileId || activeProfileId;
+      const globalTarget = {
+        kind: "workspace" as const,
+        profileId: targetProfileId,
+      };
+      const desktopCtx = {
+        profileId: targetProfileId,
+        target: globalTarget,
+      };
 
       let owner: ConnectionRef | null = null;
       if (desktopCtx.profileId) {
@@ -71,7 +80,7 @@ export function Dock({ onLaunchApp, className = "", position }: DockProps) {
         desktopId: activeDesktopId,
         windowContext: desktopCtx,
         owner,
-        target: desktopCtx.target,
+        target: globalTarget,
       };
 
       if (onLaunchApp) {

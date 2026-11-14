@@ -103,8 +103,8 @@ export const APP_MANIFESTS: Record<OsAppId, AppManifest> = {
   "project-info": {
     appId: "project-info",
     displayName: "Project Info",
-    instancing: "project-instance",
-    minimumCtx: "project",
+    instancing: "profile-instance",
+    minimumCtx: "profile",
     defaultPlacement: "float",
     minSize: { width: 400, height: 320 },
     intents: ["project:info", "project:config"],

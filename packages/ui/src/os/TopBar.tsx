@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from "react";
 import {
-  useShellInputContext,
+  useOptionalShellInputContext,
   type ShellInputContextValue,
 } from "./shell-input-context.js";
 import { Server, Search, Bell, Lock } from "lucide-react";
@@ -12,8 +12,6 @@ import { DesktopSwitcher } from "./DesktopSwitcher.js";
 import { WindowList } from "./WindowList.js";
 import { readServerProfiles, type ServerProfile } from "@/api/server-config.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
-import { useWorkspaceStore } from "@/stores/workspace.js";
-import { useProjects } from "@/api/queries.js";
 import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import { MonitorTray } from "./MonitorTray.js";
 export interface TopBarProps {
@@ -51,14 +49,7 @@ export function TopBar({
   const knownProfiles = readServerProfiles();
   const availableProfiles: ServerProfile[] =
     knownProfiles.status === "available" ? knownProfiles.profiles : [];
-  const activeProject = useWorkspaceStore((state) => state.activeProject);
-  let shellInput: ShellInputContextValue | null = null;
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    shellInput = useShellInputContext();
-  } catch {
-    // Standalone fallback
-  }
+  const shellInput: ShellInputContextValue | null = useOptionalShellInputContext();
 
   const targetMenuRef = useRef<HTMLDivElement>(null);
   const [localCtxMenuOpen, setLocalCtxMenuOpen] = useState(false);
@@ -109,49 +100,23 @@ export function TopBar({
 
   const [isProfilesDialogOpen, setIsProfilesDialogOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ServerProfile | null | undefined>(undefined);
-  // Default context for new windows on active desktop
-  const currentDefaultCtx = activeDesktop?.defaultCtx ?? {
-    profileId: activeProfile?.id ?? "default",
-    projectId: activeProject ?? undefined,
-  };
-
-  const { data: defaultProjects = [] } = useProjects({
-    profileId: currentDefaultCtx.profileId,
-  });
-  const setSelectedProject = useWorkspaceStore(
-    (state) => state.setSelectedProject,
-  );
+  // Default global workspace context for new windows on active desktop
+  const currentProfileId =
+    activeDesktop?.defaultCtx?.profileId ||
+    activeProfile?.id ||
+    "default";
 
   const handleSelectProfile = useCallback(
     (profileId: string) => {
       if (!activeDesktop) return;
       setDefaultCtx(activeDesktop.id, {
         profileId,
-        projectId: undefined,
-        worktreeId: undefined,
-      });
-      setSelectedProject(null);
-    },
-    [activeDesktop, setDefaultCtx, setSelectedProject],
-  );
-
-  const handleSelectProject = useCallback(
-    (projectName: string) => {
-      if (!activeDesktop) return;
-      setDefaultCtx(activeDesktop.id, {
-        ...currentDefaultCtx,
-        projectId: projectName,
-        worktreeId: undefined,
-      });
-      setSelectedProject({
-        profileId: currentDefaultCtx.profileId,
-        project: projectName,
+        target: { kind: "workspace", profileId },
       });
       setIsCtxMenuOpen(false);
     },
-    [activeDesktop, currentDefaultCtx, setDefaultCtx, setSelectedProject],
+    [activeDesktop, setDefaultCtx, setIsCtxMenuOpen],
   );
-
   const minimizedWindows = Object.values(session.windows).filter(
     (w) => w.minimized && w.desktopId === session.activeDesktopId,
   );
@@ -192,17 +157,12 @@ export function TopBar({
             </span>
             <ProfileBadge
               name={
-                availableProfiles.find((p) => p.id === currentDefaultCtx.profileId)
-                  ?.name ?? currentDefaultCtx.profileId
+                availableProfiles.find((p) => p.id === currentProfileId)
+                  ?.name ?? currentProfileId
               }
-              profileId={currentDefaultCtx.profileId}
+              profileId={currentProfileId}
               className="px-1 py-0 text-[10px]"
             />
-            {currentDefaultCtx.projectId && (
-              <span className="text-[var(--color-text)] font-mono text-[10px]">
-                /{currentDefaultCtx.projectId}
-              </span>
-            )}
             <span className="text-[10px] text-[var(--color-text-muted)]">▾</span>
           </button>
 
@@ -214,11 +174,11 @@ export function TopBar({
               className="absolute left-0 mt-1 w-56 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl p-1 z-50 text-xs"
             >
               <div className="px-2 py-1 text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider font-semibold border-b border-[var(--color-border)] mb-1">
-                Default for New Windows
+                Global Workspace Target
               </div>
               <div className="max-h-36 overflow-y-auto">
                 {availableProfiles.map((p) => {
-                  const isSelected = p.id === currentDefaultCtx.profileId;
+                  const isSelected = p.id === currentProfileId;
                   return (
                     <button
                       key={p.id}
@@ -237,35 +197,6 @@ export function TopBar({
                   );
                 })}
               </div>
-              {defaultProjects.length > 0 && (
-                <>
-                  <div className="px-2 py-1 text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider font-semibold border-b border-t border-[var(--color-border)] my-1">
-                    Active Project
-                  </div>
-                  <div className="max-h-36 overflow-y-auto">
-                    {defaultProjects.map((proj) => {
-                      const isProjSelected =
-                        proj.name === currentDefaultCtx.projectId;
-                      return (
-                        <button
-                          key={proj.name}
-                          type="button"
-                          role="menuitem"
-                          onClick={() => handleSelectProject(proj.name)}
-                          className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left truncate transition-colors ${
-                            isProjSelected
-                              ? "bg-[var(--color-surface-hover)] font-medium text-[var(--color-primary)]"
-                              : "text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
-                          }`}
-                        >
-                          <span className="truncate">{proj.name}</span>
-                          {isProjSelected && <span>✓</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
               <div className="border-t border-[var(--color-border)] mt-1 pt-1">
                 <button
                   type="button"

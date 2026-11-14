@@ -223,10 +223,10 @@ function buildActionCatalog(): Record<OsActionId, ActionDescriptor> {
     },
     {
       appId: "project-info",
-      requirement: "project",
+      requirement: "profile",
       bindingSource: { kind: "scalar", property: "projectPanelShortcut" },
       defaultBinding: DEFAULT_PROJECT_PANEL_SHORTCUT,
-      enabledExplanation: "Requires project context",
+      enabledExplanation: "Requires an active profile connection",
     },
     {
       appId: "agent-store",

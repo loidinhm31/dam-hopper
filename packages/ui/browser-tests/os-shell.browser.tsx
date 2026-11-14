@@ -170,10 +170,10 @@ describe("OS Shell Chrome Browser Tests", () => {
     act(() => {
       targetTrigger?.click();
     });
-    expect(
-      container?.querySelector('[data-os-nonmodal-surface="target-selector"]'),
-    ).not.toBeNull();
-
+    const targetMenu = container?.querySelector('[data-os-nonmodal-surface="target-selector"]');
+    expect(targetMenu).not.toBeNull();
+    expect(targetMenu?.textContent).toContain("Global Workspace Target");
+    expect(targetMenu?.textContent).not.toContain("Active Project");
     // Open window list -> target selector closes
     act(() => {
       windowListTrigger?.click();

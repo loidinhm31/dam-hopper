@@ -117,6 +117,39 @@ describe("deep-links parser", () => {
     }
   });
 
+  it("parses project-info without requiring project and qualifies without inheriting ambient project", () => {
+    const infoRes = parseOsDeepLink("?open=project-info&profile=prof-1", TEST_PROFILES);
+    expect(infoRes.status).toBe("valid");
+    expect(infoRes.appId).toBe("project-info");
+    expect(infoRes.ctx?.projectId).toBeUndefined();
+
+    const qualified = qualifyOsDeepLink(infoRes, {
+      owner: { profileId: "prof-1", generation: 1 },
+      projectId: "ambient-project",
+      destinationDesktopId: "desk-1",
+    });
+    expect(qualified.status).toBe("qualified");
+    if (qualified.status === "qualified") {
+      expect(qualified.ctx.projectId).toBeUndefined();
+      expect(qualified.appState).toBeUndefined();
+    }
+
+    const withExplicitProject = parseOsDeepLink(
+      "?open=project-info&profile=prof-1&project=demo-app",
+      TEST_PROFILES,
+    );
+    expect(withExplicitProject.status).toBe("valid");
+    const qualifiedExplicit = qualifyOsDeepLink(withExplicitProject, {
+      owner: { profileId: "prof-1", generation: 1 },
+      destinationDesktopId: "desk-1",
+    });
+    expect(qualifiedExplicit.status).toBe("qualified");
+    if (qualifiedExplicit.status === "qualified") {
+      expect(qualifiedExplicit.ctx.projectId).toBe("demo-app");
+      expect(qualifiedExplicit.appState).toEqual({ selectedProject: "demo-app" });
+    }
+  });
+
   it("validates session-changes requires full owner tuple", () => {
     const incomplete = parseOsDeepLink(
       "?open=session-changes&profile=prof-1&terminal=t1",

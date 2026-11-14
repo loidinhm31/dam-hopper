@@ -90,7 +90,7 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
       reason: "Action 'app.terminals.open' requires an active profile connection",
     });
 
-    // Project-required action fails without project
+    // Project-info opens with profile only (no project target required)
     expect(
       canExecuteAction({
         id: "app.project-info.open",
@@ -100,9 +100,21 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
           owner: { profileId: "prof-1", generation: 1 },
         },
       }),
+    ).toEqual({ canExecute: true });
+
+    // Worktree-required action fails without project or target
+    expect(
+      canExecuteAction({
+        id: "app.git.open",
+        context: {
+          kind: "desktop",
+          desktopId: "desk-1",
+          owner: { profileId: "prof-1", generation: 1 },
+        },
+      }),
     ).toEqual({
       canExecute: false,
-      reason: "Action 'app.project-info.open' requires a project context",
+      reason: "Action 'app.git.open' requires a project or worktree target",
     });
 
     // Workflow & Plans opens with profile only (no project target select required)
@@ -143,6 +155,37 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
       kind: "focused",
       windowId: firstResult.windowId,
     });
+  });
+
+  it("opens project-info without project context and focuses same profile window while honoring optional projectId", async () => {
+    const firstResult = await executeAction({
+      id: "app.project-info.open",
+      context: {
+        kind: "desktop",
+        desktopId: "desk-1",
+        owner: { profileId: "prof-1", generation: 1 },
+      },
+    });
+    expect(firstResult.kind).toBe("opened");
+    if (firstResult.kind !== "opened") return;
+
+    const secondResult = await executeAction({
+      id: "app.project-info.open",
+      context: {
+        kind: "desktop",
+        desktopId: "desk-1",
+        windowContext: { profileId: "prof-1", projectId: "some-project" },
+        owner: { profileId: "prof-1", generation: 1 },
+      },
+    });
+    expect(secondResult).toEqual({
+      kind: "focused",
+      windowId: firstResult.windowId,
+    });
+    expect(
+      useWindowStore.getState().session.windows[firstResult.windowId]?.appState
+        ?.selectedProject,
+    ).toBe("some-project");
   });
 
   it("focuses existing window on current desktop and restores if minimized", async () => {

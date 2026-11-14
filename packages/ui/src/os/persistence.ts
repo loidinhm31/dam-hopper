@@ -145,10 +145,22 @@ function sanitizeAppState(
     }
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
-  if (appId === "settings" || appId === "agent-store" || appId === "project-info") {
+  if (appId === "settings" || appId === "agent-store") {
     const projected: Record<string, unknown> = {};
     if (typeof rawState.activeTab === "string")
       projected.activeTab = rawState.activeTab;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
+  if (appId === "project-info") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.activeTab === "string")
+      projected.activeTab = rawState.activeTab;
+    if (
+      typeof rawState.selectedProject === "string" &&
+      rawState.selectedProject.length > 0
+    ) {
+      projected.selectedProject = rawState.selectedProject;
+    }
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
   if (appId === "system-monitor") {

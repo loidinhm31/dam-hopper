@@ -81,7 +81,16 @@ export function AppLauncher({
   const activeDesktop =
     session.desktops.find((d) => d.id === activeDesktopId) ??
     session.desktops[0];
-  const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: activeProfileId };
+  const targetProfileId =
+    activeDesktop?.defaultCtx?.profileId || activeProfileId;
+  const globalTarget = {
+    kind: "workspace" as const,
+    profileId: targetProfileId,
+  };
+  const desktopCtx = {
+    profileId: targetProfileId,
+    target: globalTarget,
+  };
 
   let owner: ConnectionRef | null = null;
   if (desktopCtx.profileId) {
@@ -100,9 +109,8 @@ export function AppLauncher({
     desktopId: activeDesktopId,
     windowContext: desktopCtx,
     owner,
-    target: desktopCtx.target,
+    target: globalTarget,
   };
-
   const handleLaunch = (appId: OsAppId) => {
     onClose();
     if (onLaunchApp) {
