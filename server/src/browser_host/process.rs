@@ -349,36 +349,38 @@ impl BrowserProcess {
         // EOF and signal Chrome's process group with SIGTERM then SIGKILL through pidfd-bound
         // identities only (never a bare pid/pgid number), and exit.
         // This eliminates any race window between Chrome spawn and watcher readiness.
+        // The death-pipe write end is the kill switch of the supervisor watcher and lives across
+        // the async startup wait below: it is RAII-owned (`OwnedFd`) so that cancelling this
+        // future (e.g. the manager's outer startup timeout) closes it instead of leaking it.
+        // Both ends are created O_CLOEXEC atomically so a concurrent spawn elsewhere in the
+        // process can never inherit them (an inherited write end would stop the watcher from
+        // ever seeing EOF).
         #[cfg(unix)]
         let (pipe_read, pipe_write, ready_read, ready_write) = {
+            use std::os::unix::io::{FromRawFd, OwnedFd};
             let mut death_fds = [0i32; 2];
-            let res = unsafe { libc::pipe(death_fds.as_mut_ptr()) };
+            let res = unsafe { libc::pipe2(death_fds.as_mut_ptr(), libc::O_CLOEXEC) };
             if res != 0 {
                 return Err(ProcessError::LaunchFailed(format!(
                     "failed to create supervisor containment pipe: {}",
                     std::io::Error::last_os_error()
                 )));
             }
-            unsafe {
-                let flags = libc::fcntl(death_fds[1], libc::F_GETFD);
-                if flags >= 0 {
-                    libc::fcntl(death_fds[1], libc::F_SETFD, flags | libc::FD_CLOEXEC);
-                }
-            }
+            // SAFETY: the descriptor was just created by pipe2 and is owned exclusively here.
+            let death_write = unsafe { OwnedFd::from_raw_fd(death_fds[1]) };
 
             let mut ready_fds = [0i32; 2];
             let res = unsafe { libc::pipe2(ready_fds.as_mut_ptr(), libc::O_CLOEXEC) };
             if res != 0 {
                 unsafe {
                     libc::close(death_fds[0]);
-                    libc::close(death_fds[1]);
                 }
                 return Err(ProcessError::LaunchFailed(format!(
                     "failed to create supervisor watcher readiness pipe: {}",
                     std::io::Error::last_os_error()
                 )));
             }
-            (death_fds[0], death_fds[1], ready_fds[0], ready_fds[1])
+            (death_fds[0], death_write, ready_fds[0], ready_fds[1])
         };
 
         #[cfg(unix)]
@@ -388,7 +390,10 @@ impl BrowserProcess {
                 let parent_pid = std::process::id() as libc::pid_t;
                 let death_r = pipe_read;
                 let ready_w = ready_write;
-                let death_w = pipe_write;
+                let death_w = {
+                    use std::os::unix::io::AsRawFd;
+                    pipe_write.as_raw_fd()
+                };
                 let mock_pre_fail = config._test_mock_watcher_pre_exec_fail;
                 let mock_arming_fail = config._test_mock_watcher_arming_fail;
                 let force_group_signal_unsupported =
@@ -458,7 +463,6 @@ impl BrowserProcess {
             #[cfg(unix)]
             unsafe {
                 libc::close(pipe_read);
-                libc::close(pipe_write);
                 libc::close(ready_read);
                 libc::close(ready_write);
             }
@@ -476,7 +480,6 @@ impl BrowserProcess {
             None => {
                 #[cfg(unix)]
                 unsafe {
-                    libc::close(pipe_write);
                     libc::close(ready_read);
                 }
                 return Err(ProcessError::LaunchFailed("child missing pid".to_string()));
@@ -506,7 +509,6 @@ impl BrowserProcess {
             let poll_res = unsafe { libc::poll(&mut pfd, 1, 2000) };
             if poll_res <= 0 {
                 unsafe {
-                    libc::close(pipe_write);
                     libc::close(ready_read);
                 }
                 return Err(ProcessError::LaunchFailed(
@@ -518,7 +520,6 @@ impl BrowserProcess {
             let n = unsafe { libc::read(ready_read, pid_buf.as_mut_ptr() as *mut libc::c_void, 4) };
             if n != 4 {
                 unsafe {
-                    libc::close(pipe_write);
                     libc::close(ready_read);
                 }
                 return Err(ProcessError::LaunchFailed(
@@ -535,9 +536,6 @@ impl BrowserProcess {
                 libc::close(ready_read);
             }
             if n_extra > 0 {
-                unsafe {
-                    libc::close(pipe_write);
-                }
                 return Err(ProcessError::LaunchFailed(format!(
                     "supervisor watcher arming failed with errno {}{}",
                     err_byte[0],
@@ -552,7 +550,6 @@ impl BrowserProcess {
             // Verify watcher liveness and independent PGID
             unsafe {
                 if libc::kill(wpid, 0) != 0 || libc::getpgid(wpid) != wpid {
-                    libc::close(pipe_write);
                     return Err(ProcessError::LaunchFailed(
                         "supervisor watcher liveness or process group verification failed"
                             .to_string(),
@@ -573,18 +570,9 @@ impl BrowserProcess {
             PidHandle::open_child_of(watcher_pid, pid as i32).map(|watcher| (leader, watcher))
         }) {
             Ok(pair) => pair,
-            Err(e) => {
-                unsafe {
-                    libc::close(pipe_write);
-                }
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         };
         let stderr = child.stderr.take().ok_or_else(|| {
-            #[cfg(unix)]
-            unsafe {
-                libc::close(pipe_write);
-            }
             ProcessError::LaunchFailed("missing stderr pipe".to_string())
         })?;
 
@@ -594,18 +582,8 @@ impl BrowserProcess {
         let (ws_endpoint, mut stderr) =
             match timeout(deadline, discover_ws_endpoint(stderr, &user_data_dir)).await {
                 Ok(Ok(pair)) => pair,
-                Ok(Err(e)) => {
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::close(pipe_write);
-                    }
-                    return Err(e);
-                }
+                Ok(Err(e)) => return Err(e),
                 Err(_) => {
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::close(pipe_write);
-                    }
                     return Err(ProcessError::StartupTimeout(deadline));
                 }
             };
@@ -617,13 +595,7 @@ impl BrowserProcess {
         });
 
         // Validate loopback and strict canonical UUID path
-        if let Err(e) = validate_loopback_endpoint(&ws_endpoint) {
-            #[cfg(unix)]
-            unsafe {
-                libc::close(pipe_write);
-            }
-            return Err(e);
-        }
+        validate_loopback_endpoint(&ws_endpoint)?;
 
         info!(
             pid,
@@ -636,10 +608,7 @@ impl BrowserProcess {
         }
 
         #[cfg(unix)]
-        let supervisor_pipe = unsafe {
-            use std::os::unix::io::FromRawFd;
-            Some(std::fs::File::from_raw_fd(pipe_write))
-        };
+        let supervisor_pipe = Some(std::fs::File::from(pipe_write));
 
         #[cfg(unix)]
         let identity_pgid = Some(pgid);
