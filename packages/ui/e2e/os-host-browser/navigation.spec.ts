@@ -5,7 +5,7 @@ import { writeFile } from "node:fs/promises";
 import { startHostBrowserAppServer } from "../fixtures/host-browser-app.js";
 import {
   clickRemoteElement, createJourneyPage, expectFreshFrameAck, expectWorkerPolicy, expectJourneyCanvas,
-  observeBrowserJourney, openJourneyView,
+  observeBrowserJourney, openJourneyView, disposeJourney,
   type BrowserJourneyEvidence,
 } from "../fixtures/host-browser-journey-driver.js";
 import {
@@ -79,10 +79,13 @@ test.describe("Browser Preview application navigation and worker lifecycle", () 
       const documentBeforeReload = await view.remote.evaluate(() =>
         "documentIdentity" in window ? window.documentIdentity : undefined);
       await view.app.getByRole("button", { name: "Reload", exact: true }).click();
-      // The old execution context is destroyed mid-reload: treat that as "not reloaded yet".
-      await expect.poll(() => view.remote.evaluate(() =>
-        "documentIdentity" in window ? window.documentIdentity : undefined)
-        .catch(() => documentBeforeReload)).not.toBe(documentBeforeReload);
+      // The old execution context is destroyed mid-reload; only a real new document identity passes.
+      await expect(async () => {
+        const identity = await view.remote.evaluate(() =>
+          "documentIdentity" in window ? window.documentIdentity : undefined);
+        expect(typeof identity).toBe("string");
+        expect(identity).not.toBe(documentBeforeReload);
+      }).toPass({ timeout: 10_000 });
       await expectWorkerPolicy(view);
       await view.app.getByRole("button", { name: "Back", exact: true }).click();
       await expect(view.remote.locator("#journey-page")).toHaveText("Page a");
@@ -133,10 +136,11 @@ test.describe("Browser Preview application navigation and worker lifecycle", () 
       await captureApplicationCheckpoint(page, { caseDir, checkpointName: "restored" });
       passed = true;
     } finally {
-      if (!passed) await captureFailure(testInfo, page, host.serverLog(), evidence);
-      await observer?.close();
-      await context.close();
-      await host.cleanup();
+      await disposeJourney(host, [
+        () => (passed ? undefined : captureFailure(testInfo, page, host.serverLog(), evidence)),
+        () => observer?.close(),
+        () => context.close(),
+      ]);
       cleaned = true;
       await finalizeEvidenceSession({ testPassed: passed, cleanupPassed: cleaned });
     }
@@ -176,10 +180,11 @@ test.describe("Browser Preview application navigation and worker lifecycle", () 
       expect(evidence.pageErrors).toEqual([]);
       passed = true;
     } finally {
-      if (!passed) await captureFailure(testInfo, page, host.serverLog(), evidence);
-      await observer?.close();
-      await context.close();
-      await host.cleanup();
+      await disposeJourney(host, [
+        () => (passed ? undefined : captureFailure(testInfo, page, host.serverLog(), evidence)),
+        () => observer?.close(),
+        () => context.close(),
+      ]);
     }
   });
 });

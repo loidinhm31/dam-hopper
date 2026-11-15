@@ -568,12 +568,17 @@ type = "custom"
       const scale = Math.min(box!.width / 1280, box!.height / 800);
       const clickX = box!.x + (box!.width - 1280 * scale) / 2 + (40 + 180) * scale;
       const clickY = box!.y + (box!.height - 800 * scale) / 2 + (40 + 70) * scale;
-      await page.mouse.move(clickX, clickY);
-      await page.mouse.click(clickX, clickY);
       const previewCard = page
         .locator('[data-testid="browser-selection-preview-card"]')
         .first();
-      await expect(previewCard).toBeVisible({ timeout: 15_000 });
+      // Viewer input is display-only while the stream's frames are input-untrusted (startup, or
+      // right after the producer re-establishes the native viewport): re-issue the pick until the
+      // overlay reports a selection.
+      await expect(async () => {
+        await page.mouse.move(clickX, clickY);
+        await page.mouse.click(clickX, clickY);
+        await expect(previewCard).toBeVisible({ timeout: 3_000 });
+      }).toPass({ timeout: 30_000 });
       await expect(previewCard).toContainText("<button>");
       await expect(previewCard).not.toContainText("TOP_SECRET_PASSWORD_123");
 

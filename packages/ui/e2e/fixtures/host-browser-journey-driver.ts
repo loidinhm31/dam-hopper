@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chromium, expect, type Browser, type Locator, type Page } from "@playwright/test";
+import { chromium, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { createBrowserStorageState } from "./application-storage-state.js";
 import type { HostBrowserAppServer } from "./host-browser-app.js";
 
@@ -60,18 +60,52 @@ export function observeBrowserJourney(page: Page): BrowserJourneyEvidence {
   return evidence;
 }
 
+/**
+ * Opens the SPA for an isolated host. Takes ownership of `host`: callers create the page right
+ * after starting the host and enter their `try` only afterwards, so a failure here must itself
+ * release the host (server + Chromium) or it would leak.
+ */
 export async function createJourneyPage(browser: Browser, host: HostBrowserAppServer) {
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 1000 },
-    storageState: createBrowserStorageState({
-      appOrigin: host.appOrigin, profileId: randomUUID(),
-      token: host.adminToken, username: host.adminUsername,
-    }),
-  });
-  const page = await context.newPage();
-  await page.goto(`${host.appOrigin}/os`);
-  await expect(page.locator("[data-os-shell='true']")).toBeVisible();
-  return { page, context };
+  let context: BrowserContext | undefined;
+  try {
+    context = await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      storageState: createBrowserStorageState({
+        appOrigin: host.appOrigin, profileId: randomUUID(),
+        token: host.adminToken, username: host.adminUsername,
+      }),
+    });
+    const page = await context.newPage();
+    await page.goto(`${host.appOrigin}/os`);
+    await expect(page.locator("[data-os-shell='true']")).toBeVisible();
+    return { page, context };
+  } catch (error) {
+    await context?.close().catch(() => {});
+    await host.cleanup().catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * Exception-safe journey teardown: every step runs, each under its own deadline, and the host
+ * (server + Chromium) is always released last. Only a failed host cleanup is surfaced; failures
+ * of the other steps must not mask the test's own error.
+ */
+export async function disposeJourney(
+  host: HostBrowserAppServer,
+  steps: ReadonlyArray<() => Promise<unknown> | undefined>,
+): Promise<void> {
+  for (const step of steps) {
+    try {
+      await Promise.race([
+        Promise.resolve(step()),
+        new Promise((resolve) => setTimeout(resolve, 15_000)),
+      ]);
+    } catch {
+      // best effort: the host cleanup below is what bounds resource use
+    }
+  }
+  await host.cleanup();
 }
 
 export async function connectJourneyObserver(host: HostBrowserAppServer) {
@@ -133,6 +167,11 @@ export async function openJourneyView(page: Page, host: HostBrowserAppServer, ob
   throw new Error(`Exact native target missing for chooser session ${session.browserSessionId}`);
 }
 
+/** Playwright's error for an evaluation racing a document navigation. */
+export function isDestroyedContextError(error: unknown): boolean {
+  return error instanceof Error && /Execution context was destroyed/.test(error.message);
+}
+
 /**
  * Click through the streamed canvas, not by driving the remote page directly.
  *
@@ -163,14 +202,21 @@ export async function clickRemoteElement(page: Page, view: BrowserJourneyView, s
     );
     await expect.poll(() => view.remote.evaluate(() =>
       (window as unknown as { __dhRemoteMouseDown?: boolean }).__dhRemoteMouseDown === true)
-      .catch(() => true), { timeout: 1_500 }).toBe(true);
+      .catch((error: unknown) => {
+        // A click that navigated destroyed the old context: the page did receive the press.
+        if (isDestroyedContextError(error)) return true;
+        throw error;
+      }), { timeout: 1_500 }).toBe(true);
   }).toPass({ timeout: 20_000 });
 }
 
 export async function expectWorkerPolicy(view: BrowserJourneyView) {
   // A navigation destroys the execution context between polls: keep polling instead of failing.
   await expect.poll(() => view.remote.evaluate(() =>
-    "workerReport" in window ? window.workerReport : undefined).catch(() => undefined)).toEqual({
+    "workerReport" in window ? window.workerReport : undefined).catch((error: unknown) => {
+      if (isDestroyedContextError(error)) return undefined;
+      throw error;
+    })).toEqual({
       allowed: "allowed-worker-data", directDenied: true, redirectDenied: true,
       child: { allowed: "allowed-worker-data", denied: true },
     });

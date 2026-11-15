@@ -84,6 +84,32 @@ export function findBrowserExecutable(): string | undefined {
   return candidates.find((p): p is string => Boolean(p && isSafeExecutable(p)));
 }
 
+/**
+ * Process groups of every isolated server this worker started and has not yet torn down.
+ * A test that times out never resumes its `finally`, and a killed worker never runs fixtures:
+ * the exit hooks below are the last line of defence against leaked servers (and, through their
+ * death-pipe watcher, leaked Chromium trees).
+ */
+const liveServerGroups = new Set<number>();
+let exitHooksInstalled = false;
+
+function killLiveServerGroups(): void {
+  for (const pgid of liveServerGroups) killGroup(pgid, "SIGKILL");
+  liveServerGroups.clear();
+}
+
+function installExitHooks(): void {
+  if (exitHooksInstalled || process.platform === "win32") return;
+  exitHooksInstalled = true;
+  process.once("exit", killLiveServerGroups);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.once(signal, () => {
+      killLiveServerGroups();
+      process.kill(process.pid, signal);
+    });
+  }
+}
+
 function killGroup(pgid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pgid, signal);
@@ -476,6 +502,13 @@ type = "custom"
     proc.stdout?.on("data", recordOutput);
     proc.stderr?.on("data", recordOutput);
     currentServerProc = proc;
+    if (isUnix && proc.pid) {
+      installExitHooks();
+      liveServerGroups.add(proc.pid);
+      proc.once("exit", () => {
+        if (proc.pid) liveServerGroups.delete(proc.pid);
+      });
+    }
 
     const deadline = Date.now() + 30_000;
     let ready = false;
