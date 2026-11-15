@@ -99,7 +99,13 @@ test.describe("Browser Preview application navigation and worker lifecycle", () 
         { command: "navigate", status: 200 },
       ]);
 
-      await clickRemoteElement(page, view, "#journey-input");
+      // Viewer input is fenced while the producer re-establishes the native viewport after a
+      // document navigation: retry the native click until the remote page really focuses the field.
+      await expect(async () => {
+        await clickRemoteElement(page, view, "#journey-input");
+        await expect.poll(() => view.remote.evaluate(() => document.activeElement?.id), { timeout: 2_000 })
+          .toBe("journey-input");
+      }).toPass({ timeout: 20_000 });
       await page.keyboard.type("after-navigation");
       await expect(view.remote.locator("#journey-input")).toHaveValue("after-navigation");
       await expectFreshFrameAck(evidence);

@@ -348,7 +348,13 @@ export function DesktopCanvas({
         className="absolute inset-0 pointer-events-none"
         style={{ zIndex: floatOnTop ? 60 : 20 }}
       >
-        {desktop.floatingWindowIds.map((winId) => {
+        {/*
+          Slots render in a stable (id-sorted) order. Stacking is expressed by the frame's z-index,
+          not DOM order: focusing a window reorders floatingWindowIds, and moving a slot node in the
+          DOM mid-click makes Chromium drop the click (first click on a background window's
+          header buttons, e.g. Close, would be swallowed).
+        */}
+        {[...desktop.floatingWindowIds].sort().map((winId) => {
           const win = session.windows[winId];
           if (!win || win.minimized || win.maximized) return null;
           return (

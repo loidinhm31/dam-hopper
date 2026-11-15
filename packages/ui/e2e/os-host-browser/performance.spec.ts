@@ -19,7 +19,7 @@ customTest.describe("Host Browser Performance Benchmark & Tuning Grid (A37, A38)
     "proves static page has 0 periodic screenshot calls and idle bandwidth remains bounded",
     async ({ hostApp, adminPage: page }) => {
       // 1. Create session for static test page
-      const sessionKey = "perf-static-1111-2222-3333-444444444444";
+      const sessionKey = "bbbbbbbb-2222-3333-4444-555555555555";
       const createRes = await fetch(`${hostApp.appOrigin}/api/browser/sessions`, {
         method: "POST",
         headers: {

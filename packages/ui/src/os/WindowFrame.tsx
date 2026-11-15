@@ -417,6 +417,14 @@ export function WindowFrame({
     presentationKind === "maximized" ||
     (presentationKind === undefined && window.maximized);
 
+  // Stacking among floating windows follows floatingWindowIds order (last = top); the focused
+  // window is always raised above all siblings.
+  const floatIds =
+    session.desktops.find((d) => d.id === window.desktopId)?.floatingWindowIds ?? [];
+  const floatZIndex = isFocused
+    ? 20 + floatIds.length
+    : 20 + Math.max(0, floatIds.indexOf(window.id));
+
   const frameStyle: React.CSSProperties = isMaximizedPresentation
     ? {
         position: "absolute",
@@ -438,7 +446,7 @@ export function WindowFrame({
             top: bounds.y,
             width: bounds.width,
             height: bounds.height,
-            zIndex: isFocused ? 30 : 20,
+            zIndex: floatZIndex,
             pointerEvents: "auto",
           };
         })()

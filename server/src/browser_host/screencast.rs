@@ -54,6 +54,9 @@ pub const MAX_BASE64_BYTES: usize = 2_796_204; // 2 MiB decoded ceiling
 
 pub const TRANSITIONAL_EPOCH_MASK: u64 = 1 << 63;
 
+/// Geometry transitions re-run per native/producer disagreement before giving up.
+const MAX_NATIVE_GEOMETRY_REPAIRS: u32 = 3;
+
 /// Constructs the video streaming governor ticker interval with Skip missed-tick behavior.
 pub fn create_governor_interval(period: Duration) -> tokio::time::Interval {
     let mut ticker = tokio::time::interval(period);
@@ -666,6 +669,12 @@ pub struct ScreencastProducer {
     geometry: Arc<RwLock<TargetGeometry>>,
     /// Native evidence gate for pointer projection (see `input_geometry_trusted`).
     geometry_trusted: Arc<AtomicBool>,
+    /// A raw CDP agent has changed this target's geometry: native/producer disagreement is then
+    /// an agent decision, never engine drift, so it is not repaired (see `schedule_native_geometry_repair`).
+    external_geometry_fenced: Arc<AtomicBool>,
+    /// Consecutive repairs issued for the current disagreement; reset by a confirming frame.
+    native_geometry_repairs: Arc<AtomicU32>,
+    native_geometry_repair_in_flight: Arc<AtomicBool>,
     current_run_proven: Arc<SyncMutex<Option<ProvenFrameState>>>,
     applied_event_version: Arc<SyncMutex<(Option<Uuid>, u64)>>,
     quality_revision: Arc<QualityRevision>,
@@ -813,6 +822,9 @@ impl ScreencastProducer {
             active_run_cancel: Arc::new(Mutex::new(None)),
             geometry: Arc::new(RwLock::new(initial_geometry)),
             geometry_trusted: Arc::new(AtomicBool::new(true)),
+            external_geometry_fenced: Arc::new(AtomicBool::new(false)),
+            native_geometry_repairs: Arc::new(AtomicU32::new(0)),
+            native_geometry_repair_in_flight: Arc::new(AtomicBool::new(false)),
             current_run_proven: Arc::new(SyncMutex::new(None)),
             applied_event_version: Arc::new(SyncMutex::new((None, 0))),
             quality_revision: Arc::new(QualityRevision::new()),
@@ -1360,6 +1372,7 @@ impl ScreencastProducer {
     /// reaches the browser: frame publication halts, old-geometry caches are dropped and pointer
     /// projection is untrusted. No CDP is issued and no lock is held across an await.
     pub async fn begin_external_geometry_fence(&self) {
+        self.external_geometry_fenced.store(true, Ordering::Release);
         let input = crate::api::browser_host::get_or_create_input_manager(&self.browser_session_id).await;
         // Same lock order as `update_geometry` (publish gate, then the input fence gate), and the
         // publication gate is held through the cache clears: a publisher that already passed its
@@ -1456,6 +1469,29 @@ impl ScreencastProducer {
         self.geometry_trusted.store(false, Ordering::Release);
     }
 
+    /// The engine can drop its emulated viewport behind the producer's back (observed after a
+    /// document navigation: frames revert to the default window size). Disagreement revokes input
+    /// trust, and a static page emits no further frame that could re-establish it, so the producer
+    /// re-runs its own geometry transition (override + forced screencast restart) at the
+    /// unchanged geometry and epoch. Skipped once a raw agent has fenced the geometry (that disagreement is
+    /// the agent's intent), and bounded per disagreement.
+    fn schedule_native_geometry_repair(&self) {
+        if self.external_geometry_fenced.load(Ordering::Acquire)
+            || self.native_geometry_repairs.load(Ordering::Relaxed) >= MAX_NATIVE_GEOMETRY_REPAIRS
+            || self.native_geometry_repair_in_flight.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        self.native_geometry_repairs.fetch_add(1, Ordering::Relaxed);
+        let this = self.clone_handle();
+        tokio::spawn(async move {
+            if let Err(e) = this.repair_native_viewport().await {
+                warn!(error = %e, "native geometry repair failed");
+            }
+            this.native_geometry_repair_in_flight.store(false, Ordering::Release);
+        });
+    }
+
     /// Applies a requested viewport at the registry-assigned `target_epoch`.
     ///
     /// Lifecycle operations serialize before state and page setup; geometry/cache locks are
@@ -1465,18 +1501,37 @@ impl ScreencastProducer {
         new_geometry: TargetGeometry,
         target_epoch: u64,
     ) -> Result<(), String> {
+        self.run_geometry_transition(new_geometry, target_epoch, false).await
+    }
+
+    /// Re-establishes the native viewport at unchanged geometry/epoch, restarting the screencast
+    /// even though no dimension changed (see `schedule_native_geometry_repair`).
+    async fn repair_native_viewport(&self) -> Result<(), String> {
+        let geometry = self.geometry.read().await.clone();
+        self.run_geometry_transition(geometry, self.viewport_epoch(), true).await
+    }
+
+    async fn run_geometry_transition(
+        &self,
+        new_geometry: TargetGeometry,
+        target_epoch: u64,
+        force_restart: bool,
+    ) -> Result<(), String> {
         // Owned by its own task: a caller that goes away mid-transition (e.g. a dropped REST
         // request) must not strand the transitional epoch or a half-restarted screencast.
         let this = self.clone_handle();
-        tokio::spawn(async move { this.update_geometry_serialized(new_geometry, target_epoch).await })
-            .await
-            .map_err(|e| format!("geometry transition task failed: {e}"))?
+        tokio::spawn(async move {
+            this.update_geometry_serialized(new_geometry, target_epoch, force_restart).await
+        })
+        .await
+        .map_err(|e| format!("geometry transition task failed: {e}"))?
     }
 
     async fn update_geometry_serialized(
         &self,
         new_geometry: TargetGeometry,
         target_epoch: u64,
+        force_restart: bool,
     ) -> Result<(), String> {
         new_geometry
             .validate()
@@ -1557,7 +1612,7 @@ impl ScreencastProducer {
         // native sessions per start. A dimension change therefore restarts it as a fresh run
         // (stop -> start), exactly like a capture-tier switch. Stop first: a failed stop leaves
         // the live run untouched, so only the native metrics override has to be rolled back.
-        let restart_run = dims_changed
+        let restart_run = (dims_changed || force_restart)
             && *state == ScreencastState::Streaming
             && page_sid_opt.is_some();
         if restart_run {
@@ -3245,6 +3300,11 @@ impl ScreencastProducer {
             // Only a frame from the current epoch may confirm or revoke trust.
             if self.viewport_epoch.load(Ordering::SeqCst) == candidate.viewport_epoch {
                 self.geometry_trusted.store(agrees, Ordering::Release);
+                if agrees {
+                    self.native_geometry_repairs.store(0, Ordering::Relaxed);
+                } else {
+                    self.schedule_native_geometry_repair();
+                }
             }
         }
 
@@ -3551,6 +3611,9 @@ impl ScreencastProducer {
             active_run_cancel: self.active_run_cancel.clone(),
             geometry: self.geometry.clone(),
             geometry_trusted: self.geometry_trusted.clone(),
+            external_geometry_fenced: self.external_geometry_fenced.clone(),
+            native_geometry_repairs: self.native_geometry_repairs.clone(),
+            native_geometry_repair_in_flight: self.native_geometry_repair_in_flight.clone(),
             current_run_proven: self.current_run_proven.clone(),
             applied_event_version: self.applied_event_version.clone(),
             quality_revision: self.quality_revision.clone(),

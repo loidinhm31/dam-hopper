@@ -678,7 +678,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Viewer Client Decoder & Input | **PASS** | 1-active + 1-pending frame decode governor, captured subscription credit ACKs, `PcmPlayer` 24 kHz scheduling + sync flush, letterbox coordinate mapping, and IME deduplication. Verified by unit tests, Chromium browser tests, and UI builds (Phase 06 review 4/10 carryovers remediated in Phases 07–09 and Cycle 13) |
 | Root Browser Keep-Alive & OS Cutover | **PASS** | Root keepalive host, canvas slot reparenting, viewer-local presentation/audio claims, explicit target close, recipe sanitization, and retired iframe path (Phase 07: 208/208 checks; Phase 09 E2E continuity) |
 | Actor-Bound Artifacts, Selection & Logout Reset | **PASS** | Immutable owner/source class, live Admin demotion checks, bounded CDP selection + PNG + atomic terminal handoff, revoke-first logout, 2s bounded async reset worker, and Cancel-first UI (`selection.spec.ts` authored & E2E typechecked; Phase 08: 237/237 checks + 3,718 UI unit tests; Cycle 3 approved 7/10) |
-| Integrated Security, Platform & Android E2E | **PASS** | Phase 09 (54/54 checks, Cycle 3 approved 4/10): `browser_host_security.rs` (7/7), `browser_host_platform.rs` (5/5), `host-browser-android.browser.tsx` (6/6), 36 core regressions, and Playwright E2E specs (`same-target`, `performance`, `android`, `host-browser`) |
+| Integrated Security, Platform & E2E | **PASS** | Phase 09 (54/54 checks, Cycle 3 approved 4/10): `browser_host_security.rs` (7/7), `browser_host_platform.rs` (5/5), 36 core regressions, and Playwright E2E specs (`same-target`, `performance`, `host-browser`) |
 | Native Browser Zoom | **UNVERIFIED** | Unreachable via standard CDP in headless Chromium 157; `inputTrusted: false` enforced |
 | Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unimplemented; non-Unix launch returns `ContainmentUnavailable`. Retained fail-closed; no qualification claimed |
 
@@ -693,7 +693,6 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 - **Adaptive Stream Quality Phase 01 (2026-11-12):** Implemented per-viewer delivery estimation (`viewer_delivery_estimator.rs`), native capture vs. server receipt timestamp separation, owner-scoped snapshot diagnostics, and bounded `frameAck.decodeMs` / `heartbeat.telemetry` feedback (Cycle 3 reviewed 8/10, 0 critical; HTTP diagnostics export & Phase 02 reader separation follow-ups pending).
 - **Open Release & Qualification Gates:**
   - Real output-browser audible/gapless playback, privacy/retirement silence, autoplay gesture recovery, two-viewer independence, and measured FPS/audio latency under live load (`plans/261111-0220-browser-video-audio-streaming/reports/code-review-report.md`).
-  - Physical Android device receipts with Gboard Vietnamese Telex and Japanese Kana IME (A09, `reports/human-acceptance.md`).
   - Desktop Chrome/Firefox human visual and agent interference ledger (A40, `reports/human-acceptance.md`).
   - Continuous 60s soak workloads, physical scanout latency, and production capture benchmarks (A37, `reports/performance-qualification.md`).
   - Dedicated native Windows release host runner for Job Object containment (A29, `reports/platform-qualification.md`).
