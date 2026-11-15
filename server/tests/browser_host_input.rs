@@ -2438,7 +2438,9 @@ mod live {
         }
 
         let mut observed = String::new();
-        for _ in 0..100 {
+        // Fairness means eventual, ordered delivery while the registry churns; a loaded CI runner
+        // needs far more than 2.5 s for five inputs on the shared current-thread runtime.
+        for _ in 0..400 {
             let val = live
                 .client
                 .send_command(
