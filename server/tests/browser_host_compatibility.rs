@@ -791,6 +791,10 @@ async fn test_authoritative_visual_marker_geometry_and_zoom_qualification() {
         }
 
         // Trigger a visual update so Chrome emits a fresh frame corresponding to current state
+        let trigger_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before epoch")
+            .as_millis() as u64;
         client
             .send_command(
                 "Runtime.evaluate",
@@ -829,10 +833,23 @@ async fn test_authoritative_visual_marker_geometry_and_zoom_qualification() {
         }
 
         // Await fresh frame and promptly ACK
-        let frame = timeout(Duration::from_secs(5), screencast_rx.recv())
-            .await
-            .expect("timed out waiting for screencast frame in geometry case")
-            .expect("screencast channel closed");
+        // Frames already in flight were captured before the viewport state above settled: skip
+        // (and ACK) every frame whose native capture time precedes the visual-update trigger.
+        let frame = loop {
+            let candidate = timeout(Duration::from_secs(5), screencast_rx.recv())
+                .await
+                .expect("timed out waiting for screencast frame in geometry case")
+                .expect("screencast channel closed");
+            match candidate.native_capture_time_unix_ms {
+                Some(captured) if captured < trigger_unix_ms => {
+                    client
+                        .ack_screencast_frame(&session_id, candidate.frame_session_id)
+                        .await
+                        .expect("ack pre-trigger frame failed");
+                }
+                _ => break candidate,
+            }
+        };
 
         client
             .ack_screencast_frame(&session_id, frame.frame_session_id)

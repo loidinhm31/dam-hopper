@@ -54,8 +54,17 @@ pub const MAX_BASE64_BYTES: usize = 2_796_204; // 2 MiB decoded ceiling
 
 pub const TRANSITIONAL_EPOCH_MASK: u64 = 1 << 63;
 
-/// Geometry transitions re-run per native/producer disagreement before giving up.
+/// Geometry repairs allowed per `NATIVE_GEOMETRY_REPAIR_WINDOW`; alternating agreeing and
+/// disagreeing frames must not be able to repair forever.
 const MAX_NATIVE_GEOMETRY_REPAIRS: u32 = 3;
+const NATIVE_GEOMETRY_REPAIR_WINDOW: Duration = Duration::from_secs(30);
+
+/// Authority a native geometry repair was planned under (see `schedule_native_geometry_repair`).
+struct NativeRepairAuthority {
+    viewport_epoch: u64,
+    fence_generation: u64,
+    geometry: TargetGeometry,
+}
 
 /// How long a native/producer disagreement must persist before the producer repairs it.
 const NATIVE_GEOMETRY_REPAIR_DEBOUNCE: Duration = Duration::from_millis(400);
@@ -678,7 +687,7 @@ pub struct ScreencastProducer {
     /// an agent decision, never engine drift, so it is not repaired (see `schedule_native_geometry_repair`).
     external_geometry_fenced: Arc<AtomicBool>,
     /// Consecutive repairs issued for the current disagreement; reset by a confirming frame.
-    native_geometry_repairs: Arc<AtomicU32>,
+    native_geometry_repairs: Arc<SyncMutex<(Option<Instant>, u32)>>,
     native_geometry_repair_in_flight: Arc<AtomicBool>,
     current_run_proven: Arc<SyncMutex<Option<ProvenFrameState>>>,
     applied_event_version: Arc<SyncMutex<(Option<Uuid>, u64)>>,
@@ -829,7 +838,7 @@ impl ScreencastProducer {
             geometry_trusted: Arc::new(AtomicBool::new(true)),
             native_geometry_repair_enabled: Arc::new(AtomicBool::new(false)),
             external_geometry_fenced: Arc::new(AtomicBool::new(false)),
-            native_geometry_repairs: Arc::new(AtomicU32::new(0)),
+            native_geometry_repairs: Arc::new(SyncMutex::new((None, 0))),
             native_geometry_repair_in_flight: Arc::new(AtomicBool::new(false)),
             current_run_proven: Arc::new(SyncMutex::new(None)),
             applied_event_version: Arc::new(SyncMutex::new((None, 0))),
@@ -1492,24 +1501,47 @@ impl ScreencastProducer {
     fn schedule_native_geometry_repair(&self) {
         if !self.native_geometry_repair_enabled.load(Ordering::Acquire)
             || self.external_geometry_fenced.load(Ordering::Acquire)
-            || self.native_geometry_repairs.load(Ordering::Relaxed) >= MAX_NATIVE_GEOMETRY_REPAIRS
             || self.native_geometry_repair_in_flight.swap(true, Ordering::AcqRel)
         {
             return;
         }
         let this = self.clone_handle();
         tokio::spawn(async move {
+            // Authority observed when the disagreement was seen. The transition re-validates it
+            // under the lifecycle lock, so a newer geometry, epoch or fence always wins.
+            let authority = NativeRepairAuthority {
+                viewport_epoch: this.viewport_epoch(),
+                fence_generation: this.fence_generation.load(Ordering::SeqCst),
+                geometry: this.geometry.read().await.clone(),
+            };
             // Debounce: a confirming native frame inside the window restores trust by evidence
             // and cancels the repair; only a disagreement that persists is repaired.
             tokio::time::sleep(NATIVE_GEOMETRY_REPAIR_DEBOUNCE).await;
-            if !this.input_geometry_trusted() && !this.external_geometry_fenced.load(Ordering::Acquire) {
-                this.native_geometry_repairs.fetch_add(1, Ordering::Relaxed);
-                if let Err(e) = this.repair_native_viewport().await {
+            if !this.input_geometry_trusted()
+                && !this.external_geometry_fenced.load(Ordering::Acquire)
+                && this.charge_native_geometry_repair()
+            {
+                if let Err(e) = this.repair_native_viewport(authority).await {
                     warn!(error = %e, "native geometry repair failed");
                 }
             }
             this.native_geometry_repair_in_flight.store(false, Ordering::Release);
         });
+    }
+
+    /// Charges one repair against the rolling budget; false once it is exhausted.
+    fn charge_native_geometry_repair(&self) -> bool {
+        let mut budget = self.native_geometry_repairs.lock();
+        let now = Instant::now();
+        match budget.0 {
+            Some(start) if now.duration_since(start) < NATIVE_GEOMETRY_REPAIR_WINDOW => {}
+            _ => *budget = (Some(now), 0),
+        }
+        if budget.1 >= MAX_NATIVE_GEOMETRY_REPAIRS {
+            return false;
+        }
+        budget.1 += 1;
+        true
     }
 
     /// Applies a requested viewport at the registry-assigned `target_epoch`.
@@ -1521,27 +1553,28 @@ impl ScreencastProducer {
         new_geometry: TargetGeometry,
         target_epoch: u64,
     ) -> Result<(), String> {
-        self.run_geometry_transition(new_geometry, target_epoch, false).await
+        self.run_geometry_transition(new_geometry, target_epoch, None).await
     }
 
     /// Re-establishes the native viewport at unchanged geometry/epoch, restarting the screencast
     /// even though no dimension changed (see `schedule_native_geometry_repair`).
-    async fn repair_native_viewport(&self) -> Result<(), String> {
-        let geometry = self.geometry.read().await.clone();
-        self.run_geometry_transition(geometry, self.viewport_epoch(), true).await
+    async fn repair_native_viewport(&self, authority: NativeRepairAuthority) -> Result<(), String> {
+        let geometry = authority.geometry.clone();
+        let epoch = authority.viewport_epoch;
+        self.run_geometry_transition(geometry, epoch, Some(authority)).await
     }
 
     async fn run_geometry_transition(
         &self,
         new_geometry: TargetGeometry,
         target_epoch: u64,
-        force_restart: bool,
+        repair: Option<NativeRepairAuthority>,
     ) -> Result<(), String> {
         // Owned by its own task: a caller that goes away mid-transition (e.g. a dropped REST
         // request) must not strand the transitional epoch or a half-restarted screencast.
         let this = self.clone_handle();
         tokio::spawn(async move {
-            this.update_geometry_serialized(new_geometry, target_epoch, force_restart).await
+            this.update_geometry_serialized(new_geometry, target_epoch, repair).await
         })
         .await
         .map_err(|e| format!("geometry transition task failed: {e}"))?
@@ -1551,7 +1584,7 @@ impl ScreencastProducer {
         &self,
         new_geometry: TargetGeometry,
         target_epoch: u64,
-        force_restart: bool,
+        repair: Option<NativeRepairAuthority>,
     ) -> Result<(), String> {
         new_geometry
             .validate()
@@ -1561,6 +1594,19 @@ impl ScreencastProducer {
         let setup = self.page_setup.lock().await;
         let old_geom = self.geometry.read().await.clone();
         let old_epoch = self.viewport_epoch() & !TRANSITIONAL_EPOCH_MASK;
+        let force_restart = repair.is_some();
+        if let Some(authority) = &repair {
+            // A repair never outlives the authority it was planned under: a newer geometry,
+            // epoch, fence, raw-agent mutation or confirming frame supersedes it.
+            if self.external_geometry_fenced.load(Ordering::Acquire)
+                || self.input_geometry_trusted()
+                || old_epoch != (authority.viewport_epoch & !TRANSITIONAL_EPOCH_MASK)
+                || self.fence_generation.load(Ordering::SeqCst) != authority.fence_generation
+                || old_geom != authority.geometry
+            {
+                return Ok(());
+            }
+        }
         if old_geom == new_geometry
             && old_epoch == (target_epoch & !TRANSITIONAL_EPOCH_MASK)
             && self.input_geometry_trusted()
@@ -1700,8 +1746,16 @@ impl ScreencastProducer {
                 drop(current);
                 drop(mutation);
             }
-            // The override just succeeded natively; the next native frame's metadata re-verifies.
-            self.geometry_trusted.store(true, Ordering::Release);
+            if force_restart {
+                // A command acknowledgement is not evidence: a repaired viewport stays
+                // display-only until a current-run native frame confirms the geometry.
+            } else {
+                // The override just succeeded natively; the next native frame's metadata
+                // re-verifies. A managed viewport operation also re-establishes producer
+                // authority after a raw agent's fence.
+                self.geometry_trusted.store(true, Ordering::Release);
+                self.external_geometry_fenced.store(false, Ordering::Release);
+            }
         }
         // Otherwise a newer epoch won: its commit already overwrote this transition's marker, and
         // whatever epoch encoding is current (e.g. a successor fence's transitional bit) belongs to
@@ -3320,9 +3374,7 @@ impl ScreencastProducer {
             // Only a frame from the current epoch may confirm or revoke trust.
             if self.viewport_epoch.load(Ordering::SeqCst) == candidate.viewport_epoch {
                 self.geometry_trusted.store(agrees, Ordering::Release);
-                if agrees {
-                    self.native_geometry_repairs.store(0, Ordering::Relaxed);
-                } else {
+                if !agrees {
                     self.schedule_native_geometry_repair();
                 }
             }

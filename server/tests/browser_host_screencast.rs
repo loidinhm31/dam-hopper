@@ -1542,6 +1542,90 @@ async fn native_frame_metadata_divergence_revokes_input_trust_and_agreement_rest
     assert!(producer.input_geometry_trusted());
 }
 
+async fn repairing_producer() -> (ScreencastProducer, RecordingCdp) {
+    let cdp = start_recording_cdp(Faults::default()).await;
+    let client = CdpClient::connect(&cdp.url).await.expect("connect mock cdp");
+    let producer = ScreencastProducer::new(
+        Uuid::new_v4().to_string(),
+        Uuid::new_v4().to_string(),
+        1,
+        1,
+        client,
+        "PAGE-TARGET-REPAIR".to_string(),
+        geometry_of(1280.0, 720.0),
+    )
+    .with_capture_policy(24, 60)
+    .with_native_geometry_repair();
+    producer.ensure_page_session().await.expect("page session");
+    producer.start_screencast_run().await.expect("start run");
+    producer.register_viewer_demand("viewer-keepalive", &Uuid::new_v4().to_string(), true).await;
+    (producer, cdp)
+}
+
+/// Drains recorded commands for `window` and returns the CDP method names seen.
+async fn methods_within(cdp: &mut RecordingCdp, window: Duration) -> Vec<String> {
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + window;
+    while let Ok(Some(cmd)) = tokio::time::timeout_at(deadline, cdp.commands.recv()).await {
+        seen.push(cmd["method"].as_str().unwrap_or_default().to_string());
+    }
+    seen
+}
+
+/// A native viewport that persistently disagrees with the producer basis (engine dropped the
+/// emulated viewport, e.g. after a navigation) is repaired by a screencast restart, and the
+/// acknowledgement alone never restores input trust.
+#[tokio::test]
+async fn persistent_native_divergence_restarts_capture_and_stays_display_only_until_evidence() {
+    let (producer, mut cdp) = repairing_producer().await;
+    let mut frames = producer.subscribe_frames();
+    let _ = methods_within(&mut cdp, Duration::from_millis(300)).await; // startup commands
+
+    cdp.push.send(frame_event_with_metadata(1, 780.0, 437.0, 1.0)).unwrap();
+    let diverged = timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    assert!(!diverged.header().unwrap().input_trusted);
+
+    let methods = methods_within(&mut cdp, Duration::from_millis(2500)).await;
+    assert!(methods.iter().any(|m| m == "Page.stopScreencast"), "repair must stop the stale run: {methods:?}");
+    assert!(methods.iter().any(|m| m == "Page.startScreencast"), "repair must restart capture: {methods:?}");
+    assert!(
+        !producer.input_geometry_trusted(),
+        "a command acknowledgement is not evidence: trust stays revoked until a native frame confirms"
+    );
+}
+
+/// A confirming frame inside the debounce window restores trust by evidence and cancels the repair.
+#[tokio::test]
+async fn transient_native_divergence_is_not_repaired() {
+    let (producer, mut cdp) = repairing_producer().await;
+    let mut frames = producer.subscribe_frames();
+    let _ = methods_within(&mut cdp, Duration::from_millis(300)).await;
+
+    cdp.push.send(frame_event_with_metadata(1, 780.0, 437.0, 1.0)).unwrap();
+    let _ = timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    cdp.push.send(frame_event_with_metadata(1, 1280.0, 720.0, 1.0)).unwrap();
+    let restored = timeout(Duration::from_secs(3), frames.recv()).await.unwrap().unwrap();
+    assert!(restored.header().unwrap().input_trusted);
+
+    let methods = methods_within(&mut cdp, Duration::from_millis(1500)).await;
+    assert!(!methods.iter().any(|m| m == "Page.stopScreencast"), "no repair after confirmation: {methods:?}");
+}
+
+/// Once a raw CDP agent fenced the geometry, native disagreement is the agent's decision and is never repaired.
+#[tokio::test]
+async fn raw_agent_geometry_fence_suppresses_native_repair() {
+    let (producer, mut cdp) = repairing_producer().await;
+    let mut frames = producer.subscribe_frames();
+    let _ = methods_within(&mut cdp, Duration::from_millis(300)).await;
+
+    producer.begin_external_geometry_fence().await;
+    cdp.push.send(frame_event_with_metadata(1, 780.0, 437.0, 1.0)).unwrap();
+    let _ = timeout(Duration::from_secs(3), frames.recv()).await;
+
+    let methods = methods_within(&mut cdp, Duration::from_millis(2000)).await;
+    assert!(!methods.iter().any(|m| m == "Page.stopScreencast"), "fenced geometry is not repaired: {methods:?}");
+}
+
 /// Mock CDP that withholds the first `Emulation.setDeviceMetricsOverride` response until released,
 /// recording every command so interleavings can be asserted.
 struct GatedCdp {
