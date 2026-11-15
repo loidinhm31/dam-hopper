@@ -133,18 +133,38 @@ export async function openJourneyView(page: Page, host: HostBrowserAppServer, ob
   throw new Error(`Exact native target missing for chooser session ${session.browserSessionId}`);
 }
 
-/** Click through the streamed canvas, not by driving the remote page directly. */
+/**
+ * Click through the streamed canvas, not by driving the remote page directly.
+ *
+ * Viewer input is fenced (display-only) while the stream's frames are input-untrusted, e.g.
+ * while the producer re-establishes the native viewport after startup or a document navigation.
+ * A press during that window is dropped, so the native click is retried until the remote page
+ * actually receives a mousedown.
+ */
 export async function clickRemoteElement(page: Page, view: BrowserJourneyView, selector: string) {
-  const viewport = await view.remote.evaluate(() => ({ width: innerWidth, height: innerHeight }));
-  const target = await view.remote.locator(selector).boundingBox();
-  const canvas = await view.canvas.boundingBox();
-  expect(target).not.toBeNull();
-  expect(canvas).not.toBeNull();
-  const scale = Math.min(canvas!.width / viewport.width, canvas!.height / viewport.height);
-  await page.mouse.click(
-    canvas!.x + (canvas!.width - viewport.width * scale) / 2 + (target!.x + target!.width / 2) * scale,
-    canvas!.y + (canvas!.height - viewport.height * scale) / 2 + (target!.y + target!.height / 2) * scale,
-  );
+  await expect(async () => {
+    await view.remote.evaluate(() => {
+      const w = window as unknown as { __dhRemoteMouseDown?: boolean; __dhRemoteMouseDownArmed?: boolean };
+      w.__dhRemoteMouseDown = false;
+      if (!w.__dhRemoteMouseDownArmed) {
+        w.__dhRemoteMouseDownArmed = true;
+        addEventListener("mousedown", () => { w.__dhRemoteMouseDown = true; }, true);
+      }
+    });
+    const viewport = await view.remote.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    const target = await view.remote.locator(selector).boundingBox();
+    const canvas = await view.canvas.boundingBox();
+    expect(target).not.toBeNull();
+    expect(canvas).not.toBeNull();
+    const scale = Math.min(canvas!.width / viewport.width, canvas!.height / viewport.height);
+    await page.mouse.click(
+      canvas!.x + (canvas!.width - viewport.width * scale) / 2 + (target!.x + target!.width / 2) * scale,
+      canvas!.y + (canvas!.height - viewport.height * scale) / 2 + (target!.y + target!.height / 2) * scale,
+    );
+    await expect.poll(() => view.remote.evaluate(() =>
+      (window as unknown as { __dhRemoteMouseDown?: boolean }).__dhRemoteMouseDown === true)
+      .catch(() => true), { timeout: 1_500 }).toBe(true);
+  }).toPass({ timeout: 20_000 });
 }
 
 export async function expectWorkerPolicy(view: BrowserJourneyView) {

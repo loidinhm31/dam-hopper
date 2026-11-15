@@ -945,25 +945,33 @@ async fn test_authoritative_visual_marker_geometry_and_zoom_qualification() {
             .await
             .expect("mouseReleased failed");
 
-        // Verify recorded click in page DOM
-        let clicks_res = client
-            .send_command(
-                "Runtime.evaluate",
-                Some(serde_json::json!({
-                    "expression": "JSON.stringify(window.__clicks)",
-                    "returnByValue": true
-                })),
-                Some(&session_id),
-            )
-            .await
-            .expect("clicks evaluate failed");
+        // Verify recorded click in page DOM. The renderer may dispatch the DOM click after the CDP
+        // command acknowledgement, so poll briefly instead of reading once.
+        let mut clicks_arr: Vec<serde_json::Value> = Vec::new();
+        for _ in 0..50 {
+            let clicks_res = client
+                .send_command(
+                    "Runtime.evaluate",
+                    Some(serde_json::json!({
+                        "expression": "JSON.stringify(window.__clicks)",
+                        "returnByValue": true
+                    })),
+                    Some(&session_id),
+                )
+                .await
+                .expect("clicks evaluate failed");
 
-        let clicks_str = clicks_res
-            .get("result")
-            .and_then(|r| r.get("value"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("[]");
-        let clicks_arr: Vec<serde_json::Value> = serde_json::from_str(clicks_str).unwrap();
+            let clicks_str = clicks_res
+                .get("result")
+                .and_then(|r| r.get("value"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("[]");
+            clicks_arr = serde_json::from_str(clicks_str).unwrap();
+            if !clicks_arr.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
         let all_clicks_res = client
             .send_command(
                 "Runtime.evaluate",
