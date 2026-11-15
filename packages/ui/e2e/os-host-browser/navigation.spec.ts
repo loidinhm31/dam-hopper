@@ -79,8 +79,10 @@ test.describe("Browser Preview application navigation and worker lifecycle", () 
       const documentBeforeReload = await view.remote.evaluate(() =>
         "documentIdentity" in window ? window.documentIdentity : undefined);
       await view.app.getByRole("button", { name: "Reload", exact: true }).click();
+      // The old execution context is destroyed mid-reload: treat that as "not reloaded yet".
       await expect.poll(() => view.remote.evaluate(() =>
-        "documentIdentity" in window ? window.documentIdentity : undefined)).not.toBe(documentBeforeReload);
+        "documentIdentity" in window ? window.documentIdentity : undefined)
+        .catch(() => documentBeforeReload)).not.toBe(documentBeforeReload);
       await expectWorkerPolicy(view);
       await view.app.getByRole("button", { name: "Back", exact: true }).click();
       await expect(view.remote.locator("#journey-page")).toHaveText("Page a");
@@ -103,7 +105,7 @@ test.describe("Browser Preview application navigation and worker lifecycle", () 
       // document navigation: retry the native click until the remote page really focuses the field.
       await expect(async () => {
         await clickRemoteElement(page, view, "#journey-input");
-        await expect.poll(() => view.remote.evaluate(() => document.activeElement?.id), { timeout: 2_000 })
+        await expect.poll(() => view.remote.evaluate(() => document.activeElement?.id).catch(() => ""), { timeout: 2_000 })
           .toBe("journey-input");
       }).toPass({ timeout: 20_000 });
       await page.keyboard.type("after-navigation");

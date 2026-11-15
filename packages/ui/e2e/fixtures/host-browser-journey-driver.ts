@@ -148,8 +148,9 @@ export async function clickRemoteElement(page: Page, view: BrowserJourneyView, s
 }
 
 export async function expectWorkerPolicy(view: BrowserJourneyView) {
+  // A navigation destroys the execution context between polls: keep polling instead of failing.
   await expect.poll(() => view.remote.evaluate(() =>
-    "workerReport" in window ? window.workerReport : undefined)).toEqual({
+    "workerReport" in window ? window.workerReport : undefined).catch(() => undefined)).toEqual({
       allowed: "allowed-worker-data", directDenied: true, redirectDenied: true,
       child: { allowed: "allowed-worker-data", denied: true },
     });
