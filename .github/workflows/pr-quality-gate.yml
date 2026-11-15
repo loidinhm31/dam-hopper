@@ -138,6 +138,21 @@ jobs:
             echo "Browser executable has unsafe world-writable permissions: $CHROME_EXEC"
             exit 1
           fi
+          CANONICAL_CHROME="$(readlink -f "$CHROME_EXEC")"
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ] && command -v apparmor_parser >/dev/null 2>&1; then
+            sudo tee /etc/apparmor.d/dam-hopper-playwright-chromium >/dev/null <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile dam-hopper-playwright-chromium "$CANONICAL_CHROME" flags=(unconfined) {
+            userns,
+          }
+          EOF
+            sudo apparmor_parser -r /etc/apparmor.d/dam-hopper-playwright-chromium
+          fi
+          PROBE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$PROBE_DIR"' EXIT
+          timeout 15s "$CHROME_EXEC" --headless=new --no-first-run --no-default-browser-check --user-data-dir="$PROBE_DIR" --dump-dom about:blank >/dev/null
           echo "DAM_HOPPER_BROWSER_EXECUTABLE=$CHROME_EXEC" >> "$GITHUB_ENV"
       - name: Prefetch MongoDB image
         run: docker pull docker.io/library/mongo:8.2
@@ -207,6 +222,21 @@ jobs:
             echo "Browser executable has unsafe world-writable permissions: $CHROME_EXEC"
             exit 1
           fi
+          CANONICAL_CHROME="$(readlink -f "$CHROME_EXEC")"
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ] && command -v apparmor_parser >/dev/null 2>&1; then
+            sudo tee /etc/apparmor.d/dam-hopper-playwright-chromium >/dev/null <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile dam-hopper-playwright-chromium "$CANONICAL_CHROME" flags=(unconfined) {
+            userns,
+          }
+          EOF
+            sudo apparmor_parser -r /etc/apparmor.d/dam-hopper-playwright-chromium
+          fi
+          PROBE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$PROBE_DIR"' EXIT
+          timeout 15s "$CHROME_EXEC" --headless=new --no-first-run --no-default-browser-check --user-data-dir="$PROBE_DIR" --dump-dom about:blank >/dev/null
           echo "DAM_HOPPER_BROWSER_EXECUTABLE=$CHROME_EXEC" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:

@@ -703,6 +703,7 @@ async fn test_stop_and_reset_retire_only_the_ended_incarnation_sessions() {
 /// (sibling principals untouched), the obligation is idempotent, and the principal can launch a
 /// fresh incarnation afterwards. The obligation is independent of any producer: nothing but
 /// the manager is involved here.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_contain_incarnation_terminates_tree_and_retires_all_its_sessions() {
     use dam_hopper_server::browser_host::process::live_members;
@@ -817,6 +818,7 @@ async fn test_contain_incarnation_terminates_tree_and_retires_all_its_sessions()
 }
 
 /// Shutdown joins an in-flight containment instead of racing it: afterwards nothing runs.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_shutdown_joins_an_in_flight_containment() {
     use dam_hopper_server::browser_host::process::live_members;

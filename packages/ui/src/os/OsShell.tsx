@@ -88,7 +88,8 @@ import { generateUUID } from "@/lib/utils.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { editorDiffTabKey, editorFileTabKey, useEditorStore } from "@/stores/editor.js";
-import { normalizeFsTarget, toServerFsTarget, type FsTargetRef } from "@/api/ownership.js";
+import { normalizeFsTarget, type FsTargetRef } from "@/api/ownership.js";
+import { resolveTerminalCreateParams } from "./terminal-launch-lifecycle.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 export function OsShell() {
   const session = useWindowStore((state) => state.session);
@@ -525,12 +526,18 @@ export function OsShell() {
           const originatingProfileId = snap.owner.profileId;
           try {
             const client = getApi(snap.owner);
-            const wireTarget = targetCtx.target ? toServerFsTarget(targetCtx.target) : undefined;
+            const { wireTarget, project: projectParam, cwd: cwdParam } =
+              resolveTerminalCreateParams({
+                target: targetCtx.target,
+                projectId: targetCtx.projectId,
+                cwd: intent.payload.cwd,
+                directoryKind: intent.payload.directoryKind,
+              });
             const session = await client.terminal.create({
               id: terminalId,
               command: "",
-              project: targetCtx.projectId,
-              cwd: intent.payload.cwd ?? undefined,
+              project: projectParam,
+              cwd: cwdParam,
               target: wireTarget,
               cols: 80,
               rows: 24,
