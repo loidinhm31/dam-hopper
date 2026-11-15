@@ -559,3 +559,18 @@ fn test_stage_candidate_units_roles() {
     assert!(pending_units.join("dam-hopper-web.conf").exists());
     assert!(pending_units.join("dam-hopper-recovery.service").exists());
 }
+
+/// The API unit shares one cgroup with its supervised Chromium trees, PTY agents and any build or
+/// test run from a terminal: it must ship resource containment, and OOMPolicy=continue so a single
+/// OOM kill inside the cgroup does not stop every terminal and agent with it.
+#[test]
+fn api_unit_ships_resource_containment_in_template_and_checked_in_unit() {
+    for (label, unit) in [("template", API_TEMPLATE), ("checked-in", CHECKED_IN_API_UNIT)] {
+        for directive in ["MemoryHigh=75%", "MemoryMax=90%", "TasksMax=16384", "OOMPolicy=continue"] {
+            assert!(
+                unit.lines().any(|line| line == directive),
+                "{label} API unit must declare {directive}"
+            );
+        }
+    }
+}

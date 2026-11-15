@@ -31,6 +31,16 @@ KillMode=mixed
 TimeoutStopSec=20s
 UMask=0077
 NoNewPrivileges=false
+# Resource containment. Browser sessions (Chromium trees), PTY agents and test runs started from
+# terminals all live in this cgroup, so an unbounded workload can exhaust the host. MemoryHigh
+# throttles and reclaims first; MemoryMax is the hard ceiling. OOMPolicy=continue keeps one OOM
+# kill inside the unit from stopping the whole service. Tune with a drop-in, for example
+# /etc/systemd/system/dam-hopper-api.service.d/resource-limits.conf (see deploy/systemd/
+# resource-limits.conf.example for CPUQuota= and per-host sizing).
+MemoryHigh=75%
+MemoryMax=90%
+TasksMax=16384
+OOMPolicy=continue
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=dam-hopper-api

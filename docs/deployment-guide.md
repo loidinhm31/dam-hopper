@@ -135,6 +135,22 @@ The `start` command installs concrete systemd units, reloads `systemd`, starts c
 
 **First-Account Provisioning (Post-Activation):** DamHopper does not expose a public registration endpoint. After `sudo dam-hopper start` succeeds, run `sudo -u <API_USER> dam-hopper-server create-admin --username <username> --db /var/lib/dam-hopper/auth.db` to create your administrator account directly in SQLite (you will be prompted securely for password without echo), then log in and complete TOTP MFA enrollment ([Authentication API](./api/authentication.md)). Never pass passwords as command-line arguments in production, and never use the server's `server-token` signing secret as a client credential.
 
+### Resource Containment (`dam-hopper-api.service`)
+
+The API unit ships conservative cgroup limits (`MemoryHigh=75%`, `MemoryMax=90%`, `TasksMax=16384`, `OOMPolicy=continue`). The server, its supervised Chromium trees, PTY agents, and any test run started from a DamHopper terminal share this one cgroup, so an unbounded workload can otherwise exhaust the whole host. `MemoryHigh` throttles and reclaims first; `OOMPolicy=continue` keeps a single OOM kill from stopping every terminal and agent.
+
+Per-host sizing and a CPU cap go in a drop-in, never in the unit itself. The shipped example caps the unit at `MemoryHigh=4G` / `MemoryMax=5G` and `CPUQuota=480%` (30% of a 16-core host; `CPUQuota` is a percentage of one core, so use `$((30 * $(nproc)))%` elsewhere):
+
+```bash
+sudo install -D -m 0644 deploy/systemd/resource-limits.conf.example \
+  /etc/systemd/system/dam-hopper-api.service.d/resource-limits.conf
+sudoedit /etc/systemd/system/dam-hopper-api.service.d/resource-limits.conf   # size from measurements
+sudo systemctl daemon-reload            # limits apply to the running unit; no restart needed
+systemctl show dam-hopper-api -p MemoryHigh,MemoryMax,CPUQuotaPerSecUSec,TasksMax,OOMPolicy
+```
+
+Measure before choosing numbers (`memory.peak`, `memory.current`, `pids.peak`, and `memory.events` under `/sys/fs/cgroup/system.slice/dam-hopper-api.service/`); `memory.events` `high` counts climbing while idle mean `MemoryHigh` is too low. Roll back by deleting the drop-in and running `sudo systemctl daemon-reload`. Run browser-heavy test suites in a separate scope so an OOM there cannot take the service down: `sudo systemd-run --scope --uid=$USER -p MemoryHigh=12G -p MemoryMax=16G -p CPUQuota=800% -- <command>`.
+
 ### Rollback and Recovery
 
 ```bash

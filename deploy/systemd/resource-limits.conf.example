@@ -1,0 +1,24 @@
+# Optional per-host override for dam-hopper-api.service.
+# Install as /etc/systemd/system/dam-hopper-api.service.d/resource-limits.conf, then:
+#   sudo systemctl daemon-reload
+# The new limits apply to the running unit without a restart (cgroup v2).
+#
+# Size from measurements, not guesses:
+#   cat /sys/fs/cgroup/system.slice/dam-hopper-api.service/{memory.peak,memory.current,pids.peak}
+#   grep -E '^(anon|file) ' /sys/fs/cgroup/system.slice/dam-hopper-api.service/memory.stat
+# memory.high events climbing while idle mean MemoryHigh is too low:
+#   cat /sys/fs/cgroup/system.slice/dam-hopper-api.service/memory.events
+#
+# Rollback: delete this file and run `sudo systemctl daemon-reload`.
+
+[Service]
+# Whole-unit budget: the server, every supervised Chromium tree, PTY agents and any build/test
+# started from a DamHopper terminal share it. MemoryHigh throttles and reclaims first (page cache
+# is reclaimed, not killed); MemoryMax is the hard ceiling.
+MemoryHigh=4G
+MemoryMax=5G
+# CPUQuota is a percentage of ONE core. 30% of this 16-core host = 16 * 30% = 480%.
+# Use `CPUQuota=$((30 * $(nproc)))%` to recompute on another machine.
+CPUQuota=480%
+TasksMax=16384
+OOMPolicy=continue
