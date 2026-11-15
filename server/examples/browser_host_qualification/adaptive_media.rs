@@ -19,14 +19,20 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use dam_hopper_server::auth::model::{chrono_to_bson, AuthClaims, AuthSession, UserRecord, UserRole};
+use dam_hopper_server::auth::model::{
+    chrono_to_bson, AuthClaims, AuthSession, UserRecord, UserRole,
+};
 use dam_hopper_server::browser_host::config::{BrowserHostConfig, PublicServerOrigin};
 
 use crate::fixtures;
 use crate::stream_metrics::{env_or, stream_metrics};
 
 /// Loopback policy for a listen address: non-loopback only with an explicit opt-in.
-fn validate_listen_addr(name: &str, addr: SocketAddr, allow_non_loopback: bool) -> Result<SocketAddr, String> {
+fn validate_listen_addr(
+    name: &str,
+    addr: SocketAddr,
+    allow_non_loopback: bool,
+) -> Result<SocketAddr, String> {
     if addr.ip().is_loopback() || allow_non_loopback {
         Ok(addr)
     } else {
@@ -43,19 +49,25 @@ fn random_hex(bytes: usize) -> String {
     use std::fmt::Write;
     let mut buf = vec![0u8; bytes];
     rand::rngs::OsRng.fill_bytes(&mut buf);
-    buf.iter().fold(String::with_capacity(bytes * 2), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
+    buf.iter()
+        .fold(String::with_capacity(bytes * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 /// Writes `contents` to `path`, owner-only (temp file + rename: readers never see a partial file).
 fn write_private(path: &str, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = format!("{path}.tmp");
     let _ = std::fs::remove_file(&tmp);
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let mut file = opts.open(&tmp)?;
     file.write_all(contents.as_bytes())?;
     file.sync_all()?;
     std::fs::rename(tmp, path)
@@ -72,12 +84,24 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_writer(std::io::stderr)
         .try_init();
     let allow_non_loopback = std::env::var("QUAL_ALLOW_NON_LOOPBACK").is_ok_and(|v| v == "1");
-    let work = PathBuf::from(std::env::var("QUAL_WORK_DIR").map_err(|_| "QUAL_WORK_DIR is required")?);
-    let listen = validate_listen_addr("QUAL_LISTEN", env_or("QUAL_LISTEN", "127.0.0.1:18080").parse()?, allow_non_loopback)?;
-    let aux_addr = validate_listen_addr("QUAL_AUX_ADDR", env_or("QUAL_AUX_ADDR", "127.0.0.1:18090").parse()?, false)?;
+    let work =
+        PathBuf::from(std::env::var("QUAL_WORK_DIR").map_err(|_| "QUAL_WORK_DIR is required")?);
+    let listen = validate_listen_addr(
+        "QUAL_LISTEN",
+        env_or("QUAL_LISTEN", "127.0.0.1:18080").parse()?,
+        allow_non_loopback,
+    )?;
+    let aux_addr = validate_listen_addr(
+        "QUAL_AUX_ADDR",
+        env_or("QUAL_AUX_ADDR", "127.0.0.1:18090").parse()?,
+        false,
+    )?;
     let web_dir = PathBuf::from(env_or("QUAL_WEB_DIR", "../apps/web/dist"));
     let exec = dam_hopper_server::browser_host::process::find_browser_executable(
-        std::env::var("DAM_HOPPER_BROWSER_EXECUTABLE").ok().map(PathBuf::from).as_deref(),
+        std::env::var("DAM_HOPPER_BROWSER_EXECUTABLE")
+            .ok()
+            .map(PathBuf::from)
+            .as_deref(),
     )?;
     let origin = env_or("QUAL_PUBLIC_ORIGIN", "http://127.0.0.1:18080");
     let fixture_origin = format!("http://{aux_addr}");
@@ -114,13 +138,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config_path: work.join("dam-hopper.toml"),
     };
     let store = dam_hopper_server::auth::AuthStore::open_sqlite(&work.join("auth.db")).await?;
-    let setup = opaque_ke::ServerSetup::<dam_hopper_server::crypto::DamHopperOpaqueSuite>::new(&mut rand::rngs::OsRng);
+    let setup = opaque_ke::ServerSetup::<dam_hopper_server::crypto::DamHopperOpaqueSuite>::new(
+        &mut rand::rngs::OsRng,
+    );
     let state = dam_hopper_server::state::AppState::new(
         work.clone(),
         config,
         dam_hopper_server::config::GlobalConfig::default(),
         pty_manager,
-        dam_hopper_server::agent_store::AgentStoreService::new(work.join(".dam-hopper/agent-store")),
+        dam_hopper_server::agent_store::AgentStoreService::new(
+            work.join(".dam-hopper/agent-store"),
+        ),
         event_sink,
         jwt_secret.clone(),
         dam_hopper_server::fs::FsSubsystem::new(vec![]),
@@ -134,10 +162,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         setup,
         dam_hopper_server::diagnostics::DiagnosticStore::new(work.join("diagnostics.jsonl")),
     )?
-    .with_auth_service(Arc::new(dam_hopper_server::auth::AuthService::with_system_clock(
-        Some(store.clone()),
-        None,
-    )))
+    .with_auth_service(Arc::new(
+        dam_hopper_server::auth::AuthService::with_system_clock(Some(store.clone()), None),
+    ))
     .with_public_server_origin(Some(PublicServerOrigin::parse(&origin)?));
 
     // One real admin session; both viewers use its bearer token like the e2e fixtures.
@@ -182,7 +209,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     .encode(&jwt_secret)?;
 
     let listener = tokio::net::TcpListener::bind(listen).await?;
-    state.record_bound_listener(listener.local_addr()?).map_err(|_| "listener already recorded")?;
+    state
+        .record_bound_listener(listener.local_addr()?)
+        .map_err(|_| "listener already recorded")?;
     let router = dam_hopper_server::api::router::build_router_with_web_dir_and_origins(
         state,
         dam_hopper_server::api::router::parse_cors_origins(Some(&origin))?,
@@ -204,7 +233,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         write_private(&path, &serde_json::to_string(&ready)?)?;
     }
     eprintln!("[adaptive-media] ready origin={origin} fixtures={fixture_origin}");
-    axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -225,15 +258,26 @@ mod tests {
 
     #[test]
     fn non_loopback_is_rejected_without_opt_in_and_names_the_variable() {
-        for s in ["0.0.0.0:18080", "[::]:18080", "10.0.1.1:18080", "192.168.1.5:1"] {
+        for s in [
+            "0.0.0.0:18080",
+            "[::]:18080",
+            "10.0.1.1:18080",
+            "192.168.1.5:1",
+        ] {
             let err = validate_listen_addr("QUAL_LISTEN", addr(s), false).unwrap_err();
-            assert!(err.contains("QUAL_LISTEN") && err.contains("QUAL_ALLOW_NON_LOOPBACK"), "{err}");
+            assert!(
+                err.contains("QUAL_LISTEN") && err.contains("QUAL_ALLOW_NON_LOOPBACK"),
+                "{err}"
+            );
         }
     }
 
     #[test]
     fn explicit_opt_in_allows_non_loopback() {
-        assert_eq!(validate_listen_addr("X", addr("0.0.0.0:18080"), true), Ok(addr("0.0.0.0:18080")));
+        assert_eq!(
+            validate_listen_addr("X", addr("0.0.0.0:18080"), true),
+            Ok(addr("0.0.0.0:18080"))
+        );
     }
 
     #[test]
@@ -244,6 +288,7 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    #[cfg(unix)]
     #[test]
     fn private_file_is_owner_only() {
         use std::os::unix::fs::PermissionsExt;
@@ -251,7 +296,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("ready.json");
         write_private(path.to_str().unwrap(), "{}").unwrap();
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
         std::fs::remove_dir_all(dir).unwrap();
     }

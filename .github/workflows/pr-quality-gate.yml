@@ -186,6 +186,28 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm --filter @dam-hopper/ui exec playwright install --with-deps chromium
+      - name: Configure Playwright Chromium for backend host browser
+        shell: bash
+        run: |
+          CHROME_EXEC=""
+          for candidate in /usr/bin/google-chrome; do
+            if [ -f "$candidate" ] && [ -x "$candidate" ] && ! find -L "$candidate" -perm -0002 -print -quit | grep -q .; then
+              CHROME_EXEC="$candidate"
+              break
+            fi
+          done
+          if [ -z "$CHROME_EXEC" ]; then
+            CHROME_EXEC="$(pnpm --filter @dam-hopper/ui exec node -e 'import("playwright").then((p) => process.stdout.write(p.chromium.executablePath()))')"
+          fi
+          test -f "$CHROME_EXEC"
+          test -x "$CHROME_EXEC"
+          if find -L "$CHROME_EXEC" -perm -0002 -print -quit | grep -q .; then
+            echo "Browser executable has unsafe world-writable permissions: $CHROME_EXEC"
+            exit 1
+          fi
+          echo "DAM_HOPPER_BROWSER_EXECUTABLE=$CHROME_EXEC" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

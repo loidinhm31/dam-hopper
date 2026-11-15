@@ -21,7 +21,9 @@ use dam_hopper_server::pty::{BroadcastEventSink, EventSink, PtySessionManager};
 
 fn resolve_test_executable() -> Option<PathBuf> {
     if let Ok(p) = find_browser_executable(None) {
-        return Some(p);
+        if BrowserHostConfig::validate_executable_permissions(&p).is_ok() {
+            return Some(p);
+        }
     }
     for candidate in &[
         "/usr/bin/google-chrome",
@@ -29,7 +31,7 @@ fn resolve_test_executable() -> Option<PathBuf> {
         "/usr/bin/chromium",
     ] {
         let p = PathBuf::from(candidate);
-        if p.is_file() {
+        if p.is_file() && BrowserHostConfig::validate_executable_permissions(&p).is_ok() {
             return Some(p);
         }
     }
@@ -99,11 +101,14 @@ async fn test_platform_sandbox_and_security_containment_prerequisites() {
     #[cfg(unix)]
     {
         // On Unix, platform containment is supported
-        assert!(
-            caps.available,
-            "Linux platform containment must be available when browser executable exists"
-        );
-        assert!(caps.engine_qualified);
+        if host_cfg.executable_path.is_some() {
+            assert!(
+                caps.available,
+                "Linux platform containment must be available when browser executable exists: {:?}",
+                caps.unavailable_reason
+            );
+            assert!(caps.engine_qualified);
+        }
     }
 
     #[cfg(not(unix))]
@@ -266,7 +271,11 @@ async fn test_reset_tombstone_ordering_and_restart_fencing() {
 
     let caps2 = manager.capabilities("test-subject", false).await;
     if config.executable_path.is_some() {
-        assert!(caps2.available);
+        assert!(
+            caps2.available,
+            "Capabilities must be available after tombstone cleared: {:?}",
+            caps2.unavailable_reason
+        );
     }
 }
 
