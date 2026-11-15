@@ -672,6 +672,8 @@ pub struct ScreencastProducer {
     geometry: Arc<RwLock<TargetGeometry>>,
     /// Native evidence gate for pointer projection (see `input_geometry_trusted`).
     geometry_trusted: Arc<AtomicBool>,
+    /// Production sessions opt in (`with_native_geometry_repair`); see `schedule_native_geometry_repair`.
+    native_geometry_repair_enabled: Arc<AtomicBool>,
     /// A raw CDP agent has changed this target's geometry: native/producer disagreement is then
     /// an agent decision, never engine drift, so it is not repaired (see `schedule_native_geometry_repair`).
     external_geometry_fenced: Arc<AtomicBool>,
@@ -825,6 +827,7 @@ impl ScreencastProducer {
             active_run_cancel: Arc::new(Mutex::new(None)),
             geometry: Arc::new(RwLock::new(initial_geometry)),
             geometry_trusted: Arc::new(AtomicBool::new(true)),
+            native_geometry_repair_enabled: Arc::new(AtomicBool::new(false)),
             external_geometry_fenced: Arc::new(AtomicBool::new(false)),
             native_geometry_repairs: Arc::new(AtomicU32::new(0)),
             native_geometry_repair_in_flight: Arc::new(AtomicBool::new(false)),
@@ -842,6 +845,14 @@ impl ScreencastProducer {
 
     pub(crate) fn with_selection_context(mut self, state: crate::state::AppState) -> Self {
         self.selection_context = Some(state);
+        self
+    }
+
+    /// Enables self-repair of an engine viewport that drifted from the producer geometry
+    /// (see `schedule_native_geometry_repair`). Off by default so harnesses that script native
+    /// frames keep full control of the trust gate.
+    pub fn with_native_geometry_repair(self) -> Self {
+        self.native_geometry_repair_enabled.store(true, Ordering::Release);
         self
     }
 
@@ -1479,7 +1490,8 @@ impl ScreencastProducer {
     /// unchanged geometry and epoch. Skipped once a raw agent has fenced the geometry (that disagreement is
     /// the agent's intent), and bounded per disagreement.
     fn schedule_native_geometry_repair(&self) {
-        if self.external_geometry_fenced.load(Ordering::Acquire)
+        if !self.native_geometry_repair_enabled.load(Ordering::Acquire)
+            || self.external_geometry_fenced.load(Ordering::Acquire)
             || self.native_geometry_repairs.load(Ordering::Relaxed) >= MAX_NATIVE_GEOMETRY_REPAIRS
             || self.native_geometry_repair_in_flight.swap(true, Ordering::AcqRel)
         {
@@ -3619,6 +3631,7 @@ impl ScreencastProducer {
             active_run_cancel: self.active_run_cancel.clone(),
             geometry: self.geometry.clone(),
             geometry_trusted: self.geometry_trusted.clone(),
+            native_geometry_repair_enabled: self.native_geometry_repair_enabled.clone(),
             external_geometry_fenced: self.external_geometry_fenced.clone(),
             native_geometry_repairs: self.native_geometry_repairs.clone(),
             native_geometry_repair_in_flight: self.native_geometry_repair_in_flight.clone(),

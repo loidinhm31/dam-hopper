@@ -528,6 +528,7 @@ async fn build_producer(
         )
         .with_capture_policy(fps, jpeg_quality)
         .with_image_bounds(max_width, max_height)
+        .with_native_geometry_repair()
         .with_selection_context(state.clone()),
     );
     let initial_nav_rev = crate::browser_host::decimal_counter::parse_canonical_u64(&snapshot.dto.navigation_revision, false).unwrap_or(1);
