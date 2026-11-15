@@ -3330,17 +3330,32 @@ impl EngineRig {
         Some(rig)
     }
 
+    /// Evaluates on the producer's CURRENT Page session. The producer may legitimately replace its
+    /// dedicated Page session (recovery) while the page itself survives, so the session id cached at
+    /// rig creation can go stale. "Session with given id not found" (-32001) proves the command
+    /// never ran, so re-resolving the session and retrying cannot double-apply it; every other
+    /// protocol error still fails the test immediately.
     async fn eval(&self, expression: &str) -> Value {
-        let res = self
-            .client
-            .send_command(
-                "Runtime.evaluate",
-                Some(json!({ "expression": expression, "returnByValue": true })),
-                Some(&self.page_sid),
-            )
-            .await
-            .expect("Runtime.evaluate");
-        res["result"]["value"].clone()
+        let mut attempt = 0;
+        loop {
+            let sid = self.producer.ensure_page_session().await.unwrap_or_else(|_| self.page_sid.clone());
+            match self
+                .client
+                .send_command(
+                    "Runtime.evaluate",
+                    Some(json!({ "expression": expression, "returnByValue": true })),
+                    Some(&sid),
+                )
+                .await
+            {
+                Ok(res) => return res["result"]["value"].clone(),
+                Err(dam_hopper_server::browser_host::cdp::CdpError::Protocol { code: -32001, .. }) if attempt < 5 => {
+                    attempt += 1;
+                    sleep(Duration::from_millis(100)).await;
+                }
+                Err(err) => panic!("Runtime.evaluate: {err:?}"),
+            }
+        }
     }
 
     /// Page-side `(innerWidth, innerHeight, devicePixelRatio)`.
