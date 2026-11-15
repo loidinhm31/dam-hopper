@@ -51,6 +51,23 @@ test.describe("Host Browser Native Tabs & Session Continuity (A01, A04, A07, A08
 
       // Reload SPA: reattaches exact sessions without re-creating targets
       const postCountBefore = sessionPosts.length;
+      // Window state persistence is asynchronous: reloading before both tabs reached storage
+      // would legitimately restore only the persisted one.
+      await expect
+        .poll(
+          () =>
+            page.evaluate(() => {
+              const raw = localStorage.getItem("dam-hopper:os:v1:session");
+              if (!raw) return 0;
+              const windows = Object.values(JSON.parse(raw).windows ?? {}) as Array<{
+                appId?: string;
+                appState?: { tabs?: unknown[] };
+              }>;
+              return windows.find((w) => w.appId === "browser")?.appState?.tabs?.length ?? 0;
+            }),
+          { timeout: 10_000 },
+        )
+        .toBe(2);
       await page.reload();
       await expect(page.locator("[data-os-shell='true']")).toBeVisible();
 

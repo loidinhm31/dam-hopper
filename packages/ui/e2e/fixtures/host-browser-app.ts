@@ -278,7 +278,26 @@ function runCommand(
   return promise;
 }
 
+/**
+ * Starts an isolated host. Free ports are probed and released before the server binds them, so a
+ * parallel process can steal one in between ("Address already in use"): retry with fresh ports.
+ */
 export async function startHostBrowserAppServer(
+  options: HostBrowserAppOptions = {},
+): Promise<HostBrowserAppServer> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await startHostBrowserAppServerOnce(options);
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof Error) || !/Address already in use/.test(error.message)) throw error;
+    }
+  }
+  throw lastError;
+}
+
+async function startHostBrowserAppServerOnce(
   options: HostBrowserAppOptions = {},
 ): Promise<HostBrowserAppServer> {
   const browserExec = findBrowserExecutable();

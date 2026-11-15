@@ -820,16 +820,20 @@ type = "custom"
       const dragStartX = imgLeft + 38 * scale;
       const dragEndX = imgLeft + 560 * scale;
       const dragY = imgTop + 60 * scale;
-      await page.mouse.move(dragStartX, dragY);
-      await page.mouse.down();
-      await page.mouse.move(dragEndX, dragY, { steps: 10 });
-      await page.mouse.up();
-
       const copyBtn = page.locator('[data-testid="browser-copy-selection-btn"]').first();
-      await expect(copyBtn).toBeEnabled({ timeout: 10_000 });
-      await copyBtn.click();
       const copyStatus = page.locator('[data-testid="browser-copy-selection-status"]').first();
-      await expect(copyStatus).toContainText("Copied", { timeout: 10_000 });
+      // Viewer input is display-only while the stream's frames are input-untrusted (startup, or
+      // right after the producer re-establishes the native viewport): re-issue the drag until
+      // the remote page reports a selection that Copy can read.
+      await expect(async () => {
+        await page.mouse.move(dragStartX, dragY);
+        await page.mouse.down();
+        await page.mouse.move(dragEndX, dragY, { steps: 10 });
+        await page.mouse.up();
+        await expect(copyBtn).toBeEnabled({ timeout: 3_000 });
+        await copyBtn.click();
+        await expect(copyStatus).toContainText("Copied", { timeout: 3_000 });
+      }).toPass({ timeout: 30_000 });
       const copiedText = await page.evaluate(() => navigator.clipboard.readText());
       expect(copiedText.length).toBeGreaterThan(0);
       expect("SelectThisExactPhraseWithMouse").toContain(copiedText.trim());
@@ -856,8 +860,10 @@ type = "custom"
       btnClickHits = 0;
       const btnX = imgLeft + (40 + 150) * scale;
       const btnY = imgTop + (104 + 50) * scale;
-      await page.mouse.click(btnX, btnY);
-      await expect.poll(() => btnClickHits, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+      await expect(async () => {
+        await page.mouse.click(btnX, btnY);
+        await expect.poll(() => btnClickHits, { timeout: 3_000 }).toBeGreaterThanOrEqual(1);
+      }).toPass({ timeout: 30_000 });
       await expect(page.locator('[data-testid="browser-selection-preview-card"]')).toHaveCount(0);
     } finally {
       await context.close();
