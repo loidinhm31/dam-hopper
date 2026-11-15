@@ -57,6 +57,9 @@ pub const TRANSITIONAL_EPOCH_MASK: u64 = 1 << 63;
 /// Geometry transitions re-run per native/producer disagreement before giving up.
 const MAX_NATIVE_GEOMETRY_REPAIRS: u32 = 3;
 
+/// How long a native/producer disagreement must persist before the producer repairs it.
+const NATIVE_GEOMETRY_REPAIR_DEBOUNCE: Duration = Duration::from_millis(400);
+
 /// Constructs the video streaming governor ticker interval with Skip missed-tick behavior.
 pub fn create_governor_interval(period: Duration) -> tokio::time::Interval {
     let mut ticker = tokio::time::interval(period);
@@ -1482,11 +1485,16 @@ impl ScreencastProducer {
         {
             return;
         }
-        self.native_geometry_repairs.fetch_add(1, Ordering::Relaxed);
         let this = self.clone_handle();
         tokio::spawn(async move {
-            if let Err(e) = this.repair_native_viewport().await {
-                warn!(error = %e, "native geometry repair failed");
+            // Debounce: a confirming native frame inside the window restores trust by evidence
+            // and cancels the repair; only a disagreement that persists is repaired.
+            tokio::time::sleep(NATIVE_GEOMETRY_REPAIR_DEBOUNCE).await;
+            if !this.input_geometry_trusted() && !this.external_geometry_fenced.load(Ordering::Acquire) {
+                this.native_geometry_repairs.fetch_add(1, Ordering::Relaxed);
+                if let Err(e) = this.repair_native_viewport().await {
+                    warn!(error = %e, "native geometry repair failed");
+                }
             }
             this.native_geometry_repair_in_flight.store(false, Ordering::Release);
         });
