@@ -635,6 +635,12 @@ async fn run_production_gateway(
     _auth_token: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let exec = find_browser_executable(None)?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let local_addr = listener.local_addr()?;
+    let port = local_addr.port();
+    let public_origin = dam_hopper_server::browser_host::config::PublicServerOrigin::parse(
+        &format!("http://127.0.0.1:{port}"),
+    )?;
     let tmp = tempdir()?;
     let workspace_root = tmp.path().to_path_buf();
     let jwt_secret = "qual-secret-jwt-key-32-bytes-long!!!".to_string();
@@ -693,7 +699,8 @@ async fn run_production_gateway(
         None,
         opaque_setup,
         diagnostics,
-    )?;
+    )?
+    .with_public_server_origin(Some(public_origin));
 
     let db_path = workspace_root.join("auth.db");
     let store = dam_hopper_server::auth::AuthStore::open_sqlite(&db_path).await?;
@@ -807,9 +814,6 @@ async fn run_production_gateway(
         }
     }
 
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let local_addr = listener.local_addr()?;
-    let port = local_addr.port();
 
     let allowed_origin = std::env::var("DAM_HOPPER_QUALIFICATION_ALLOWED_ORIGIN")
         .unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));

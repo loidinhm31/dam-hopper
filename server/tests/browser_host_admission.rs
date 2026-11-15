@@ -967,7 +967,10 @@ async fn test_request_policy_blocks_forbidden_redirect_and_subresource_on_chromi
     let a_ok_before = hit_count(&a_hits, "/ok.png");
 
     // The browser owner, not the producer, installs the policy before creating this target.
-    client.install_browser_request_policy(policy, Arc::new(|_| {})).await.unwrap();
+    client
+        .install_browser_request_policy(policy, Arc::new(|_| {}))
+        .await
+        .unwrap();
     let policed = new_producer(&client).await;
     navigate(&policed, &format!("http://127.0.0.1:{a_port}/redirect")).await;
     wait_until("policed redirect request", || {
@@ -1644,6 +1647,7 @@ async fn test_raw_page_destruction_retires_exact_session_and_ttl_reaps_history()
 
 /// L8: a browser crash retires every session of the incarnation (slots freed, producers gone),
 /// the lost sessions keep their old incarnation, and a new create runs on a NEW incarnation.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_browser_crash_retires_all_sessions_and_new_incarnation_creates_fresh() {
     let Some(env) = native_env("admin-native-crash", 2, vec![]).await else {
@@ -2009,7 +2013,11 @@ async fn test_simultaneous_half_pair_flood_is_bounded_and_timer_reaped() {
             Err(other) => panic!("unexpected: {other}"),
         }
     }
-    assert_eq!((regs.len(), refused), (CAP, 24 - CAP), "flood admitted beyond capacity");
+    assert_eq!(
+        (regs.len(), refused),
+        (CAP, 24 - CAP),
+        "flood admitted beyond capacity"
+    );
     assert_eq!(COUNTER.load(Ordering::SeqCst), CAP);
 
     tokio::task::yield_now().await;
@@ -2020,7 +2028,11 @@ async fn test_simultaneous_half_pair_flood_is_bounded_and_timer_reaped() {
         "each half pair is reaped by its own timer with no later traffic"
     );
     drop(regs);
-    assert_eq!(COUNTER.load(Ordering::SeqCst), 0, "capacity returns with the sockets' permits");
+    assert_eq!(
+        COUNTER.load(Ordering::SeqCst),
+        0,
+        "capacity returns with the sockets' permits"
+    );
     let again = mgr
         .register_pair_connection(&admitted("late-viewer".to_string()), || {
             ViewerPermit::try_acquire_in(&COUNTER, CAP)

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as readline from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
+import { findBrowserExecutable } from "./host-browser-app.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export const REPO_ROOT = path.resolve(__dirname, "../../../..");
@@ -384,11 +385,7 @@ export async function launchQualificationServer(
   const { promise, resolve, reject } = Promise.withResolvers<QualificationServerInfo>();
 
   const isUnix = process.platform !== "win32";
-  const browserExec =
-    process.env.DAM_HOPPER_BROWSER_EXECUTABLE ||
-    ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"].find((p) =>
-      fs.existsSync(p)
-    );
+  const browserExec = findBrowserExecutable();
   const child: ChildProcess = spawn(executablePath, [], {
     cwd: REPO_ROOT,
     env: {

@@ -11,6 +11,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createBrowserStorageState } from "../fixtures/application-storage-state.js";
+import { findBrowserExecutable } from "../fixtures/host-browser-app.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,16 +35,6 @@ function getFreePort(): Promise<number> {
   return promise;
 }
 
-function findBrowserExecutable(): string | undefined {
-  if (process.env.DAM_HOPPER_BROWSER_EXECUTABLE) {
-    return process.env.DAM_HOPPER_BROWSER_EXECUTABLE;
-  }
-  return [
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-    "/usr/bin/google-chrome",
-  ].find((p) => fs.existsSync(p));
-}
 
 function killGroup(pgid: number, signal: NodeJS.Signals): void {
   try {
@@ -315,7 +306,8 @@ test.describe("Host Browser Managed CDP Selection & Atomic Terminal Handoff E2E"
     const browserProfileRoot = path.join(tempRoot, "browser-profiles");
     await fsp.mkdir(configDir, { recursive: true });
     await fsp.mkdir(projectDir, { recursive: true });
-    await fsp.mkdir(browserProfileRoot, { recursive: true });
+    await fsp.mkdir(browserProfileRoot, { recursive: true, mode: 0o700 });
+    await fsp.chmod(browserProfileRoot, 0o700);
 
     const serverToken = randomUUID().replace(/-/g, "");
     const mfaKeyHex = randomBytes(32).toString("hex");
@@ -330,6 +322,7 @@ test.describe("Host Browser Managed CDP Selection & Atomic Terminal Handoff E2E"
 
     const toml = `[workspace]
 name = "sel-e2e"
+root = "${workspaceDir}"
 
 [server]
 session_db_path = "${path.join(tempRoot, "session.db")}"
@@ -340,6 +333,7 @@ executable_path = "${browserExec}"
 profile_root = "${browserProfileRoot}"
 allowed_target_origins = ["http://127.0.0.1:${targetPort}"]
 
+[[projects]]
 name = "sel-project"
 path = "${projectDir}"
 type = "custom"
@@ -398,13 +392,24 @@ type = "custom"
         detached: process.platform !== "win32",
       },
     );
-    // Drain stdout/stderr pipes to prevent buffer backpressure
-    serverProc.stdout?.resume();
-    serverProc.stderr?.resume();
+    let serverOutput = "";
+    const recordOutput = (chunk: Buffer) => {
+      serverOutput = (serverOutput + chunk.toString()).slice(-65_536);
+    };
+    serverProc.stdout?.on("data", recordOutput);
+    serverProc.stderr?.on("data", recordOutput);
+    let earlyExit: string | null = null;
+    serverProc.once("exit", (code, signal) => {
+      earlyExit = `code=${code ?? "null"} signal=${signal ?? "null"}`;
+    });
+
     // Wait for readiness (/api/health within 20s)
     const readyDeadline = Date.now() + 20_000;
     let ready = false;
     while (Date.now() < readyDeadline) {
+      if (earlyExit !== null) {
+        break;
+      }
       try {
         const res = await fetch(`${appOrigin}/api/health`);
         if (res.ok) {
@@ -417,7 +422,9 @@ type = "custom"
       await sleep(150);
     }
     if (!ready) {
-      throw new Error("dam-hopper-server failed readiness check within 20s");
+      throw new Error(
+        `dam-hopper-server failed readiness check within 20s (${earlyExit ?? "still running"}). Output:\n${serverOutput}`,
+      );
     }
   });
 
@@ -434,6 +441,27 @@ type = "custom"
     }
     if (tempRoot && fs.existsSync(tempRoot)) {
       await fsp.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test.afterEach(async () => {
+    if (!appOrigin || !authToken) return;
+    try {
+      const listRes = await fetch(`${appOrigin}/api/browser/sessions`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!listRes.ok) return;
+      const rows = (await listRes.json()) as Array<{ browserSessionId?: string }>;
+      for (const row of rows) {
+        if (row.browserSessionId) {
+          await fetch(`${appOrigin}/api/browser/sessions/${encodeURIComponent(row.browserSessionId)}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+        }
+      }
+    } catch {
+      // ignore cleanup failures when server is down
     }
   });
 

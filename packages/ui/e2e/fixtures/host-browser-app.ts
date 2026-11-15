@@ -1,4 +1,4 @@
-import { test as base, expect, type Page } from "@playwright/test";
+import { test as base, expect, chromium, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
@@ -60,15 +60,28 @@ export function getFreePort(): Promise<number> {
   return promise;
 }
 
+function isSafeExecutable(filePath: string): boolean {
+  try {
+    const st = fs.statSync(filePath);
+    if (!st.isFile()) return false;
+    if (process.platform !== "win32" && (st.mode & 0o002) !== 0) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function findBrowserExecutable(): string | undefined {
   if (process.env.DAM_HOPPER_BROWSER_EXECUTABLE) {
     return process.env.DAM_HOPPER_BROWSER_EXECUTABLE;
   }
-  return [
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium-browser",
+  const candidates = [
     "/usr/bin/chromium",
-  ].find((p) => fs.existsSync(p));
+    "/usr/bin/chromium-browser",
+    chromium.executablePath(),
+    "/usr/bin/google-chrome",
+  ];
+  return candidates.find((p): p is string => Boolean(p && isSafeExecutable(p)));
 }
 
 function killGroup(pgid: number, signal: NodeJS.Signals): void {
@@ -312,7 +325,8 @@ export async function startHostBrowserAppServer(
 
   await fsp.mkdir(configDir, { recursive: true });
   await fsp.mkdir(projectDir, { recursive: true });
-  await fsp.mkdir(browserProfileRoot, { recursive: true });
+  await fsp.mkdir(browserProfileRoot, { recursive: true, mode: 0o700 });
+  await fsp.chmod(browserProfileRoot, 0o700);
 
   const serverToken = randomUUID().replace(/-/g, "");
   const mfaKeyHex = randomBytes(32).toString("hex");
@@ -334,6 +348,7 @@ export async function startHostBrowserAppServer(
 
   const toml = `[workspace]
 name = "host-browser-app"
+root = "${workspaceDir}"
 
 [server]
 session_db_path = "${path.join(tempRoot, "session.db")}"

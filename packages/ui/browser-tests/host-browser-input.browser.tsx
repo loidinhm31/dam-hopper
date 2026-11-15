@@ -1,5 +1,5 @@
 import * as React from "react";
-import { act, useRef } from "react";
+import { act, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
@@ -46,50 +46,59 @@ function TestHarness({
   const proxyRef = useRef<TextInputProxyHandle | null>(null);
   const controllerRef = useRef<BrowserInputController | null>(null);
   const leaseRef = useRef<string | null>(controlReady ? null : "lease-test-1");
+  const drawnRectRef = useRef(drawnRect);
+  const socketRef = useRef(socket);
   const pendingPointerRef = useRef<{ down: CanvasPointerInput; up?: CanvasPointerInput } | null>(null);
+  const [controller, setController] = useState<BrowserInputController | null>(null);
 
-  if (!controllerRef.current) {
-    controllerRef.current = new BrowserInputController({
-      getSessionId: () => "sess-test-1",
-      getIncarnation: () => "inc-test-1",
-      getProfileEpoch: () => "1",
-      getSubscriptionEpoch: () => "sub-test-1",
-      getLeaseToken: () => leaseRef.current,
-      getViewportEpoch: () => "1",
-      getDrawnRect: () => drawnRect,
-      getControlSocket: () => socket as unknown as WebSocket,
-    });
-  }
+  useEffect(() => {
+    drawnRectRef.current = drawnRect;
+    socketRef.current = socket;
+  }, [drawnRect, socket]);
 
-  React.useEffect(() => {
-    if (controllerRef.current) {
-      onControllerReady(controllerRef.current, proxyRef.current);
+  useLayoutEffect(() => {
+    let active = controllerRef.current;
+    if (!active) {
+      active = new BrowserInputController({
+        getSessionId: () => "sess-test-1",
+        getIncarnation: () => "inc-test-1",
+        getProfileEpoch: () => "1",
+        getSubscriptionEpoch: () => "sub-test-1",
+        getLeaseToken: () => leaseRef.current,
+        getViewportEpoch: () => "1",
+        getDrawnRect: () => drawnRectRef.current,
+        getControlSocket: () => socketRef.current as unknown as WebSocket,
+      });
+      controllerRef.current = active;
+      setController(active);
     }
+    onControllerReady(active, proxyRef.current);
   }, [onControllerReady]);
 
   return (
     <CanvasView
       controller={null}
       onCanvasPointerDown={(e) => {
-        const controller = controllerRef.current!;
+        const active = controllerRef.current;
+        if (!active) return;
         proxyRef.current?.focus();
-        if (!controlReady) { controller.handlePointerDown(e); return; }
+        if (!controlReady) { active.handlePointerDown(e); return; }
         const pending: { down: CanvasPointerInput; up?: CanvasPointerInput } = { down: {
           currentTarget: e.currentTarget, clientX: e.clientX, clientY: e.clientY,
           button: e.button, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey,
         } };
         pendingPointerRef.current = pending;
-        const handoff = controller.beginControlHandoff(
+        const handoff = active.beginControlHandoff(
           () => pendingPointerRef.current === pending && Boolean(proxyRef.current?.isFocused()),
           () => { pendingPointerRef.current = null; },
         );
         void controlReady.then(() => {
           if (pendingPointerRef.current !== pending) return;
           leaseRef.current = "lease-test-1";
-          controller.handlePointerDown(pending.down);
+          active.handlePointerDown(pending.down);
           const up = pendingPointerRef.current.up;
-          if (up) controller.handlePointerUp(up);
-          controller.completeControlHandoff(handoff, () => {
+          if (up) active.handlePointerUp(up);
+          active.completeControlHandoff(handoff, () => {
             pendingPointerRef.current = null;
             onHandoffComplete?.();
           });
@@ -107,7 +116,7 @@ function TestHarness({
       onCanvasPointerCancel={() => controllerRef.current?.handlePointerCancel()}
       onCanvasWheel={(e) => controllerRef.current?.handleWheel(e)}
     >
-      <TextInputProxy ref={proxyRef} controller={controllerRef.current} />
+      <TextInputProxy ref={proxyRef} controller={controller} />
     </CanvasView>
   );
 }

@@ -601,6 +601,22 @@ async fn build_producer(
             }
             Err(err) => warn!(error = %err, "Initial managed navigation failed"),
         }
+        if producer.input_geometry_trusted() {
+            let geom = producer.geometry().await;
+            let _ = producer
+                .cdp_client
+                .send_command(
+                    "Emulation.setDeviceMetricsOverride",
+                    Some(serde_json::json!({
+                        "width": geom.css_width.round() as u32,
+                        "height": geom.css_height.round() as u32,
+                        "deviceScaleFactor": geom.dpr,
+                        "mobile": false,
+                    })),
+                    Some(&page_sid),
+                )
+                .await;
+        }
     }
     crate::browser_host::selection::ensure_session_navigation_watcher_with_initial(
         state,

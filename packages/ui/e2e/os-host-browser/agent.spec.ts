@@ -126,7 +126,7 @@ test.describe("Host Browser Production CDP Gateway — Agent Interoperability Qu
         purpose: "agentCdp",
         browserSessionId: sessionData.browserSessionId,
         browserIncarnation: sessionData.browserIncarnation,
-        profileEpoch: Number(sessionData.profileEpoch),
+        profileEpoch: String(sessionData.profileEpoch),
       }),
     });
     expect(ticketRes.ok).toBe(true);
