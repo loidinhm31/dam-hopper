@@ -47,7 +47,7 @@
     "check": "pnpm build && pnpm lint && cd server && cargo test"
   },
   "engines": {
-    "node": ">=22.13.0",
+    "node": ">=26.13.0",
     "pnpm": ">=10"
   },
   "devDependencies": {

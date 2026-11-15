@@ -220,7 +220,7 @@ Contributors and source packagers can build the backend and web frontend directl
 ### Prerequisites
 
 - Git
-- Node.js 20+ and pnpm 10+
+- Node.js 26.13.0+ and pnpm 10+
 - Current stable Rust toolchain (container builder pinned to 1.97.1; locked dependency MSRV 1.95)
 
 ### Build Steps

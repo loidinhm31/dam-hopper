@@ -39,7 +39,7 @@ customTest.describe("Host Browser Performance Benchmark & Tuning Grid (A37, A38)
       // 2. Open Browser window in OS shell
       await page.goto(`${hostApp.appOrigin}/os`);
       const dockBrowserBtn = page
-        .locator("aside[aria-label='Application Dock'] button[title='Browser']")
+        .getByTestId("dock-item-browser")
         .first();
       await dockBrowserBtn.click();
 

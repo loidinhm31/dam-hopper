@@ -30,7 +30,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "26"
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -72,7 +72,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "26"
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -90,7 +90,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "26"
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -113,7 +113,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "26"
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -123,7 +123,7 @@ jobs:
         shell: bash
         run: |
           CHROME_EXEC=""
-          for candidate in /usr/bin/chromium /usr/bin/chromium-browser; do
+          for candidate in /usr/bin/google-chrome; do
             if [ -f "$candidate" ] && [ -x "$candidate" ] && ! find -L "$candidate" -perm -0002 -print -quit | grep -q .; then
               CHROME_EXEC="$candidate"
               break
@@ -182,7 +182,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "26"
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -237,7 +237,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "26"
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -257,7 +257,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "26"
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

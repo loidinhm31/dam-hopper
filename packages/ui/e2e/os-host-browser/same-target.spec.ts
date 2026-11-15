@@ -33,7 +33,7 @@ customTest.describe("Host Browser Production Stream & Agent Same-Target Interfer
 
       // 3. Open Browser window in OS shell
       const dockBrowserBtn = page
-        .locator("aside[aria-label='Application Dock'] button[title='Browser']")
+        .getByTestId("dock-item-browser")
         .first();
       await dockBrowserBtn.click();
 

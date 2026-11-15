@@ -346,10 +346,10 @@ async fn artifact_routes_write_private_files_and_delete_them() {
             .unwrap(),
     )
     .unwrap();
-    let png_path = std::path::PathBuf::from(uploaded["pngPath"].as_str().unwrap());
+    let _png_path = std::path::PathBuf::from(uploaded["pngPath"].as_str().unwrap());
     #[cfg(unix)]
     assert_eq!(
-        std::fs::metadata(&png_path).unwrap().permissions().mode() & 0o777,
+        std::fs::metadata(&_png_path).unwrap().permissions().mode() & 0o777,
         0o600
     );
     let duplicate = request(
@@ -894,6 +894,7 @@ fn managed_source(principal: &str) -> ArtifactSource {
     }
 }
 
+#[cfg(unix)]
 /// Makes unlinking inside `dir` fail with a permission error and proves the denial is real.
 fn deny_unlink(dir: &std::path::Path) {
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).unwrap();
@@ -903,6 +904,7 @@ fn deny_unlink(dir: &std::path::Path) {
     );
 }
 
+#[cfg(unix)]
 fn allow_unlink(dir: &std::path::Path) {
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
@@ -914,6 +916,7 @@ fn artifact_dir(json_path: &str) -> std::path::PathBuf {
         .to_path_buf()
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn denied_unlink_on_delete_retires_the_artifact_into_charged_retryable_cleanup() {
     let manager = BrowserDebugArtifactManager::new().unwrap();
@@ -959,6 +962,7 @@ async fn denied_unlink_on_delete_retires_the_artifact_into_charged_retryable_cle
     assert!(!std::path::Path::new(&created.json_path).exists());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn denied_unlink_on_force_invalidate_stays_charged_retryable_and_reports_failure() {
     let manager = BrowserDebugArtifactManager::new().unwrap();
@@ -1006,6 +1010,7 @@ async fn denied_unlink_on_force_invalidate_stays_charged_retryable_and_reports_f
     assert!(!std::path::Path::new(&created.json_path).exists());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn principal_purge_fails_while_private_files_remain_and_ttl_sweeper_retries_it() {
     let manager = BrowserDebugArtifactManager::new().unwrap();
@@ -1221,6 +1226,7 @@ fn spawn_create(
     })
 }
 
+#[cfg(unix)]
 /// Asserts the leftover private file is still owned (charged, owner-qualified, retryable) and
 /// that cleanup completes once unlink works again.
 async fn assert_retained_then_recovered(
@@ -1252,6 +1258,7 @@ async fn assert_retained_then_recovered(
     assert_eq!(files_in(dir), 0);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn cancelled_write_after_persist_with_denied_unlink_stays_charged_and_retryable() {
     let manager = BrowserDebugArtifactManager::new().unwrap();
@@ -1273,6 +1280,7 @@ async fn cancelled_write_after_persist_with_denied_unlink_stays_charged_and_retr
     assert_retained_then_recovered(&manager, &dir).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn cancelled_write_before_persist_with_denied_temp_unlink_stays_charged_and_retryable() {
     let manager = BrowserDebugArtifactManager::new().unwrap();
@@ -1293,6 +1301,7 @@ async fn cancelled_write_before_persist_with_denied_temp_unlink_stays_charged_an
     assert_retained_then_recovered(&manager, &dir).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn failed_publication_with_denied_temp_unlink_stays_charged_and_retryable() {
     let manager = BrowserDebugArtifactManager::new().unwrap();
@@ -1321,6 +1330,7 @@ async fn failed_publication_with_denied_temp_unlink_stays_charged_and_retryable(
     assert_retained_then_recovered(&manager, &dir).await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn write_completed_but_abandoned_with_denied_unlink_stays_charged_and_retryable() {
     let manager = BrowserDebugArtifactManager::new().unwrap();
@@ -1439,12 +1449,14 @@ async fn reset_purge_waits_for_an_unpublished_writer_started_before_its_fence() 
 // Explicit discard of a just-published managed file: cancellation must not forget the file.
 // ---------------------------------------------------------------------------------------------
 
+#[cfg(unix)]
 /// Admits until `admitted` flips, so a test can fail the admission recheck made AFTER the write.
 #[derive(Default)]
 struct SwitchAuthority {
     revoked: std::sync::atomic::AtomicBool,
 }
 
+#[cfg(unix)]
 impl BrowserAdmissionAuthority for SwitchAuthority {
     fn check_managed_admission<'a>(
         &'a self,
@@ -1458,6 +1470,7 @@ impl BrowserAdmissionAuthority for SwitchAuthority {
     }
 }
 
+#[cfg(unix)]
 /// Parks a managed create inside its discard (`cleanup_now`), aborts it there while the unlink
 /// is denied, and expects the published file to stay owned, charged and retryable.
 /// `trigger` runs on the blocking writer right after the file is published, so it decides why
@@ -1548,6 +1561,7 @@ async fn assert_cancelled_discard_keeps_the_file_owned(
         .expect("purge completes once the file is gone");
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn cancelled_discard_after_admission_recheck_failure_keeps_the_denied_file_owned() {
     assert_cancelled_discard_keeps_the_file_owned(|_, authority| {
@@ -1558,6 +1572,7 @@ async fn cancelled_discard_after_admission_recheck_failure_keeps_the_denied_file
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn cancelled_discard_after_generation_rejection_keeps_the_denied_file_owned() {
     let runtime = tokio::runtime::Handle::current();

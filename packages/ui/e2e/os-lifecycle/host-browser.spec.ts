@@ -15,7 +15,7 @@ test.describe("Host Browser OS Lifecycle, Target Cap, and Privacy Qualification"
 
     // 2. Open Browser window from Dock
     const dockBrowserBtn = page
-      .locator("aside[aria-label='Application Dock'] button[title='Browser']")
+      .getByTestId("dock-item-browser")
       .first();
     await expect(dockBrowserBtn).toBeVisible({ timeout: 10_000 });
     await dockBrowserBtn.click();
@@ -305,7 +305,7 @@ test.describe("Host Browser OS Lifecycle, Target Cap, and Privacy Qualification"
       },
       body: JSON.stringify({
         creationKey: key,
-        url: "http://127.0.0.1:9999/different-url",
+        url: `${hostApp.targetPageUrl}?different=1`,
         viewport: { width: 800, height: 600, dpr: 1 },
       }),
     });
@@ -332,7 +332,7 @@ test.describe("Host Browser OS Lifecycle, Target Cap, and Privacy Qualification"
 
     // Launch Browser window from Dock
     const dockBrowserBtn = page
-      .locator("aside[aria-label='Application Dock'] button[title='Browser']")
+      .getByTestId("dock-item-browser")
       .first();
     await dockBrowserBtn.click();
 

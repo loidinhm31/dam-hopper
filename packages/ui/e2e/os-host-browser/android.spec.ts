@@ -40,7 +40,7 @@ customTest.describe("Host Browser Full-SPA Android Web User Journey (A09)", () =
 
       // 3. Open Browser window in mobile OS shell
       const dockBrowserBtn = page
-        .locator("aside[aria-label='Application Dock'] button[title='Browser']")
+        .getByTestId("dock-item-browser")
         .first();
       await dockBrowserBtn.click();
 

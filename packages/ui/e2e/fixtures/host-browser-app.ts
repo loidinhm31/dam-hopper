@@ -76,10 +76,10 @@ export function findBrowserExecutable(): string | undefined {
     return process.env.DAM_HOPPER_BROWSER_EXECUTABLE;
   }
   const candidates = [
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    chromium.executablePath(),
     "/usr/bin/google-chrome",
+    chromium.executablePath(),
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
   ];
   return candidates.find((p): p is string => Boolean(p && isSafeExecutable(p)));
 }
