@@ -598,11 +598,10 @@ URLs submitted to `POST /api/browser/sessions` and `POST /api/browser/sessions/{
 - **Length Bounds:** Maximum URL length 4096 bytes (`MAX_URL_BYTES`); maximum page title 512 bytes (`MAX_TITLE_BYTES`).
 - **Scheme Allowlist:** Strictly `http`, `https`, and `about:blank`. All other schemes (`file:`, `javascript:`, `chrome:`, `data:`) are rejected.
 - **Credentials Forbidden:** URLs containing embedded username or password fields (e.g. `https://actor:token@domain.example`) are rejected.
-- **Production Private & Metadata IP Blocking:**
-  - IPv4 loopback (`127.0.0.0/8`), private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local (`169.254.0.0/16`), broadcast, and documentation ranges are blocked.
-  - Cloud metadata endpoints are blocked: AWS/Azure/OpenStack (`169.254.169.254`), Alibaba Cloud (`100.100.100.200`), Google Cloud (`metadata.google.internal`), and IPv6 metadata (`fd00:ec2::254`).
-  - IPv6 unique local (`fc00::/7`) and link-local (`fe80::/10`) are blocked.
-- **Development Origin Restriction:** In development mode (`is_dev == true`), general internet destinations are blocked; navigation is restricted to loopback (`127.0.0.1`, `localhost`) and origins listed in `allowed_origins`.
+- **Loopback Access:** HTTP(S) destinations on `localhost`, `.localhost`, IPv4 loopback (`127.0.0.0/8`), and IPv6 loopback (`::1`, including mapped IPv4) are allowed on any port without an origin entry, in both production and development. Loopback refers to the server-hosted browser's network namespace, not necessarily the user's device. Navigations and subresources are subject to explicit `denied_destinations` entries.
+- **Private & Metadata Blocking:** Other private, link-local, broadcast, unspecified, and documentation IP ranges require an explicitly allowed target origin (or asset origin for subresources). Cloud metadata destinations remain denied even when explicitly allowed. Configured destination denies take precedence over all allowances.
+- **Security:** Any page opened in the hosted browser may attempt requests to server-loopback services. Protect sensitive local services with authentication and origin checks; loopback binding alone is not an access-control boundary. Browser network policy is not a complete egress sandbox and does not cover DNS resolution, WebSocket, or WebRTC.
+- **Public Internet:** HTTP(S) public destinations are permitted in both production and development.
 
 ---
 

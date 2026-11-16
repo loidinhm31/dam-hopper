@@ -3794,8 +3794,8 @@ mod request_policy_tests {
 
     fn policy() -> Arc<NetworkPolicy> {
         Arc::new(NetworkPolicy::from_config(&BrowserHostConfig {
-            allowed_target_origins: vec!["http://localhost:5173".into()],
-            allowed_asset_origins: vec!["http://localhost:5174".into()],
+            allowed_target_origins: vec!["http://10.0.0.1:5173".into()],
+            allowed_asset_origins: vec!["http://10.0.0.1:5174".into()],
             ..BrowserHostConfig::default()
         }, true).unwrap())
     }
@@ -3905,11 +3905,12 @@ mod request_policy_tests {
         assert_eq!(enable["method"], "Fetch.enable");
         assert!(enable.get("sessionId").is_none(), "Fetch must wrap every worker factory");
         for (id, url, kind, expected) in [
-            ("page", "http://localhost:5173/", "Document", "Fetch.continueRequest"),
-            ("worker", "http://localhost:5174/worker.js", "Script", "Fetch.continueRequest"),
-            ("nested", "http://localhost:5174/nested.js", "Script", "Fetch.continueRequest"),
-            ("frame", "http://localhost:5174/frame", "Document", "Fetch.failRequest"),
-            ("redirect", "http://localhost:5175/denied", "Fetch", "Fetch.failRequest"),
+            ("page", "http://10.0.0.1:5173/", "Document", "Fetch.continueRequest"),
+            ("worker", "http://10.0.0.1:5174/worker.js", "Script", "Fetch.continueRequest"),
+            ("nested", "http://10.0.0.1:5174/nested.js", "Script", "Fetch.continueRequest"),
+            ("frame", "http://10.0.0.1:5174/frame", "Document", "Fetch.failRequest"),
+            ("redirect", "http://10.0.0.1:5175/denied", "Fetch", "Fetch.failRequest"),
+            ("loopback", "http://localhost:5175/app", "Document", "Fetch.continueRequest"),
             ("metadata", "http://169.254.169.254/latest", "Fetch", "Fetch.failRequest"),
             ("credentials", "http://user:secret@localhost:5173/", "Fetch", "Fetch.failRequest"),
             ("file", "file:///etc/passwd", "Other", "Fetch.failRequest"),
@@ -3968,7 +3969,7 @@ mod request_policy_tests {
             }
             drop(producer);
             browser.client.close().await;
-            owner.push.send(paused(target, "http://localhost:5175/denied", "Fetch")).unwrap();
+            owner.push.send(paused(target, "http://10.0.0.1:5175/denied", "Fetch")).unwrap();
             let decision = next_command(&mut owner).await;
             assert_eq!(decision["method"], "Fetch.failRequest");
             assert_eq!(decision["params"]["requestId"], target);
@@ -4056,7 +4057,7 @@ mod request_policy_tests {
             browser.client.install_browser_request_policy(different, Arc::new(|_| {})).await,
             Err(CdpError::Protocol { .. })
         ));
-        browser.push.send(paused("still-denied", "http://localhost:5175/denied", "Fetch")).unwrap();
+        browser.push.send(paused("still-denied", "http://10.0.0.1:5175/denied", "Fetch")).unwrap();
         assert_eq!(next_command(&mut browser).await["method"], "Fetch.failRequest");
     }
 

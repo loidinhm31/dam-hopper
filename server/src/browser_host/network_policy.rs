@@ -368,6 +368,13 @@ impl NetworkPolicy {
                 &host,
             )));
         }
+        // Loopback belongs to the browser host, not necessarily the user's device.
+        // Explicit destination denials above still apply.
+        if matches!(&host, Host::Domain(d) if is_local_hostname(&normalize_hostname(d)))
+            || host_ip(&host).is_some_and(|ip| ip.is_loopback())
+        {
+            return Ok(());
+        }
 
         let allowed_origin = self.target_origins.contains(&origin)
             || (kind == RequestKind::Subresource && self.asset_origins.contains(&origin));
@@ -375,16 +382,9 @@ impl NetworkPolicy {
             return Ok(());
         }
 
-        // Public internet is allowed in both production and development; local/private/metadata
-        // destinations need an explicit project origin.
+        // Public internet is allowed in both modes; other private destinations need an
+        // explicit project origin.
         match &host {
-            Host::Domain(d) if is_local_hostname(&normalize_hostname(d)) => {
-                if self.is_dev {
-                    Err(NetworkPolicyError::DevOriginNotAllowed(origin))
-                } else {
-                    Err(NetworkPolicyError::DeniedDestination(destination_label(&host)))
-                }
-            }
             Host::Domain(_) => Ok(()),
             ip_host => match host_ip(ip_host) {
                 Some(ip) if is_private_or_metadata_ip(ip) => {
@@ -421,9 +421,8 @@ fn normalize_origin(raw: &str) -> Result<String, NetworkPolicyError> {
 /// Evaluates a navigation URL against the target-origin policy with only the built-in
 /// metadata denials (no asset origins, default denied destinations).
 ///
-/// Public internet destinations are permitted in both production and development; only
-/// explicitly allowed origins may reach loopback/private destinations, and there is no
-/// implicit localhost/loopback permission. Callers holding the Browser config should build a
+/// Public internet and loopback destinations are permitted in both modes. Other private
+/// destinations require an explicit origin. Callers holding the Browser config should build a
 /// [`NetworkPolicy`] with [`NetworkPolicy::from_config`] to include denied destinations and
 /// asset origins.
 pub fn validate_navigation_url(
@@ -491,16 +490,23 @@ mod tests {
     }
 
     #[test]
-    fn test_dev_has_no_implicit_loopback_permission() {
-        let allowed = vec!["http://127.0.0.1:5173".to_string()];
-        assert!(validate_navigation_url("http://127.0.0.1:5173/vite", true, &allowed).is_ok());
-        // Unlisted loopback ports and localhost are NOT implicitly allowed in development.
-        assert!(validate_navigation_url("http://127.0.0.1:8080/app", true, &allowed).is_err());
-        assert!(validate_navigation_url("http://localhost:3000/", true, &allowed).is_err());
-        assert!(validate_navigation_url("http://localhost:5173/", true, &allowed).is_err());
-        assert!(validate_navigation_url("https://example.com/", true, &allowed).is_ok());
-        // With no configuration nothing but about:blank is reachable.
-        assert!(validate_navigation_url("http://127.0.0.1:5173/", true, &[]).is_err());
+    fn test_loopback_allowed_without_configuration() {
+        for is_dev in [false, true] {
+            for url in [
+                "http://localhost:3000/",
+                "https://app.localhost:8443/",
+                "http://127.0.0.1:8080/app",
+                "http://127.1.2.3:5173/",
+                "http://[::1]:3000/",
+                "http://[::ffff:127.0.0.1]/",
+            ] {
+                assert!(validate_navigation_url(url, is_dev, &[]).is_ok(), "{url}");
+            }
+        }
+        let denied = prod(&[], &["localhost:3000", "127.0.0.0/8"]);
+        assert!(denied.check_request("http://localhost:3000/", RequestKind::Navigation).is_err());
+        assert!(denied.check_request("http://127.0.0.1:8080/", RequestKind::Subresource).is_err());
+        assert!(denied.check_request("http://localhost:3001/", RequestKind::Subresource).is_ok());
     }
 
     #[test]
@@ -517,12 +523,8 @@ mod tests {
         .is_err());
         assert!(validate_navigation_url("http://10.0.0.5:8080/", false, &[]).is_err());
         assert!(validate_navigation_url("http://192.168.1.1/", false, &[]).is_err());
-        assert!(validate_navigation_url("http://127.0.0.1:3000/", false, &[]).is_err());
-        assert!(validate_navigation_url("http://localhost:3000/", false, &[]).is_err());
-        assert!(validate_navigation_url("http://[::1]:3000/", false, &[]).is_err());
         // Alternate numeric spellings normalize to the same denied IP.
         assert!(validate_navigation_url("http://2852039166/", false, &[]).is_err());
-        assert!(validate_navigation_url("http://[::ffff:127.0.0.1]/", false, &[]).is_err());
         // Explicit project origin allowed
         let project_origins = vec![
             "http://127.0.0.1:3000".to_string(),
@@ -534,10 +536,7 @@ mod tests {
         assert!(
             validate_navigation_url("http://10.0.0.5:8080/api", false, &project_origins).is_ok()
         );
-        // Another port on the same host stays denied.
-        assert!(
-            validate_navigation_url("http://127.0.0.1:3001/app", false, &project_origins).is_err()
-        );
+        assert!(validate_navigation_url("http://10.0.0.5:8081/app", false, &project_origins).is_err());
         assert!(validate_navigation_url("https://example.com/page", false, &[]).is_ok());
     }
 
@@ -585,23 +584,16 @@ mod tests {
 
     #[test]
     fn test_dev_request_policy_target_asset_split() {
-        let policy = dev(&["http://127.0.0.1:3000"], &["http://127.0.0.1:3001"], &[]);
+        let policy = dev(&["http://10.0.0.1:3000"], &["http://10.0.0.1:3001"], &[]);
         assert!(policy
-            .check_request("http://127.0.0.1:3000/a", RequestKind::Navigation)
+            .check_request("http://10.0.0.1:3000/a", RequestKind::Navigation)
             .is_ok());
-        assert!(policy
-            .check_request("http://127.0.0.1:3000/a.png", RequestKind::Subresource)
-            .is_ok());
-        assert!(policy
-            .check_request("http://127.0.0.1:3001/a.png", RequestKind::Subresource)
-            .is_ok());
-        // Asset origins are not navigation targets.
-        assert!(policy
-            .check_request("http://127.0.0.1:3001/", RequestKind::Navigation)
-            .is_err());
-        assert!(policy
-            .check_request("http://127.0.0.1:3002/", RequestKind::Subresource)
-            .is_err());
+        assert!(policy.check_request("http://10.0.0.1:3000/a.png", RequestKind::Subresource).is_ok());
+        assert!(policy.check_request("http://10.0.0.1:3001/a.png", RequestKind::Subresource).is_ok());
+        // Asset origins are not navigation targets; other private ports remain denied.
+        assert!(policy.check_request("http://10.0.0.1:3001/", RequestKind::Navigation).is_err());
+        assert!(policy.check_request("http://10.0.0.1:3002/", RequestKind::Subresource).is_err());
+        assert!(policy.check_request("http://localhost:3002/", RequestKind::Subresource).is_ok());
         assert!(policy
             .check_request("http://169.254.169.254/", RequestKind::Subresource)
             .is_err());
