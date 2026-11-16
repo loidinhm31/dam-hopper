@@ -35,6 +35,8 @@ export interface BrowserToolsProps {
   copyPending?: boolean;
   copyStatus?: { kind: "success" | "error"; message: string } | null;
   onCopySelection?: () => void;
+  devToolsOpen?: boolean;
+  onToggleDevTools?: () => void;
 }
 
 export function BrowserTools({
@@ -44,6 +46,7 @@ export function BrowserTools({
   onAttachSession, onWindowStateUpdated, onCloseUnknownWindowAllowed,
   qualityPreference = "auto", qualityStatus = null, qualityPending = false, onQualityPreferenceChange,
   copyPending = false, copyStatus = null, onCopySelection,
+  devToolsOpen = false, onToggleDevTools,
 }: BrowserToolsProps): ReactElement {
   const masked = privacyMasked || ownerMismatch;
   const isLive = activeTab.phase === "live" && Boolean(activeTab.sessionId);
@@ -131,6 +134,20 @@ export function BrowserTools({
           className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[11px] font-medium text-[var(--color-text)] hover:bg-[var(--color-surface)] disabled:opacity-40"
         >
           {copyPending ? "Copying…" : "Copy Selection"}
+        </button>
+
+        <button
+          type="button"
+          data-testid="browser-tools-devtools-btn"
+          disabled={!isLive || masked}
+          onClick={onToggleDevTools}
+          className={`rounded border px-2 py-1 text-[11px] font-medium disabled:opacity-40 ${
+            devToolsOpen
+              ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white"
+              : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] hover:bg-[var(--color-surface)]"
+          }`}
+        >
+          {devToolsOpen ? "Close DevTools" : "Open DevTools"}
         </button>
 
         <button

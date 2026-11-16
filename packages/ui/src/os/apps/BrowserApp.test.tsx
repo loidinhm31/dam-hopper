@@ -70,6 +70,8 @@ const {
     renewBrowserControl: vi.fn(),
     releaseBrowserControl: vi.fn(),
     getBrowserSelectedText: vi.fn(),
+    createBrowserDevToolsLease: vi.fn(),
+    revokeBrowserDevToolsLease: vi.fn(),
   },
   requestProxyFocus: vi.fn(),
   requestAudioUnlock: vi.fn(),
@@ -268,6 +270,14 @@ beforeEach(async () => {
     win.appState = { ...win.appState, ...update };
   });
   api.getBrowserSession.mockReset().mockResolvedValue(live);
+  api.createBrowserDevToolsLease.mockReset().mockResolvedValue({
+    token: "dt-tok-1",
+    expiresAtUnixMs: Date.now() + 300_000,
+    browserSessionId: "session-1",
+    browserIncarnation: live.browserIncarnation,
+    profileEpoch: live.profileEpoch,
+  });
+  api.revokeBrowserDevToolsLease.mockReset().mockResolvedValue(undefined);
   api.listBrowserSessions.mockReset().mockResolvedValue([live]);
   api.closeBrowserSession.mockReset().mockResolvedValue(undefined);
   for (const fn of [api.navigateBrowser, api.reloadBrowser, api.historyBrowser]) {
@@ -1447,5 +1457,215 @@ describe("BrowserApp native chrome & tab continuity", () => {
     expect(store.closeWindow).not.toHaveBeenCalled();
     expect(isOperationRiskAcknowledged("op-win")).toBe(false);
     expect(loadBrowserRecoveryDisk().operations.map((o) => o.operationId)).toEqual(["op-win"]);
+  });
+
+  it("mounts docked DevTools iframe from toolbar/tools, preserves slotRef DOM identity across dock-side switches, and revokes on privacy/lock/tab-switch/close", async () => {
+    const initialSlot = container.querySelector('[data-testid="browser-slot-window-1"]');
+    expect(initialSlot).toBeTruthy();
+
+    // Open via toolbar toggle button
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-devtools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    expect(api.createBrowserDevToolsLease).toHaveBeenCalledWith(owner, "session-1", expect.any(AbortSignal));
+    const iframe = container.querySelector<HTMLIFrameElement>('[data-testid="browser-devtools-iframe"]');
+    expect(iframe).toBeTruthy();
+    expect(iframe?.getAttribute("src")).toContain("/api/browser/devtools/dt-tok-1/devtools_app.html");
+    expect(iframe?.getAttribute("src")).toContain("panel=console");
+    expect(container.querySelector('[data-testid="browser-slot-window-1"]')).toBe(initialSlot);
+
+    // Switch dock side to right and back while preserving slotRef
+    act(() => {
+      (container.querySelector('[data-testid="browser-devtools-dock-side-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="browser-devtools-dock"]')?.getAttribute("data-dock-side")).toBe("right");
+    expect(container.querySelector('[data-testid="browser-slot-window-1"]')).toBe(initialSlot);
+
+    // Cognito Privacy Mode unmounts iframe and revokes lease
+    cognitoState.active = true;
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+    expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "session-1", "dt-tok-1");
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="browser-devtools-toggle-btn"]')?.disabled).toBe(true);
+
+    // Restoring Cognito re-mints; Lock Screen unmounts & revokes again
+    api.createBrowserDevToolsLease.mockResolvedValueOnce({
+      token: "dt-tok-2",
+      expiresAtUnixMs: Date.now() + 300_000,
+      browserSessionId: "session-1",
+      browserIncarnation: live.browserIncarnation,
+      profileEpoch: live.profileEpoch,
+    });
+    cognitoState.active = false;
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')?.getAttribute("src")).toContain("dt-tok-2");
+
+    lockState.isLocked = true;
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+    expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "session-1", "dt-tok-2");
+
+    // Tab switch unmounts & revokes lease
+    lockState.isLocked = false;
+    api.createBrowserDevToolsLease.mockResolvedValueOnce({
+      token: "dt-tok-3",
+      expiresAtUnixMs: Date.now() + 300_000,
+      browserSessionId: "session-1",
+      browserIncarnation: live.browserIncarnation,
+      profileEpoch: live.profileEpoch,
+    });
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-1",
+          kind: "ordinary",
+          committedUrl: live.url,
+          sessionId: "session-1",
+          title: "Page 1",
+          phase: "live",
+          draft: { value: live.url, dirty: false },
+          actionSequence: 0,
+          snapshot: live,
+        },
+        {
+          tabId: "tab-2",
+          kind: "ordinary",
+          committedUrl: "https://other.example.com",
+          sessionId: "session-2",
+          title: "Page 2",
+          phase: "live",
+          draft: { value: "https://other.example.com", dirty: false },
+          actionSequence: 0,
+          snapshot: { ...live, browserSessionId: "session-2" },
+        },
+      ],
+      activeTabId: "tab-1",
+    });
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')?.getAttribute("src")).toContain("dt-tok-3");
+
+    store.session.windows["window-1"].appState = {
+      ...store.session.windows["window-1"].appState,
+      activeTabId: "tab-2",
+    };
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+    expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "session-1", "dt-tok-3");
+
+    // Closing DevTools via close button on tab-2 after opening via BrowserTools
+    api.createBrowserDevToolsLease.mockResolvedValueOnce({
+      token: "dt-tok-4",
+      expiresAtUnixMs: Date.now() + 300_000,
+      browserSessionId: "session-2",
+      browserIncarnation: live.browserIncarnation,
+      profileEpoch: live.profileEpoch,
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-tools-devtools-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')?.getAttribute("src")).toContain("dt-tok-4");
+
+    act(() => {
+      (container.querySelector('[data-testid="browser-devtools-close-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+    expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "session-2", "dt-tok-4");
+
+    // Re-open on tab-2, then disconnect connection -> DevTools iframe unmounts immediately
+    api.createBrowserDevToolsLease.mockResolvedValueOnce({
+      token: "dt-tok-5",
+      expiresAtUnixMs: Date.now() + 300_000,
+      browserSessionId: "session-2",
+      browserIncarnation: live.browserIncarnation,
+      profileEpoch: live.profileEpoch,
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-devtools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')?.getAttribute("src")).toContain("dt-tok-5");
+    connState.status = "disconnected" as unknown as typeof connState.status;
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+  });
+
+  it("renders native host download status banner, supports dismissal per (guid, state), and masks in privacy mode", async () => {
+    const initialSlot = container.querySelector('[data-testid="browser-slot-window-1"]');
+    expect(container.querySelector('[data-testid="browser-download-banner"]')).toBeNull();
+
+    // 1. In-progress download
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-1",
+          kind: "ordinary",
+          committedUrl: live.url,
+          sessionId: "session-1",
+          title: "Page",
+          phase: "live",
+          draft: { value: live.url, dirty: false },
+          actionSequence: 0,
+          snapshot: {
+            ...live,
+            lastDownload: {
+              guid: "dl-1",
+              suggestedFilename: "report.pdf",
+              state: "inProgress",
+              receivedBytes: 512,
+              totalBytes: 1024,
+            },
+          },
+        },
+      ],
+    });
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-download-banner"]')?.textContent).toContain(
+      "Downloading report.pdf (512 B / 1024 B)",
+    );
+    expect(container.querySelector('[data-testid="browser-slot-window-1"]')).toBe(initialSlot);
+
+    // Dismissing inProgress hides it until state transitions to completed
+    act(() => {
+      (container.querySelector('[data-testid="browser-download-dismiss-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="browser-download-banner"]')).toBeNull();
+
+    // 2. Completed download re-appears with host filePath
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-1",
+          kind: "ordinary",
+          committedUrl: live.url,
+          sessionId: "session-1",
+          title: "Page",
+          phase: "live",
+          draft: { value: live.url, dirty: false },
+          actionSequence: 0,
+          snapshot: {
+            ...live,
+            lastDownload: {
+              guid: "dl-1",
+              suggestedFilename: "report.pdf",
+              state: "completed",
+              receivedBytes: 1024,
+              totalBytes: 1024,
+              filePath: "/home/alice/Downloads/report.pdf",
+            },
+          },
+        },
+      ],
+    });
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-download-banner"]')?.textContent).toContain(
+      "Downloaded report.pdf to host (/home/alice/Downloads/report.pdf)",
+    );
+
+    // 3. Cognito Privacy Mode masks download banner and filePath
+    cognitoState.active = true;
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-download-banner"]')).toBeNull();
   });
 });

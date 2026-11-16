@@ -1,6 +1,6 @@
 # Phase 02 — UI DevTools Dock, Toolbar Controls & Download Banner
 
-Priority: P2 · Status: Pending · Effort: 5h · Owner: Frontend implementer
+Priority: P2 · Status: DONE (2026-11-16 05:01:24 EST) · Effort: 5h · Owner: Frontend implementer
 
 ## Context Links
 
@@ -134,7 +134,7 @@ flowchart TD
 ]
 ```
 
-- [ ] <!-- evcrate-task:ui-devtools-dock --> Add DevTools dock, toolbar controls, and native host download status banner in BrowserApp
+- [x] <!-- evcrate-task:ui-devtools-dock --> Add DevTools dock, toolbar controls, and native host download status banner in BrowserApp
 
 ## Success Criteria
 

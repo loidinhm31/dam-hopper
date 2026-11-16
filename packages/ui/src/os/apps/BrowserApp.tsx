@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Download, X } from "lucide-react";
 import {
   acquireBrowserControl,
   getBrowserSelectedText,
@@ -18,6 +19,7 @@ import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { useLockScreenStore } from "@/stores/lock-screen.js";
 import { executeAction } from "../action-executor.js";
 import { BrowserAddressBar } from "../browser/browser-address-bar.js";
+import { BrowserDevToolsDock } from "../browser/browser-devtools-dock.js";
 import { closeBrowserTarget } from "../browser/browser-close-lifecycle.js";
 import { runSerializedBrowserControlAcquire } from "../browser/browser-control-gate.js";
 import {
@@ -141,6 +143,9 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>("");
   const [copyPending, setCopyPending] = useState(false);
   const [copyStatus, setCopyStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const [devToolsOpenByTab, setDevToolsOpenByTab] = useState<Record<string, boolean>>({});
+  const [devToolsDockSide, setDevToolsDockSide] = useState<"bottom" | "right">("bottom");
+  const [dismissedDownloadByTab, setDismissedDownloadByTab] = useState<Record<string, string>>({});
   const copyInFlightRef = useRef(false);
   const copyAttemptRef = useRef(0);
   const controlAttemptRef = useRef(0);
@@ -436,6 +441,18 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
     }
     updateBrowserStreamSlot(window.id, tabId, null, false, true);
     retireTabNavigation(window.id, tabId);
+    setDevToolsOpenByTab((prev) => {
+      if (!(tabId in prev)) return prev;
+      const next = { ...prev };
+      delete next[tabId];
+      return next;
+    });
+    setDismissedDownloadByTab((prev) => {
+      if (!(tabId in prev)) return prev;
+      const next = { ...prev };
+      delete next[tabId];
+      return next;
+    });
     releaseTab({
       profileId: owner.profileId,
       generation: owner.generation,
@@ -977,6 +994,20 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
   const showSelectionPanel = Boolean(
     !masked && (selection.selectionActive || selection.preview || selection.preparedArtifact || selection.error || selection.notice),
   );
+  const isConnectedOwner = connectionSnap?.status === "connected" && isCurrentConnection(owner);
+  const canUseDevTools = isVisible && isConnectedOwner && !masked && activeTab.phase === "live" && Boolean(sessionId);
+  const devToolsOpen = canUseDevTools && Boolean(devToolsOpenByTab[activeTabId]);
+  const handleToggleDevTools = useCallback(() => {
+    if (!isConnectedOwner || masked || activeTab.phase !== "live" || !sessionId) return;
+    setDevToolsOpenByTab((prev) => ({ ...prev, [activeTabId]: !prev[activeTabId] }));
+  }, [activeTab.phase, activeTabId, isConnectedOwner, masked, sessionId]);
+
+  const activeDownload = !masked ? (activeTab.snapshot?.lastDownload ?? null) : null;
+  const activeDownloadKey = activeDownload ? `${activeDownload.guid}:${activeDownload.state}` : null;
+  const showDownloadBanner = Boolean(
+    activeDownload && activeDownloadKey && dismissedDownloadByTab[activeTabId] !== activeDownloadKey,
+  );
+
   const { tabDomId, panelDomId } = getBrowserTabIds(window.id, activeTabId);
   const showStreamSlot = !ownerMismatch && (activeTab.phase === "live" || activeTab.phase === "connecting");
 
@@ -1005,6 +1036,7 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
         ownerMismatch={ownerMismatch}
         toolsOpen={toolsOpen}
         toolsPanelId={toolsPanelId}
+        devToolsOpen={devToolsOpen}
         addressInputRef={addressInputRef}
         toolsButtonRef={toolsButtonRef}
         onDraftChange={(val) => updateTabDraftValue(window.id, activeTabId, val, fallbackTabIdRef.current)}
@@ -1014,6 +1046,7 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
         onForward={handleForward}
         onReload={handleReload}
         onToggleAudio={handleToggleAudio}
+        onToggleDevTools={handleToggleDevTools}
         onToggleTools={() => setToolsOpen((o) => !o)}
       />
 
@@ -1070,13 +1103,50 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
 
       <div className="flex-1 min-h-0 relative flex flex-row overflow-hidden">
         <div id={panelDomId} role="tabpanel" aria-labelledby={tabDomId} className="flex-1 min-w-0 min-h-0 relative flex flex-col">
-          <div
-            ref={slotRef}
-            data-os-browser-slot={window.id}
-            data-testid={`browser-slot-${window.id}`}
-            data-selection-active={selection.selectionActive ? "true" : "false"}
-            className={showStreamSlot ? "flex-1 min-h-0 relative bg-black" : "hidden"}
-          />
+          {showDownloadBanner && activeDownload && activeDownloadKey && (
+            <div
+              role="status"
+              aria-live="polite"
+              data-testid="browser-download-banner"
+              className="flex items-center justify-between gap-2 px-3 py-1 bg-[var(--color-surface-2)] border-b border-[var(--color-border)] text-xs text-[var(--color-text)] shrink-0"
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Download className="w-3.5 h-3.5 text-[var(--color-primary)] shrink-0" aria-hidden="true" />
+                <span className="truncate">
+                  {activeDownload.state === "inProgress"
+                    ? activeDownload.totalBytes > 0
+                      ? `Downloading ${activeDownload.suggestedFilename} (${activeDownload.receivedBytes} B / ${activeDownload.totalBytes} B)…`
+                      : `Downloading ${activeDownload.suggestedFilename} (${activeDownload.receivedBytes} B)…`
+                    : activeDownload.state === "completed"
+                      ? `Downloaded ${activeDownload.suggestedFilename} to host (${activeDownload.filePath ?? "Downloads"})`
+                      : `Download canceled (${activeDownload.suggestedFilename})`}
+                </span>
+              </div>
+              <button
+                type="button"
+                data-testid="browser-download-dismiss-btn"
+                aria-label="Dismiss download status"
+                onClick={() =>
+                  setDismissedDownloadByTab((prev) => ({
+                    ...prev,
+                    [activeTabId]: activeDownloadKey,
+                  }))
+                }
+                className="os-browser-icon-btn shrink-0"
+              >
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          )}
+          <div className={`flex-1 min-w-0 min-h-0 relative flex ${devToolsDockSide === "right" ? "flex-row" : "flex-col"} overflow-hidden`}>
+            <div className="flex-1 min-w-0 min-h-0 relative flex flex-col">
+              <div
+                ref={slotRef}
+                data-os-browser-slot={window.id}
+                data-testid={`browser-slot-${window.id}`}
+                data-selection-active={selection.selectionActive ? "true" : "false"}
+                className={showStreamSlot ? "flex-1 min-h-0 relative bg-black" : "hidden"}
+              />
         {!showStreamSlot && activeTab.phase === "new-tab" && (
           <BrowserNewTabPage
             draftValue={activeDraftValue}
@@ -1202,6 +1272,20 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
           )}
             </div>
           )}
+            </div>
+            {devToolsOpen && sessionId && (
+              <BrowserDevToolsDock
+                key={`${activeTabId}:${sessionId}:${activeTab.snapshot?.browserIncarnation ?? ""}:${String(activeTab.snapshot?.profileEpoch ?? "")}`}
+                owner={owner}
+                sessionId={sessionId}
+                browserIncarnation={activeTab.snapshot?.browserIncarnation}
+                profileEpoch={activeTab.snapshot?.profileEpoch}
+                dockSide={devToolsDockSide}
+                onToggleDockSide={() => setDevToolsDockSide((s) => (s === "bottom" ? "right" : "bottom"))}
+                onClose={() => setDevToolsOpenByTab((prev) => ({ ...prev, [activeTabId]: false }))}
+              />
+            )}
+          </div>
         </div>
         {toolsOpen && (
           <BrowserTools
@@ -1234,6 +1318,8 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
             copyPending={copyPending}
             copyStatus={copyStatus}
             onCopySelection={() => void handleCopySelection()}
+            devToolsOpen={devToolsOpen}
+            onToggleDevTools={handleToggleDevTools}
           />
         )}
       </div>

@@ -97,6 +97,15 @@ export interface TargetGeometry {
   dpr: number;
 }
 
+export interface BrowserDownloadSummary {
+  guid: string;
+  suggestedFilename: string;
+  state: "inProgress" | "completed" | "canceled";
+  receivedBytes: number;
+  totalBytes: number;
+  filePath?: string;
+}
+
 export interface BrowserSessionDto {
   browserSessionId: string;
   browserIncarnation: string;
@@ -112,6 +121,7 @@ export interface BrowserSessionDto {
   popupBlocked?: boolean;
   activePopupSessionId?: string;
   parentSessionId?: string;
+  lastDownload?: BrowserDownloadSummary | null;
 }
 
 export interface CreateSessionRequest {
@@ -203,6 +213,14 @@ export interface IssueTicketRequest {
 export interface IssueTicketResponse {
   ticket: string;
   expiresAtUnixMs: number;
+}
+
+export interface DevToolsLeaseResponse {
+  token: string;
+  expiresAtUnixMs: number;
+  browserSessionId: string;
+  browserIncarnation: string;
+  profileEpoch: string;
 }
 
 export interface ProfileResetRequest {

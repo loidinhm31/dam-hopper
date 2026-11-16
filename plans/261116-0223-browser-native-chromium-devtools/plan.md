@@ -18,7 +18,7 @@ Enable two native host-Chromium capabilities in `BrowserApp`:
 2. **Native Host File Downloads:** Configure host Chromium (`Browser.setDownloadBehavior`) to save browser-initiated downloads directly to the host machine's native `Downloads` directory (`~/Downloads`) and surface live download progress/completion in `BrowserApp`.
 
 <!-- evcrate-progress:start -->
-Tasks: 1/3 completed; remaining: 2.
+Tasks: 2/3 completed; remaining: 1.
 <!-- evcrate-progress:end -->
 
 ## Phases
@@ -26,7 +26,7 @@ Tasks: 1/3 completed; remaining: 2.
 | # | Phase | Status | Effort | Link |
 | --- | --- | --- | --- | --- |
 | 1 | Backend DevTools Proxy & Native Host Downloads | DONE (2026-11-16 04:20:50 EST) | 6h | [phase-01](./phase-01-backend-devtools-proxy.md) |
-| 2 | UI DevTools Dock, Toolbar Controls & Download Banner | Pending | 5h | [phase-02](./phase-02-ui-devtools-dock.md) |
+| 2 | UI DevTools Dock, Toolbar Controls & Download Banner | DONE (2026-11-16 05:01:24 EST) | 5h | [phase-02](./phase-02-ui-devtools-dock.md) |
 | 3 | Integrated Verification & Architecture Documentation | Pending | 3h | [phase-03](./phase-03-verification-and-docs.md) |
 
 ## Settled Design Decisions

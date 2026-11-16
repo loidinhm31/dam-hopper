@@ -113,6 +113,35 @@ export function syncBrowserSessionWindow(
   const dialog = prevDialog && nextDialogCandidate && prevDialog.dialogId === nextDialogCandidate.dialogId && prevDialog.message === nextDialogCandidate.message && prevDialog.dialogType === nextDialogCandidate.dialogType
     ? prevDialog : nextDialogCandidate;
 
+  const rawDl = snapshot.lastDownload;
+  const nextDlCandidate =
+    rawDl &&
+    typeof rawDl.guid === "string" &&
+    typeof rawDl.suggestedFilename === "string" &&
+    (rawDl.state === "inProgress" || rawDl.state === "completed" || rawDl.state === "canceled") &&
+    typeof rawDl.receivedBytes === "number" &&
+    typeof rawDl.totalBytes === "number"
+      ? {
+          guid: rawDl.guid,
+          suggestedFilename: rawDl.suggestedFilename,
+          state: rawDl.state,
+          receivedBytes: rawDl.receivedBytes,
+          totalBytes: rawDl.totalBytes,
+          ...(typeof rawDl.filePath === "string" ? { filePath: rawDl.filePath } : {}),
+        }
+      : undefined;
+  const prevDl = currentSnap?.lastDownload ?? undefined;
+  const lastDownload =
+    prevDl &&
+    nextDlCandidate &&
+    prevDl.guid === nextDlCandidate.guid &&
+    prevDl.suggestedFilename === nextDlCandidate.suggestedFilename &&
+    prevDl.state === nextDlCandidate.state &&
+    prevDl.receivedBytes === nextDlCandidate.receivedBytes &&
+    prevDl.totalBytes === nextDlCandidate.totalBytes &&
+    prevDl.filePath === nextDlCandidate.filePath
+      ? prevDl : nextDlCandidate;
+
   const effectiveUrl = staleNavigation && currentSnap ? currentSnap.url : snapshot.url;
   const effectiveTitle = staleNavigation && currentSnap ? currentSnap.title : snapshot.title;
   const effectiveNavRev = staleNavigation && currentSnap ? String(currentSnap.navigationRevision) : snapshot.navigationRevision;
@@ -126,6 +155,7 @@ export function syncBrowserSessionWindow(
     status: snapshot.status, inputAvailable: effectiveInputAvailable,
     unavailableReason: snapshot.unavailableReason, geometry,
     ...(dialog !== undefined ? { dialog } : {}),
+    ...(lastDownload !== undefined ? { lastDownload } : {}),
     popupBlocked, activePopupSessionId, parentSessionId,
   };
 
@@ -138,7 +168,9 @@ export function syncBrowserSessionWindow(
     currentSnap.url === nextSnapCandidate.url && currentSnap.title === nextSnapCandidate.title &&
     currentSnap.status === nextSnapCandidate.status && currentSnap.inputAvailable === nextSnapCandidate.inputAvailable &&
     currentSnap.unavailableReason === nextSnapCandidate.unavailableReason && currentSnap.geometry === nextSnapCandidate.geometry &&
-    (currentSnap.dialog ?? undefined) === dialog && currentSnap.popupBlocked === nextSnapCandidate.popupBlocked &&
+    (currentSnap.dialog ?? undefined) === dialog &&
+    (currentSnap.lastDownload ?? undefined) === lastDownload &&
+    currentSnap.popupBlocked === nextSnapCandidate.popupBlocked &&
     currentSnap.activePopupSessionId === nextSnapCandidate.activePopupSessionId && currentSnap.parentSessionId === nextSnapCandidate.parentSessionId
       ? currentSnap : nextSnapCandidate;
 

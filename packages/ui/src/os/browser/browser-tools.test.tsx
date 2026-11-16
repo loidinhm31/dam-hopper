@@ -357,4 +357,26 @@ describe("BrowserTools quality controls & diagnostics", () => {
       "Copied 5 chars to clipboard",
     );
   });
+
+  it("renders Open/Close DevTools button gated on live unmasked tab and fires onToggleDevTools", () => {
+    const onToggleDevTools = vi.fn();
+    renderTools({ devToolsOpen: false, onToggleDevTools });
+
+    const btn = container?.querySelector<HTMLButtonElement>('[data-testid="browser-tools-devtools-btn"]');
+    expect(btn?.textContent).toBe("Open DevTools");
+    expect(btn?.disabled).toBe(false);
+    act(() => { btn!.click(); });
+    expect(onToggleDevTools).toHaveBeenCalledTimes(1);
+
+    renderTools({ devToolsOpen: true, onToggleDevTools });
+    expect(container?.querySelector<HTMLButtonElement>('[data-testid="browser-tools-devtools-btn"]')?.textContent).toBe(
+      "Close DevTools",
+    );
+
+    renderTools({ privacyMasked: true, onToggleDevTools });
+    expect(container?.querySelector<HTMLButtonElement>('[data-testid="browser-tools-devtools-btn"]')?.disabled).toBe(true);
+
+    renderTools({ activeTab: { ...baseTab, phase: "new-tab", sessionId: undefined }, onToggleDevTools });
+    expect(container?.querySelector<HTMLButtonElement>('[data-testid="browser-tools-devtools-btn"]')?.disabled).toBe(true);
+  });
 });
