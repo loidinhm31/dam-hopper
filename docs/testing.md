@@ -73,6 +73,15 @@ pnpm --filter @dam-hopper/ui test:e2e:typecheck
 ./scripts/run-all-tests.sh
 ```
 
+**Browser-heavy runs (real Chromium)** — host-browser E2E and `browser_host_*` cargo tests each start Chromium trees. Run them through the wrapper so concurrent agents or terminals queue instead of stacking browsers (one run per host, low CPU/IO priority, nested calls reuse the lock):
+
+```bash
+scripts/run-browser-heavy.sh pnpm --filter @dam-hopper/ui test:e2e e2e/os-host-browser
+scripts/run-browser-heavy.sh cargo test --manifest-path server/Cargo.toml --test browser_host_media
+```
+
+Test servers started by the E2E fixtures are tracked per worker and killed on worker exit; if a run is hard-killed, `pgrep -fa dam-hopper-server` shows leftovers.
+
 ### Feature Scenarios and Qualification Recipes
 
 ```bash
