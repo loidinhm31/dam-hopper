@@ -206,6 +206,27 @@ pub fn parse_native_capture_time_unix_ms(metadata: &Value) -> Option<u64> {
     }
     Some(ms_f64 as u64)
 }
+/// Resolves the host machine's native downloads directory (`XDG_DOWNLOAD_DIR` if absolute,
+/// otherwise `$HOME/Downloads`, falling back to `std::env::temp_dir().join("dam-hopper-downloads")`),
+/// ensuring the directory exists.
+pub fn resolve_host_downloads_dir() -> std::path::PathBuf {
+    let dir = std::env::var_os("XDG_DOWNLOAD_DIR")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .filter(|v| !v.is_empty())
+                .map(|home| std::path::PathBuf::from(home).join("Downloads"))
+        })
+        .unwrap_or_else(|| std::env::temp_dir().join("dam-hopper-downloads"));
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        warn!(path = %dir.display(), error = %err, "Failed to create host downloads directory");
+    }
+    dir
+}
+
 #[derive(Debug, Clone)]
 pub enum CdpLifecycleEvent {
     FrameNavigated {
@@ -225,6 +246,22 @@ pub enum CdpLifecycleEvent {
     InspectNodeRequested {
         session_id: Option<String>,
         backend_node_id: i64,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    DownloadWillBegin {
+        session_id: Option<String>,
+        frame_id: Option<String>,
+        guid: String,
+        suggested_filename: String,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    DownloadProgress {
+        session_id: Option<String>,
+        guid: String,
+        state: String,
+        received_bytes: u64,
+        total_bytes: u64,
+        file_path: Option<String>,
         _reservation: Option<Arc<MemoryReservation>>,
     },
     Overflow,
@@ -1361,6 +1398,10 @@ where
                     "Overlay.inspectNodeRequested"
                         | "Page.frameNavigated"
                         | "Page.navigatedWithinDocument"
+                        | "Browser.downloadWillBegin"
+                        | "Page.downloadWillBegin"
+                        | "Browser.downloadProgress"
+                        | "Page.downloadProgress"
                 ) =>
             {
                 let session_id = match env.session_id {
@@ -1444,6 +1485,92 @@ where
                                 session_id,
                                 frame_id: frame_id.map(str::to_string),
                                 url,
+                                _reservation: Some(Arc::new(res)),
+                            },
+                            Err(_) => CdpLifecycleEvent::Overflow,
+                        }
+                    }
+                    "Browser.downloadWillBegin" | "Page.downloadWillBegin" => {
+                        let Some(guid) = params
+                            .and_then(|p| p.get("guid"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty() && s.len() <= 256)
+                            .map(str::to_string)
+                        else {
+                            return Ok(());
+                        };
+                        let frame_id = params
+                            .and_then(|p| p.get("frameId"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty() && id.len() <= MAX_EVENT_SESSION_ID_BYTES)
+                            .map(str::to_string);
+                        let suggested_filename = params
+                            .and_then(|p| p.get("suggestedFilename"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty() && s.len() <= 512)
+                            .unwrap_or("download")
+                            .to_string();
+                        let bytes = std::mem::size_of::<CdpLifecycleEvent>()
+                            + session_id.as_ref().map_or(0, String::len)
+                            + frame_id.as_ref().map_or(0, String::len)
+                            + guid.len()
+                            + suggested_filename.len();
+                        match self.memory_controller.try_reserve(bytes) {
+                            Ok(res) => CdpLifecycleEvent::DownloadWillBegin {
+                                session_id,
+                                frame_id,
+                                guid,
+                                suggested_filename,
+                                _reservation: Some(Arc::new(res)),
+                            },
+                            Err(_) => CdpLifecycleEvent::Overflow,
+                        }
+                    }
+                    "Browser.downloadProgress" | "Page.downloadProgress" => {
+                        let Some(guid) = params
+                            .and_then(|p| p.get("guid"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty() && s.len() <= 256)
+                            .map(str::to_string)
+                        else {
+                            return Ok(());
+                        };
+                        let state = params
+                            .and_then(|p| p.get("state"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty() && s.len() <= 32)
+                            .unwrap_or("inProgress")
+                            .to_string();
+                        let as_u64 = |v: &Value| {
+                            v.as_u64()
+                                .or_else(|| v.as_f64().map(|f| f.max(0.0) as u64))
+                        };
+                        let received_bytes = params
+                            .and_then(|p| p.get("receivedBytes"))
+                            .and_then(as_u64)
+                            .unwrap_or(0);
+                        let total_bytes = params
+                            .and_then(|p| p.get("totalBytes"))
+                            .and_then(as_u64)
+                            .unwrap_or(0);
+                        let file_path = params
+                            .and_then(|p| p.get("filePath"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty() && s.len() <= 4096)
+                            .map(str::to_string);
+                        let bytes = std::mem::size_of::<CdpLifecycleEvent>()
+                            + session_id.as_ref().map_or(0, String::len)
+                            + guid.len()
+                            + state.len()
+                            + file_path.as_ref().map_or(0, String::len);
+                        match self.memory_controller.try_reserve(bytes) {
+                            Ok(res) => CdpLifecycleEvent::DownloadProgress {
+                                session_id,
+                                guid,
+                                state,
+                                received_bytes,
+                                total_bytes,
+                                file_path,
                                 _reservation: Some(Arc::new(res)),
                             },
                             Err(_) => CdpLifecycleEvent::Overflow,

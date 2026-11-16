@@ -776,6 +776,9 @@ pub fn ensure_native_pump(state: &AppState) {
                     }
                     NativePumpRequest::SessionsRetired(session_ids) => {
                         for session_id in session_ids {
+                            crate::browser_host::devtools::global_devtools_leases()
+                                .revoke_by_browser_session(&session_id)
+                                .await;
                             crate::browser_host::selection::cleanup_session(&state, &session_id)
                                 .await;
                         }

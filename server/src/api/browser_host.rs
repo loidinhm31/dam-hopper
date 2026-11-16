@@ -1733,6 +1733,9 @@ pub(crate) async fn revoke_auth_session_browser_resources(
     auth_session_id: &str,
 ) {
     state.browser_debug_artifacts.publish_revocation(principal);
+    crate::browser_host::devtools::global_devtools_leases()
+        .revoke_by_auth_session(principal, auth_session_id)
+        .await;
     let cancelled = global_attachment_manager()
         .revoke_by_auth_session(principal, auth_session_id)
         .await;
@@ -1766,6 +1769,9 @@ pub(crate) async fn fence_principal_browser_resources_sync(
     state: &AppState,
     principal: &str,
 ) -> Vec<String> {
+    crate::browser_host::devtools::global_devtools_leases()
+        .revoke_all_for_principal(principal)
+        .await;
     global_attachment_manager()
         .revoke_all_for_principal(principal)
         .await;
@@ -1833,6 +1839,9 @@ pub(crate) async fn retire_session_native_resources(session_id: &str) {
 pub(crate) async fn release_session_viewers(session_id: &str) {
     // Held native keys/buttons are released BEFORE sockets and producer go away.
     release_session_input(session_id).await;
+    crate::browser_host::devtools::global_devtools_leases()
+        .revoke_by_browser_session(session_id)
+        .await;
     global_attachment_manager()
         .revoke_by_browser_session(session_id)
         .await;
@@ -2119,6 +2128,486 @@ pub async fn get_profile_reset_status(
         ),
     }
 }
+const MAX_DEVTOOLS_ASSET_BYTES: usize = 4 * 1024 * 1024;
+const DEVTOOLS_ASSET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+static DEVTOOLS_ASSET_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(DEVTOOLS_ASSET_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("build devtools asset http client")
+});
+
+/// POST /api/browser/sessions/{id}/devtools
+pub async fn create_devtools_lease(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    connect: Option<Extension<ConnectInfo<SocketAddr>>>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(id): Path<String>,
+) -> Response {
+    let admission = match authenticate_browser_caller(
+        &state,
+        &headers,
+        connect.as_ref(),
+        actor.as_ref().map(|Extension(a)| a),
+    )
+    .await
+    {
+        Ok(adm) => adm,
+        Err(resp) => return resp,
+    };
+
+    let (dto, target_id) = match global_session_registry()
+        .owned_running_target(&id, &admission.principal, admission.is_dev)
+        .await
+    {
+        Ok(found) => found,
+        Err(err) => return err.into(),
+    };
+
+    let profile_epoch =
+        crate::browser_host::decimal_counter::parse_canonical_u64(&dto.profile_epoch, false)
+            .unwrap_or(0);
+    if !state.browser_host.is_instance_live_sync(
+        &admission.principal,
+        admission.is_dev,
+        profile_epoch,
+        &dto.browser_incarnation,
+    ) {
+        return browser_error_response(
+            StatusCode::CONFLICT,
+            "staleIncarnation",
+            "browser instance is no longer live",
+        );
+    }
+
+    match crate::browser_host::devtools::global_devtools_leases()
+        .mint(
+            &admission,
+            &id,
+            &target_id,
+            &dto.browser_incarnation,
+            profile_epoch,
+        )
+        .await
+    {
+        Ok(lease) => no_store_response(
+            StatusCode::OK,
+            serde_json::to_value(&lease).unwrap_or_default(),
+        ),
+        Err(resp) => resp,
+    }
+}
+
+/// DELETE /api/browser/sessions/{id}/devtools/{token}
+pub async fn revoke_devtools_lease(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    connect: Option<Extension<ConnectInfo<SocketAddr>>>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path((id, token)): Path<(String, String)>,
+) -> Response {
+    let admission = match authenticate_browser_caller(
+        &state,
+        &headers,
+        connect.as_ref(),
+        actor.as_ref().map(|Extension(a)| a),
+    )
+    .await
+    {
+        Ok(adm) => adm,
+        Err(resp) => return resp,
+    };
+
+    if global_session_registry()
+        .session_exists_for_other(&id, &admission.principal)
+        .await
+    {
+        return browser_error_response(
+            StatusCode::NOT_FOUND,
+            "sessionNotFound",
+            "browser session not found",
+        );
+    }
+
+    let revoked = crate::browser_host::devtools::global_devtools_leases()
+        .revoke_by_token(&admission.principal, &id, &token)
+        .await;
+    no_store_response(StatusCode::OK, json!({ "revoked": revoked }))
+}
+
+async fn resolve_devtools_chrome_port(
+    state: &AppState,
+    lease: &crate::browser_host::devtools::DevToolsLease,
+) -> Result<u16, Response> {
+    if crate::browser_host::auth::verify_live_admission(state, &lease.admission)
+        .await
+        .is_err()
+    {
+        return Err(browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidSession",
+            "live auth failed",
+        ));
+    }
+    if !state.browser_host.is_instance_live_sync(
+        &lease.admission.principal,
+        lease.admission.is_dev,
+        lease.profile_epoch,
+        &lease.browser_incarnation,
+    ) {
+        return Err(browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "staleIncarnation",
+            "browser instance is no longer live",
+        ));
+    }
+    let (_, target_id) = global_session_registry()
+        .owned_running_target(
+            &lease.browser_session_id,
+            &lease.admission.principal,
+            lease.admission.is_dev,
+        )
+        .await
+        .map_err(Response::from)?;
+    if target_id != lease.native_target_id {
+        return Err(browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "staleTarget",
+            "browser target rotated",
+        ));
+    }
+    let handle = state
+        .browser_host
+        .ensure_running(&lease.admission.principal, lease.admission.is_dev)
+        .await
+        .map_err(|e| {
+            browser_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "browserUnavailable",
+                &e.to_string(),
+            )
+        })?;
+    if handle.browser_incarnation != lease.browser_incarnation
+        || handle.profile_epoch != lease.profile_epoch
+    {
+        return Err(browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "staleIncarnation",
+            "browser incarnation mismatch",
+        ));
+    }
+    url::Url::parse(&handle.ws_endpoint)
+        .ok()
+        .and_then(|u| u.port())
+        .ok_or_else(|| {
+            browser_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internalError",
+                "missing browser port",
+            )
+        })
+}
+
+/// GET /api/browser/devtools/{token}/{*path}
+pub async fn proxy_devtools_asset(
+    State(state): State<AppState>,
+    Path((token, path)): Path<(String, String)>,
+) -> Response {
+    if crate::browser_host::devtools_filter::validate_devtools_asset_path(&path).is_err() {
+        return browser_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalidPath",
+            "invalid devtools asset path",
+        );
+    }
+    let Some(lease) = crate::browser_host::devtools::global_devtools_leases()
+        .resolve_and_refresh_asset(&token)
+        .await
+    else {
+        return browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidDevToolsToken",
+            "invalid or expired devtools token",
+        );
+    };
+    let chrome_port = match resolve_devtools_chrome_port(&state, &lease).await {
+        Ok(port) => port,
+        Err(resp) => return resp,
+    };
+    let Ok(resp) = DEVTOOLS_ASSET_CLIENT
+        .get(format!("http://127.0.0.1:{chrome_port}/devtools/{path}"))
+        .send()
+        .await
+    else {
+        return browser_error_response(
+            StatusCode::BAD_GATEWAY,
+            "badGateway",
+            "failed to fetch devtools asset",
+        );
+    };
+    if !resp.status().is_success() {
+        return browser_error_response(
+            StatusCode::NOT_FOUND,
+            "assetNotFound",
+            "devtools asset not found",
+        );
+    }
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let Ok(bytes) =
+        crate::browser_host::cdp_gateway::read_bounded_bytes(resp, MAX_DEVTOOLS_ASSET_BYTES).await
+    else {
+        return browser_error_response(
+            StatusCode::BAD_GATEWAY,
+            "badGateway",
+            "devtools asset exceeded size bound",
+        );
+    };
+    let (body_bytes, cache_ctl) = if content_type.to_ascii_lowercase().starts_with("text/html") {
+        let rewritten = crate::browser_host::devtools_filter::rewrite_devtools_html_csp(
+            &String::from_utf8_lossy(&bytes),
+        );
+        (rewritten.into_bytes(), "no-store")
+    } else {
+        (bytes, "private, max-age=300")
+    };
+    let mut out = Response::new(axum::body::Body::from(body_bytes));
+    *out.status_mut() = StatusCode::OK;
+    if let Ok(ct) = HeaderValue::from_str(&content_type) {
+        out.headers_mut().insert(header::CONTENT_TYPE, ct);
+    }
+    out.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache_ctl));
+    out.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    out.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    out
+}
+
+/// GET /api/browser/devtools/{token}/ws
+pub async fn devtools_ws_handler(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    ws: Result<
+        axum::extract::ws::WebSocketUpgrade,
+        axum::extract::ws::rejection::WebSocketUpgradeRejection,
+    >,
+) -> Response {
+    let ws = match ws {
+        Ok(upgrade) => upgrade,
+        Err(rej) => return rej.into_response(),
+    };
+    let (hash, lease, permit) = match crate::browser_host::devtools::global_devtools_leases()
+        .claim_ws(&token)
+        .await
+    {
+        Ok(claimed) => claimed,
+        Err(StatusCode::TOO_MANY_REQUESTS) => {
+            return browser_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "tooManyConnections",
+                "devtools websocket limit reached",
+            )
+        }
+        Err(StatusCode::CONFLICT) => {
+            return browser_error_response(
+                StatusCode::CONFLICT,
+                "leaseInUse",
+                "devtools websocket already active",
+            )
+        }
+        Err(_) => {
+            return browser_error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalidDevToolsToken",
+                "invalid or expired devtools token",
+            )
+        }
+    };
+    let chrome_port = match resolve_devtools_chrome_port(&state, &lease).await {
+        Ok(port) => port,
+        Err(resp) => {
+            crate::browser_host::devtools::global_devtools_leases()
+                .revoke_by_hash(&hash)
+                .await;
+            return resp;
+        }
+    };
+    ws.max_message_size(crate::browser_host::protocol::MAX_WS_MESSAGE_BYTES)
+        .max_frame_size(crate::browser_host::protocol::MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| {
+            relay_devtools_socket(socket, state, hash, lease, chrome_port, permit)
+        })
+}
+
+async fn relay_devtools_socket(
+    mut client_ws: axum::extract::ws::WebSocket,
+    state: AppState,
+    hash: [u8; 32],
+    lease: crate::browser_host::devtools::DevToolsLease,
+    chrome_port: u16,
+    permit: crate::browser_host::cdp_gateway::CdpGatewayPermit,
+) {
+    use axum::extract::ws::Message as AxumWsMessage;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::time::timeout;
+    use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+    use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
+
+    use crate::browser_host::cdp_gateway::{
+        write_with_cancel, AbortOnDrop, WriteOutcome, UPSTREAM_CONNECT_TIMEOUT,
+    };
+    use crate::browser_host::devtools::global_devtools_leases;
+    use crate::browser_host::devtools_filter::{
+        inspect_devtools_client_message, ClientMessageVerdict, DevToolsUpstreamFilter,
+    };
+    use crate::browser_host::diagnostics::global_memory_controller;
+    use crate::browser_host::protocol::MAX_WS_MESSAGE_BYTES;
+
+    let mut cfg = WebSocketConfig::default();
+    cfg.max_message_size = Some(MAX_WS_MESSAGE_BYTES);
+    cfg.max_frame_size = Some(MAX_WS_MESSAGE_BYTES);
+    let upstream_url = format!(
+        "ws://127.0.0.1:{chrome_port}/devtools/page/{}",
+        lease.native_target_id
+    );
+    let Ok(Ok((mut upstream_ws, _))) = timeout(
+        UPSTREAM_CONNECT_TIMEOUT,
+        tokio_tungstenite::connect_async_with_config(&upstream_url, Some(cfg), false),
+    )
+    .await
+    else {
+        let _ = timeout(
+            std::time::Duration::from_millis(500),
+            client_ws.send(AxumWsMessage::Close(None)),
+        )
+        .await;
+        global_devtools_leases().revoke_by_hash(&hash).await;
+        return;
+    };
+
+    let (abort_tx, mut abort_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let admission = lease.admission.clone();
+    let state_auth = state.clone();
+    let watcher = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(crate::browser_host::auth::LIVE_CHECK_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            if crate::browser_host::auth::verify_live_admission(&state_auth, &admission)
+                .await
+                .is_err()
+                || !global_devtools_leases().refresh_ws(&hash).await
+            {
+                let _ = abort_tx.send(()).await;
+                break;
+            }
+        }
+    });
+    let _watcher_guard = AbortOnDrop(Some(watcher));
+
+    let deadline_at = lease.admission.effective_deadline.map(|dl| {
+        let rem = (dl - chrono::Utc::now())
+            .to_std()
+            .unwrap_or(std::time::Duration::from_millis(1));
+        tokio::time::Instant::now() + rem
+    });
+    let deadline_sleep = tokio::time::sleep_until(
+        deadline_at.unwrap_or_else(|| {
+            tokio::time::Instant::now() + std::time::Duration::from_secs(86400 * 365)
+        }),
+    );
+    tokio::pin!(deadline_sleep);
+    let mut upstream_filter = DevToolsUpstreamFilter::default();
+
+    loop {
+        tokio::select! {
+            _ = &mut deadline_sleep, if deadline_at.is_some() => break,
+            _ = lease.cancel.cancelled() => break,
+            _ = abort_rx.recv() => break,
+            msg = client_ws.next() => {
+                let ok = match msg {
+                    Some(Ok(AxumWsMessage::Text(t))) => {
+                        let Ok(_mem) = global_memory_controller().try_reserve(t.len().saturating_mul(2)) else { break; };
+                        match inspect_devtools_client_message(t.as_str(), &lease.native_target_id) {
+                            ClientMessageVerdict::Forward => {
+                                write_with_cancel(upstream_ws.send(UpstreamMessage::Text(t.as_str().into())), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                            }
+                            ClientMessageVerdict::Reject(Some(err)) => {
+                                write_with_cancel(client_ws.send(AxumWsMessage::Text(err.into())), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                            }
+                            ClientMessageVerdict::Reject(None) => true,
+                        }
+                    }
+                    Some(Ok(AxumWsMessage::Binary(b))) => {
+                        let Ok(_mem) = global_memory_controller().try_reserve(b.len()) else { break; };
+                        write_with_cancel(upstream_ws.send(UpstreamMessage::Binary(b)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                    }
+                    Some(Ok(AxumWsMessage::Ping(p))) => {
+                        write_with_cancel(upstream_ws.send(UpstreamMessage::Ping(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                    }
+                    Some(Ok(AxumWsMessage::Pong(p))) => {
+                        write_with_cancel(upstream_ws.send(UpstreamMessage::Pong(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                    }
+                    _ => false,
+                };
+                if !ok { break; }
+            }
+            msg = upstream_ws.next() => {
+                let ok = match msg {
+                    Some(Ok(UpstreamMessage::Text(t))) => {
+                        let Ok(_mem) = global_memory_controller().try_reserve(t.len().saturating_mul(2)) else { break; };
+                        if !upstream_filter.should_forward(t.as_str(), &lease.native_target_id) {
+                            true
+                        } else {
+                            write_with_cancel(client_ws.send(AxumWsMessage::Text(t.as_str().into())), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                        }
+                    }
+                    Some(Ok(UpstreamMessage::Binary(b))) => {
+                        let Ok(_mem) = global_memory_controller().try_reserve(b.len()) else { break; };
+                        write_with_cancel(client_ws.send(AxumWsMessage::Binary(b)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                    }
+                    Some(Ok(UpstreamMessage::Ping(p))) => {
+                        write_with_cancel(client_ws.send(AxumWsMessage::Ping(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                    }
+                    Some(Ok(UpstreamMessage::Pong(p))) => {
+                        write_with_cancel(client_ws.send(AxumWsMessage::Pong(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                    }
+                    Some(Ok(UpstreamMessage::Frame(_))) => true,
+                    _ => false,
+                };
+                if !ok { break; }
+            }
+        }
+    }
+
+    drop(_watcher_guard);
+    let _ = timeout(
+        std::time::Duration::from_millis(500),
+        upstream_ws.close(None),
+    )
+    .await;
+    let _ = timeout(
+        std::time::Duration::from_millis(500),
+        client_ws.send(AxumWsMessage::Close(None)),
+    )
+    .await;
+    drop(permit);
+    global_devtools_leases().revoke_by_hash(&hash).await;
+}
+
 pub use crate::browser_host::cdp_gateway::{
     cdp_ws_handler, cdp_ws_handler_target, get_cdp_json_alias, get_cdp_list, get_cdp_version,
 };

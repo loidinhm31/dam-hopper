@@ -25,3 +25,5 @@ pub mod viewer_delivery_estimator;
 pub mod media_writer;
 pub mod capture_tier;
 pub mod adaptive_stream_controller;
+pub mod devtools;
+pub mod devtools_filter;

@@ -1798,6 +1798,26 @@ async fn install_navigation_watcher(
         return false;
     }
 
+    let downloads_dir = crate::browser_host::cdp::resolve_host_downloads_dir();
+    if let Err(err) = cdp
+        .send_command(
+            "Browser.setDownloadBehavior",
+            Some(json!({
+                "behavior": "allow",
+                "downloadPath": downloads_dir.to_string_lossy(),
+                "eventsEnabled": true,
+            })),
+            None,
+        )
+        .await
+    {
+        warn!(
+            session_id,
+            error = %err,
+            "Failed to configure native host Browser.setDownloadBehavior"
+        );
+    }
+
     let cancel_token = CancellationToken::new();
     let watcher_id = NAV_WATCHER_SEQ.fetch_add(1, Ordering::Relaxed);
     let shared_main_frame_id = Arc::new(StdMutex::new(main_frame_id.map(str::to_string)));
@@ -1832,6 +1852,7 @@ async fn install_navigation_watcher(
     let sid_owned = session_id.to_string();
     let page_sid_owned = page_sid.to_string();
     let mut pending_initial_loader_id = ignore_initial_loader_id.map(str::to_string);
+    let mut active_download_guids = std::collections::HashSet::<String>::new();
     tokio::spawn(async move {
         let _registration = NavWatcherRegistration {
             session_id: sid_owned.clone(),
@@ -1899,6 +1920,81 @@ async fn install_navigation_watcher(
                             record_navigation_queue_cleanup(&state_clone, &sid_owned, url.as_deref()).await;
                         }
                         CdpLifecycleEvent::InspectNodeRequested { .. } => {}
+                        CdpLifecycleEvent::DownloadWillBegin {
+                            session_id: evt_sid,
+                            frame_id,
+                            guid,
+                            suggested_filename,
+                            ..
+                        } => {
+                            if evt_sid
+                                .as_deref()
+                                .is_some_and(|sid| sid != page_sid_owned.as_str())
+                            {
+                                continue;
+                            }
+                            if evt_sid.is_none() {
+                                if let Some(fid) = frame_id.as_deref() {
+                                    let belongs_to_other_tab = {
+                                        let watchers = GLOBAL_NAV_WATCHERS.lock().unwrap();
+                                        watchers.iter().any(|(other_sid, w)| {
+                                            other_sid != &sid_owned
+                                                && w.main_frame_id
+                                                    .lock()
+                                                    .unwrap()
+                                                    .as_deref()
+                                                    == Some(fid)
+                                        })
+                                    };
+                                    if belongs_to_other_tab {
+                                        continue;
+                                    }
+                                }
+                            }
+                            if active_download_guids.len() >= 32 {
+                                active_download_guids.clear();
+                            }
+                            active_download_guids.insert(guid.clone());
+                            global_session_registry()
+                                .record_download_will_begin(
+                                    &sid_owned,
+                                    guid.clone(),
+                                    suggested_filename.clone(),
+                                )
+                                .await;
+                        }
+                        CdpLifecycleEvent::DownloadProgress {
+                            session_id: evt_sid,
+                            guid,
+                            state,
+                            received_bytes,
+                            total_bytes,
+                            file_path,
+                            ..
+                        } => {
+                            if evt_sid
+                                .as_deref()
+                                .is_some_and(|sid| sid != page_sid_owned.as_str())
+                            {
+                                continue;
+                            }
+                            if evt_sid.is_none() && !active_download_guids.contains(guid) {
+                                continue;
+                            }
+                            if state != "inProgress" {
+                                active_download_guids.remove(guid);
+                            }
+                            global_session_registry()
+                                .record_download_progress(
+                                    &sid_owned,
+                                    guid.clone(),
+                                    state.clone(),
+                                    *received_bytes,
+                                    *total_bytes,
+                                    file_path.clone(),
+                                )
+                                .await;
+                        }
                     }
                 }
             }
@@ -2082,7 +2178,9 @@ async fn run_selection_cdp_observer(
                             }
                         }
                     }
-                    CdpLifecycleEvent::FrameNavigated { is_main_frame: false, .. } => {}
+                    CdpLifecycleEvent::FrameNavigated { is_main_frame: false, .. }
+                    | CdpLifecycleEvent::DownloadWillBegin { .. }
+                    | CdpLifecycleEvent::DownloadProgress { .. } => {}
                     CdpLifecycleEvent::InspectNodeRequested { session_id: evt_sid, backend_node_id, .. }
                         if watch_inspect =>
                     {

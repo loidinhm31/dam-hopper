@@ -44,6 +44,7 @@ All errors return JSON with HTTP status $\ge 400$:
 | HTTP Status | Error Kind | Description |
 | --- | --- | --- |
 | 400 Bad Request | `invalidInput` | Missing or malformed parameters; oversized payload |
+| 400 Bad Request | `invalidPath` | Malformed or traversal DevTools asset path |
 | 400 Bad Request | `policyViolation` | URL violates network policy or contains credentials |
 | 400 Bad Request | `purposeMismatch` | Ticket purpose does not match requested attachment endpoint |
 | 400 Bad Request | `sequenceViolation` | Input sequence gap or stale sequence counter |
@@ -54,6 +55,8 @@ All errors return JSON with HTTP status $\ge 400$:
 | 401 Unauthorized | `sessionExpired` | Session deadline has elapsed |
 | 401 Unauthorized | `ticketNotFound` | Capability ticket not found or already consumed (single-use) |
 | 401 Unauthorized | `ticketExpired` | Capability ticket 30s TTL expired |
+| 401 Unauthorized | `invalidDevToolsToken` | Missing, expired, or revoked target-scoped DevTools capability token |
+| 401 Unauthorized | `staleTarget` | Native target ID rotated since the DevTools lease was minted |
 | 403 Forbidden | `forbidden` | Session belongs to another principal |
 | 403 Forbidden | `adminRequired` | Caller lacks the required Admin role |
 | 403 Forbidden | `devBypassDenied` | Non-loopback peer or unapproved Origin in `--no-auth` mode |
@@ -63,14 +66,22 @@ All errors return JSON with HTTP status $\ge 400$:
 | 403 Forbidden | `leaseExpired` | Control lease has expired (30s TTL elapsed) |
 | 403 Forbidden | `notLeaseHolder` | Caller lease token does not match active lease holder |
 | 404 Not Found | `sessionNotFound` | Browser session ID does not exist |
+| 404 Not Found | `assetNotFound` | Upstream Chromium DevTools asset returned non-2xx |
 | 409 Conflict | `sessionConflict` | Conflicting session operation or state mismatch |
 | 409 Conflict | `leaseConflict` | Control lease currently held by another active viewer |
+| 409 Conflict | `leaseInUse` | DevTools WebSocket already active for this lease token |
+| 409 Conflict | `staleIncarnation` | Browser instance is no longer live or incarnation/profileEpoch mismatch |
 | 429 Too Many Requests | `browserBusy` | Principal/global process limit or concurrent agent CDP ceiling (`max_raw_cdp_connections`, cap 8) reached |
+| 429 Too Many Requests | `tooManyDevToolsLeases` | DevTools lease limit reached (`8` per principal / `32` global) |
+| 429 Too Many Requests | `tooManyConnections` | Concurrent target-scoped DevTools WebSocket ceiling (`4`) reached |
 | 429 Too Many Requests | `ticketCapacityExceeded` | Unconsumed ticket limit reached (16 principal / 64 global) |
 | 429 Too Many Requests | `queueOverflow` | Input queue limit exceeded (128 records or 256 KiB) |
 | 502 Bad Gateway | `nativeCloseUnconfirmed` | Native close unconfirmed; session remains in `closing` status holding target capacity |
+| 502 Bad Gateway | `nativeTargetUnavailable` | Session has no bound native target |
 | 502 Bad Gateway | `cdpError` | Upstream CDP inspect or screenshot command failed |
+| 502 Bad Gateway | `badGateway` | Upstream DevTools asset fetch failed or exceeded 4 MiB ceiling |
 | 503 Service Unavailable | `authUnavailable` | Database unavailable during admission check or live check timeout (2s) |
+| 503 Service Unavailable | `browserUnavailable` | Browser instance unavailable when resolving DevTools proxy target |
 | 503 Service Unavailable | `inputUnavailable` | Viewport geometry not yet available for coordinate mapping |
 | 503 Service Unavailable | `publicOriginUnavailable` | Raw CDP discovery requires trusted `DAM_HOPPER_PUBLIC_SERVER_ORIGIN`; request `Host` never reflected |
 | 401 Unauthorized | `mfaRequired` / `invalidSession` | MFA verification required or claims version mismatch |
@@ -180,6 +191,7 @@ Retrieves current metadata, viewport epoch, navigation revision, active lease, a
 
 - `activePopupSessionId` *(optional)*: Present when an admitted popup child session opened by this session is currently `running`. Automatically cleared and published via `sessionUpdated` when the popup session closes or is lost.
 - `parentSessionId` *(optional)*: Present on admitted popup sessions, identifying the opener `browserSessionId` so the Browser App can display the popup session and restore the opener when OAuth sign-in completes (`window.close()`) or when the user clicks **Return to Page**.
+- `lastDownload` *(optional `BrowserDownloadSummaryDto`)*: Present once a native host download begins on the session (`{ "guid": "...", "suggestedFilename": "...", "state": "inProgress" | "completed" | "canceled", "receivedBytes": 0, "totalBytes": 0, "filePath": "/path/to/file" }`; `filePath` omitted when absent). Updated from CDP `Browser/Page.downloadWillBegin` and `Browser/Page.downloadProgress` events and broadcast via `sessionUpdated`.
 
 ### DELETE /api/browser/sessions/{id}
 
@@ -504,6 +516,53 @@ WebSocket upgrade route for raw CDP access to a specific target `{target_id}` (`
 
 - Connects dedicated upstream WebSocket to `ws://127.0.0.1:{chrome_port}/devtools/page/{target_id}`.
 
+### POST /api/browser/sessions/{id}/devtools
+
+Mints a target-scoped Chromium DevTools capability lease for an owned `running` browser session whose `browserIncarnation` is live.
+
+- **Token & Storage:** 256-bit `OsRng` token encoded as URL-safe unpadded Base64; server stores only its SHA-256 hash (`DevToolsLeaseManager`).
+- **TTL & Capacity:** `300` seconds (`DEVTOOLS_LEASE_TTL`), clipped to caller auth `effective_deadline`. Capped at `8` active leases per principal (`MAX_LEASES_PER_PRINCIPAL`) and `32` globally (`MAX_LEASES_GLOBAL`); excess returns HTTP 429 `kind: "tooManyDevToolsLeases"`.
+- **Errors:** Foreign session returns HTTP 404 `sessionNotFound`; non-running session returns HTTP 409 `sessionConflict`; stale browser incarnation returns HTTP 409 `staleIncarnation`.
+
+**Response (200 OK, `Cache-Control: no-store`):**
+```json
+{
+  "token": "43-character-url-safe-base64-token",
+  "expiresAtUnixMs": 1794143100000,
+  "browserSessionId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "browserIncarnation": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "profileEpoch": "1"
+}
+```
+
+### DELETE /api/browser/sessions/{id}/devtools/{token}
+
+Revokes a DevTools capability lease owned by the calling principal for session `{id}` and cancels any active DevTools WebSocket bound to it. Foreign sessions return HTTP 404 `sessionNotFound`.
+
+**Response (200 OK, `Cache-Control: no-store`):**
+```json
+{
+  "revoked": true
+}
+```
+
+### GET /api/browser/devtools/{token}/{*path}
+
+Proxies Chromium's bundled DevTools frontend assets from `http://127.0.0.1:{chrome_port}/devtools/{path}` using the minted capability `{token}` (path token acts as capability credential; no `Authorization` header required).
+
+- **Path Validation (`validate_devtools_asset_path`):** Rejects empty paths, leading/trailing `/`, `\`, `..`, `?`, `#`, empty/dot segments, or characters outside `[A-Za-z0-9._/-]` with HTTP 400 `invalidPath`.
+- **Authority & TTL Refresh:** Validates token, live auth (`verify_live_admission`), live incarnation/epoch, and matching `native_target_id` (stale/revoked/expired returns HTTP 401 `invalidDevToolsToken`, `invalidSession`, `staleIncarnation`, or `staleTarget`), refreshing the 300s sliding TTL clipped to auth deadline.
+- **Bounds & Headers:** 2s upstream timeout (`DEVTOOLS_ASSET_TIMEOUT`), redirects disabled, 4 MiB ceiling (`MAX_DEVTOOLS_ASSET_BYTES`). `text/html*` responses rewrite `ws://127.0.0.1:*` in CSP to `'self' ws: wss: ws://127.0.0.1:*` with `Cache-Control: no-store`; non-HTML assets return `Cache-Control: private, max-age=300`. All responses set `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`.
+
+### GET /api/browser/devtools/{token}/ws
+
+Target-scoped WebSocket relay connecting to `ws://127.0.0.1:{chrome_port}/devtools/page/{native_target_id}` (`UPSTREAM_CONNECT_TIMEOUT = 5s`, `MAX_WS_MESSAGE_BYTES = 4 MiB`).
+
+- **Single Claim & Concurrency:** Each lease token admits at most one active WebSocket (`ws_active = true`; duplicate upgrade returns HTTP 409 `leaseInUse`). Global concurrent DevTools WebSockets are capped at `4` (`MAX_DEVTOOLS_CONNECTIONS`; excess returns HTTP 429 `tooManyConnections`).
+- **Live Auth & Revocation:** Runs 5s periodic `verify_live_admission` + `refresh_ws`, global payload memory reservation (`global_memory_controller`), and `write_with_cancel`. Auth session revocation (`revoke_by_auth_session`), principal fencing (`revoke_all_for_principal`), and browser session viewer release/retirement (`revoke_by_browser_session`) cancel active sockets immediately.
+- **Client->Upstream Filter (`inspect_devtools_client_message`):** Rejects JSON-RPC batch arrays, `Browser.*`, cross-target/management `Target.*` (`createTarget`, `closeTarget`, `activateTarget`, `exposeDevToolsProtocol`, `disposeBrowserContext`, `createBrowserContext`, `getTargets`, `sendMessageToTarget`), `Target.attachToTarget` / `Target.autoAttachRelated` with foreign `targetId`, and viewport-mutating `Emulation.*` (`setDeviceMetricsOverride`, `clearDeviceMetricsOverride`, `setPageScaleFactor`, `setVisibleSize`), replying with JSON-RPC error `-32601` while keeping `inputAvailable` intact.
+- **Upstream->Client Filter (`DevToolsUpstreamFilter`):** Suppresses `Target.targetCreated` and `Target.targetInfoChanged` for foreign `page` / `browser_ui` targets (tracking up to `256` foreign IDs) and their matching `Target.targetDestroyed` events, while forwarding worker/child targets.
+
 ---
 
 ## 3. Single-Use Capability Tickets (`AttachmentManager`)
@@ -591,17 +650,24 @@ When native CDP commands (such as `Emulation.setDeviceMetricsOverride`) alter vi
 
 ---
 
-## 5. Navigation & HTTP Network Policy (`network_policy.rs`)
+## 5. Navigation, Network Policy & Native Downloads (`network_policy.rs`, `selection.rs`)
 
-URLs submitted to `POST /api/browser/sessions` and `POST /api/browser/sessions/{id}/navigate` undergo strict policy validation:
+URLs submitted to `POST /api/browser/sessions` and `POST /api/browser/sessions/{id}/navigate` (`validate_navigation_url`) and browser-initiated requests intercepted by CDP Fetch (`NetworkPolicy::check_request`) undergo strict policy validation:
 
 - **Length Bounds:** Maximum URL length 4096 bytes (`MAX_URL_BYTES`); maximum page title 512 bytes (`MAX_TITLE_BYTES`).
-- **Scheme Allowlist:** Strictly `http`, `https`, and `about:blank`. All other schemes (`file:`, `javascript:`, `chrome:`, `data:`) are rejected.
+- **REST Navigation Schemes (`validate_navigation_url`):** Strictly `http`, `https`, and `about:blank`. All other schemes (`file:`, `javascript:`, `chrome:`, `data:`, `blob:`) are rejected.
+- **CDP Fetch Interceptor Schemes (`NetworkPolicy::check_request`):**
+  - `http` / `https`: Evaluated against `evaluate_network_url` (`Navigation` vs `Subresource`).
+  - `data:`: Allowed for subresources and navigation/download fetches (such as `<a download>` document triggers).
+  - `blob:`: Allowed unconditionally for subresources; for `RequestKind::Navigation`, parses the embedded inner URL and requires an `http` or `https` inner scheme passing `evaluate_network_url(..., RequestKind::Navigation)` (denying `blob:null/...`, `blob:file:///...`, and metadata/denied origins).
+  - `about:`: Allowed for `about:blank` and `about:srcdoc` (and any `about:` subresource).
+  - All other schemes (`file:`, `ftp:`, `javascript:`, `chrome:`, extension schemes) are denied.
 - **Credentials Forbidden:** URLs containing embedded username or password fields (e.g. `https://actor:token@domain.example`) are rejected.
 - **Loopback Access:** HTTP(S) destinations on `localhost`, `.localhost`, IPv4 loopback (`127.0.0.0/8`), and IPv6 loopback (`::1`, including mapped IPv4) are allowed on any port without an origin entry, in both production and development. Loopback refers to the server-hosted browser's network namespace, not necessarily the user's device. Navigations and subresources are subject to explicit `denied_destinations` entries.
 - **Private & Metadata Blocking:** Other private, link-local, broadcast, unspecified, and documentation IP ranges require an explicitly allowed target origin (or asset origin for subresources). Cloud metadata destinations remain denied even when explicitly allowed. Configured destination denies take precedence over all allowances.
 - **Security:** Any page opened in the hosted browser may attempt requests to server-loopback services. Protect sensitive local services with authentication and origin checks; loopback binding alone is not an access-control boundary. Browser network policy is not a complete egress sandbox and does not cover DNS resolution, WebSocket, or WebRTC.
 - **Public Internet:** HTTP(S) public destinations are permitted in both production and development.
+- **Native Host Downloads (`Browser.setDownloadBehavior`):** `install_navigation_watcher` (`selection.rs`) enables native Chromium downloads (`behavior: "allow"`, `eventsEnabled: true`) into `resolve_host_downloads_dir()` (`XDG_DOWNLOAD_DIR` if absolute, else `$HOME`/`$USERPROFILE/Downloads`, fallback `$TMPDIR/dam-hopper-downloads`). `Browser/Page.downloadWillBegin` and `downloadProgress` CDP events update `BrowserSessionDto.lastDownload` and emit `sessionUpdated`.
 
 ---
 
@@ -769,3 +835,4 @@ The Host Browser API and streaming transport are qualified by integrated test ha
 - **Tuning Grid & Zero-Polling (`packages/ui/e2e/os-host-browser/performance.spec.ts`):** Evaluates 12 candidate configurations against protocol safety caps; release profile requires `everyNthFrame = 1` (setting #7 q65 1280x900 default); static pages emit zero periodic `Page.captureScreenshot` calls.
 - **Security Matrix Integration (`server/tests/browser_host_security.rs`):** Validates role denial, single-use ticket replay/purpose/Origin fencing, `--no-auth` loopback socket enforcement, URL network policy, multi-target/multi-viewer concurrency limits, and live role demotion termination.
 - **Platform Containment & Reset (`server/tests/browser_host_platform.rs`):** Validates Chromium launch argument security allowlisting, Unix supervisor death-pipe architecture, advisory OS locking (`flock`), and `reset.json` restart fencing.
+- **Target-Scoped DevTools & Native Downloads (`server/tests/browser_host_devtools.rs`):** Validates DevTools lease capacity/revocation, asset proxy CSP rewriting & path traversal rejection, WS single-claim/concurrency cap (`4`), client/upstream CDP filtering, per-auth-session revocation, and real-Chromium `data:`/`http:`/`blob:` native host downloads into `XDG_DOWNLOAD_DIR` updating `lastDownload`.

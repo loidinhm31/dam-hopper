@@ -326,9 +326,10 @@ impl NetworkPolicy {
 
     /// Evaluates one browser-initiated request observed by the Fetch interceptor.
     ///
-    /// Network schemes follow the navigation/subresource origin rules. Schemes that never
-    /// leave the browser (`data:`, `blob:`, `about:`) are allowed for subresources only; every
-    /// other scheme (`file:`, `ftp:`, extensions, ...) is denied.
+    /// Network schemes follow the navigation/subresource origin rules. `data:` is allowed for
+    /// subresources and `<a download>` document fetches; `blob:` is allowed for subresources and
+    /// for navigations whose inner origin satisfies `evaluate_network_url`; `about:blank` and
+    /// `about:srcdoc` are allowed; every other scheme (`file:`, `ftp:`, extensions, ...) is denied.
     pub fn check_request(
         &self,
         raw_url: &str,
@@ -344,7 +345,19 @@ impl NetworkPolicy {
             Url::parse(raw_url).map_err(|e| NetworkPolicyError::InvalidUrl(e.to_string()))?;
         match parsed.scheme() {
             "http" | "https" => self.evaluate_network_url(&parsed, kind),
-            "data" | "blob" | "about" if kind == RequestKind::Subresource => Ok(()),
+            "data" => Ok(()),
+            "blob" if kind == RequestKind::Subresource => Ok(()),
+            "blob" => {
+                let inner = Url::parse(parsed.path())
+                    .map_err(|e| NetworkPolicyError::InvalidUrl(e.to_string()))?;
+                if !matches!(inner.scheme(), "http" | "https") {
+                    return Err(NetworkPolicyError::UnsupportedScheme(
+                        inner.scheme().to_string(),
+                    ));
+                }
+                self.evaluate_network_url(&inner, RequestKind::Navigation)
+            }
+            "about" if kind == RequestKind::Subresource => Ok(()),
             "about" if raw_url == "about:blank" || raw_url == "about:srcdoc" => Ok(()),
             scheme => Err(NetworkPolicyError::UnsupportedScheme(scheme.to_string())),
         }
@@ -602,6 +615,18 @@ mod tests {
             .is_ok());
         assert!(policy
             .check_request("data:text/html,x", RequestKind::Navigation)
+            .is_ok());
+        assert!(policy
+            .check_request("blob:http://10.0.0.1:3000/abc-123", RequestKind::Navigation)
+            .is_ok());
+        assert!(policy
+            .check_request("blob:http://169.254.169.254/abc-123", RequestKind::Navigation)
+            .is_err());
+        assert!(policy
+            .check_request("blob:null/abc-123", RequestKind::Navigation)
+            .is_err());
+        assert!(policy
+            .check_request("blob:file:///etc/passwd", RequestKind::Navigation)
             .is_err());
         assert!(policy
             .check_request("file:///etc/passwd", RequestKind::Subresource)

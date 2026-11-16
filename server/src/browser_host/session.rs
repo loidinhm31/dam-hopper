@@ -233,6 +233,18 @@ pub struct SessionDialogSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct BrowserDownloadSummaryDto {
+    pub guid: String,
+    pub suggested_filename: String,
+    pub state: String,
+    pub received_bytes: u64,
+    pub total_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct BrowserSessionDto {
     pub browser_session_id: String,
     pub browser_incarnation: String,
@@ -253,6 +265,8 @@ pub struct BrowserSessionDto {
     pub active_popup_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_download: Option<BrowserDownloadSummaryDto>,
 }
 
 #[derive(Debug, Clone)]
@@ -292,6 +306,7 @@ pub struct BrowserSession {
     pub popup_blocked: bool,
     pub active_popup_session_id: Option<String>,
     pub parent_session_id: Option<String>,
+    pub last_download: Option<BrowserDownloadSummaryDto>,
     pub created_at: Instant,
     /// Set when the session becomes `Closed` or `Lost`; drives TTL reaping.
     pub retired_at: Option<Instant>,
@@ -338,6 +353,7 @@ impl BrowserSession {
             popup_blocked: if self.popup_blocked { Some(true) } else { None },
             active_popup_session_id: self.active_popup_session_id.clone(),
             parent_session_id: self.parent_session_id.clone(),
+            last_download: self.last_download.clone(),
         }
     }
 
@@ -726,6 +742,7 @@ impl SessionRegistry {
             popup_blocked: false,
             active_popup_session_id: None,
             parent_session_id: None,
+            last_download: None,
             pending_api_navigation_at: None,
             created_at: now,
             retired_at: None,
@@ -930,6 +947,30 @@ impl SessionRegistry {
             .sessions
             .get(session_id)
             .and_then(|s| s.native_target_id.clone())
+    }
+
+    /// Returns `(BrowserSessionDto, native_target_id)` for a `Running` session owned by
+    /// `(principal, is_dev)`. Foreign sessions fail with `NotFound`.
+    pub async fn owned_running_target(
+        &self,
+        session_id: &str,
+        principal: &str,
+        is_dev: bool,
+    ) -> Result<(BrowserSessionDto, String), SessionError> {
+        let inner = self.inner.read().await;
+        let session = inner.sessions.get(session_id).ok_or(SessionError::NotFound)?;
+        if session.owner_principal != principal || session.is_dev != is_dev {
+            return Err(SessionError::NotFound);
+        }
+        if session.status != SessionStatus::Running {
+            return Err(SessionError::Conflict(
+                "browser session is not running".to_string(),
+            ));
+        }
+        let target_id = session.native_target_id.clone().ok_or_else(|| {
+            SessionError::NativeUnavailable("browser session has no native target".to_string())
+        })?;
+        Ok((session.to_dto(), target_id))
     }
 
     /// Offers a native page as the identity of a session awaiting one. Idempotent for the same
@@ -1249,6 +1290,7 @@ impl SessionRegistry {
             popup_blocked: false,
             active_popup_session_id: None,
             parent_session_id: Some(parent_id.clone()),
+            last_download: None,
             pending_api_navigation_at: None,
             created_at: Instant::now(),
             retired_at: None,
@@ -1810,6 +1852,84 @@ impl SessionRegistry {
         }
         session.publish_update();
         Some(session.navigation_revision)
+    }
+
+    /// Records the start of a native host Chromium download (`Browser.downloadWillBegin` /
+    /// `Page.downloadWillBegin`) and publishes `SessionUpdated`.
+    pub async fn record_download_will_begin(
+        &self,
+        session_id: &str,
+        guid: String,
+        suggested_filename: String,
+    ) {
+        let mut inner = self.inner.write().await;
+        let Some(session) = inner.sessions.get_mut(session_id) else {
+            return;
+        };
+        if !matches!(
+            session.status,
+            SessionStatus::Initializing | SessionStatus::Running
+        ) {
+            return;
+        }
+        session.last_download = Some(BrowserDownloadSummaryDto {
+            guid,
+            suggested_filename,
+            state: "inProgress".to_string(),
+            received_bytes: 0,
+            total_bytes: 0,
+            file_path: None,
+        });
+        session.publish_update();
+    }
+
+    /// Records download progress or completion (`Browser.downloadProgress` /
+    /// `Page.downloadProgress`) and publishes `SessionUpdated`.
+    pub async fn record_download_progress(
+        &self,
+        session_id: &str,
+        guid: String,
+        state: String,
+        received_bytes: u64,
+        total_bytes: u64,
+        file_path: Option<String>,
+    ) {
+        let mut inner = self.inner.write().await;
+        let Some(session) = inner.sessions.get_mut(session_id) else {
+            return;
+        };
+        if !matches!(
+            session.status,
+            SessionStatus::Initializing | SessionStatus::Running
+        ) {
+            return;
+        }
+        let suggested_filename = match session.last_download.as_ref() {
+            Some(prev) if prev.guid == guid => prev.suggested_filename.clone(),
+            _ => file_path
+                .as_deref()
+                .and_then(|p| std::path::Path::new(p).file_name())
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .unwrap_or("download")
+                .to_string(),
+        };
+        let resolved_path = file_path.or_else(|| {
+            session
+                .last_download
+                .as_ref()
+                .filter(|prev| prev.guid == guid)
+                .and_then(|prev| prev.file_path.clone())
+        });
+        session.last_download = Some(BrowserDownloadSummaryDto {
+            guid,
+            suggested_filename,
+            state,
+            received_bytes,
+            total_bytes,
+            file_path: resolved_path,
+        });
+        session.publish_update();
     }
 
     /// Session ids whose native page is `target_id` (every session of the principal when the

@@ -234,7 +234,7 @@ async fn authenticate_and_validate_discovery(
     Ok(admission)
 }
 
-async fn read_bounded_bytes(
+pub(crate) async fn read_bounded_bytes(
     mut resp: reqwest::Response,
     max_bytes: usize,
 ) -> Result<Vec<u8>, &'static str> {
@@ -735,7 +735,7 @@ async fn cdp_ws_handler_internal(
     })
 }
 
-struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
+pub(crate) struct AbortOnDrop(pub(crate) Option<tokio::task::JoinHandle<()>>);
 
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
