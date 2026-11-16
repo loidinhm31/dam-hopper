@@ -285,20 +285,55 @@ All animations honor user operating system preferences via `@media (prefers-redu
 
 ---
 
-## 7. Native Android Agent Hub Design System & First Page Architecture
+## 7. Native Browser Tab Chrome, Navigation, Recovery & Accessibility (Implemented — Phases 01–05)
 
-### 7.1 Landing Screen Philosophy
+> **Status:** Implemented UX Guidelines (Phases 01–04 Implemented; Phase 05 Test Authoring & Reconciled, Live Visual Acceptance Gate Pending). Phase 01 owner/identity and pure tab-state model contracts, Phase 02 canonical persistence and Web Locks recovery, Phase 03 tuple-keyed stream slots and active-only streaming, Phase 04 modular native chrome (`BrowserTabStrip`, `BrowserAddressBar`, `BrowserNewTabPage`, `BrowserTools`, `BrowserRecoveryPanel`), and Phase 05 browser component and E2E qualification suites are authored, with live visual review receipt remaining the final gate.
+
+### 7.1 Utilitarian Native Chrome & Tab Strip Geometry
+
+- **Chrome Dimensions & Adaptive Ergonomics:** Keep the OS `WindowFrame` title bar unchanged. Inside the Browser window, stack a ~34px horizontal tab strip above a ~36px compact navigation/address bar using existing semantic theme tokens and adaptive typography (`10–32px`), scaling control targets to $\ge 44\text{px}$ under coarse pointers (`pointer: coarse`). Reuse existing Lucide icons (`Globe`, page/navigation controls) with zero new fonts, external assets, third-party dependencies, or CPU animation loops.
+- **Tab Sizing, Overflow & Fixed `+` Trigger:** Render tabs at `120–220px` width, shrinking to a `96px` minimum at narrow widths with horizontal scrolling confined strictly to the tab strip (`scrollIntoView` on active focus) and a fixed `+` new-tab button anchored outside the scroll track.
+- **Readable Identification & Always-Visible Close:** Label priority follows live `title` $\rightarrow$ committed URL hostname $\rightarrow$ `"New Tab"` fallback (never icon-only tabs that obscure identity), alongside an always-visible sibling close affordance (`×`) per tab and an honest pending indicator only during real in-flight navigation/create requests.
+- **Honesty / Anti-Ornamentation Rules:** Omit third-party favicon fetches, fabricated page-load progress percentages, invented TLS/security lock verdicts, guessed `canGoBack`/`canGoForward` state (enable Back/Forward strictly while live and not pending), and fabricated `"playing"` audio badges without runtime evidence (retain the visible viewer-local `"Audio"` / `"Muted"` / `"Unlock Audio"` button).
+
+### 7.2 In-Tab New Tab Panel, Draft Continuity & Tools/Recovery Disclosure
+
+- **In-Tab New Tab Panel:** Render New Tab inside the active `role="tabpanel"` rather than a whole-window modal chooser (keeping other tabs accessible; `Escape` cancels editing and never closes the OS window). Provide an address field + explicit Open button, URL-only helper clarifying HTTP(S) and scheme-less host/port convenience (`https://` default; explicit `http://localhost:port` preserved; userinfo and phrase/search engine queries rejected), explicit local-plaintext continuity warning (noting ordinary query/hash retention locally and in exports/recipes), and **Clear remembered pages** (explicitly stating metadata clearance neither closes live pages nor resets server Chromium cookies/profiles).
+- **Per-Tab In-Memory Drafts & Navigation:** Store input drafts per tab in memory (`dirty` flag) so drafts survive tab switches and window placement transitions without disk persistence or logging. Clean snapshots update clean drafts (`dirty === false`) without clobbering dirty edits; `Escape` restores the newest `committedUrl`; live `Reload` reloads `committedUrl` ignoring dirty drafts; `unavailable` `Reload` / validated `Enter` dispatches one explicit fresh-create intent (after resolving/acknowledging blockers); `Enter` is ignored while `isComposing` (IME) or an action is pending; `409` conflicts surface retry guidance without replay.
+- **Accessible Tools & Recovery Disclosure:** Collapse secondary controls behind a keyboard-accessible disclosure preserving existing cooperative Control/Release lease status and actions, CDP DOM selection start/cancel, selection preview & terminal artifact handoff, active session diagnostics, **Clear remembered pages**, and the **Recovery Inventory** panel (pending/unknown notices, `Check close status / Retry close`, manual owner-qualified live session listing for explicit selected-ID attach/reveal or close without URL matching, and explicit duplicate-risk acknowledgment retaining unresolved notices).
+
+### 7.3 ARIA Tablist Semantics, Scoped Keyboard & Focus Restoration
+
+- **Tablist Structure:** Implement `role="tablist"` (`aria-label="Browser tabs"`) with separate interactive siblings per tab: a selectable `role="tab"` (`aria-selected`, `aria-controls`, unique tab/panel IDs, roving `tabIndex`) and a sibling close `<button>` with a privacy-safe tab `aria-label` (never nested `<button>` elements). Keep only the selected `role="tabpanel"` active and non-inert; inactive panels remain hidden/`inert`.
+- **Scoped Keyboard Navigation:** Support `ArrowLeft`, `ArrowRight`, `Home`, `End` (selection/focus movement) and `Delete` (close focused tab) strictly when focus is inside the tablist, plus standard button activation on `+`. Handlers MUST NOT intercept address bar typing/IME, remote canvas/IME input, modal dialogs, or outer shell shortcuts; add no new global chords.
+- **Predictable Focus Restoration:** Closing a tab moves focus to the nearest surviving tab (or the resulting New Tab); closing the Tools disclosure restores focus to its trigger; activating `+` moves focus to the address field.
+
+### 7.4 Responsive Layout Tiers & Privacy Masking
+
+- **Responsive Widths (`400px`, `640px`, `1024px+`):** Keep the address field flexible and collapse secondary tools into the disclosure trigger **first** before core navigation, close, or `+` controls. Enforce zero overlapping hit targets across `10–32px` text sizes and coarse pointers, preserve usable viewport canvas height, and confine horizontal scrolling to the tab strip. Live/status announcements use concise ARIA live regions.
+- **Cognito Mode & PIN Lock Masking:** When Cognito Privacy Mode or the client-side PIN screen lock is active, synchronously mask tab titles, URLs, hover `title` tooltips, ARIA labels, drafts, and recovery inventory items from DOM/accessibility inspection, and enforce synchronous audio flush (`PcmPlayer.flush()`) with zero active streaming sockets.
+
+### 7.5 Colocated Visual Acceptance Gate (Pre-Code Governance)
+
+- **Colocated Evidence (`packages/ui/e2e/os-host-browser/tabs-visual/`):** Full-viewport Playwright captures via `capture-evidence.ts` across `400×800`, `640×900`, and `1440×900` viewports (exercising narrow overflow, New Tab, unavailable/capacity placeholders, tools/recovery disclosure, privacy masking, large text, and coarse pointers) publish in one evidence session to `packages/ui/e2e/os-host-browser/tabs-visual/` (`checkpoint.png`s, `evidence.json`, `review.md`; optional attachment duplicates do not replace colocated files or create golden baselines).
+- **Mandatory Human Decision Receipt:** Automation initializes/resets `review.md` to `PENDING_HUMAN_REVIEW` only. Visual qualification strictly requires an independent **actual-human** `ACCEPTED` entry in `review.md` recording operator identity, timestamp, matching source fingerprint / Git HEAD / run ID, every inspected image SHA-256 digest, and visual notes. `PENDING_HUMAN_REVIEW`, `REJECTED`, missing, or mismatched hashes/metadata block visual qualification regardless of automated test results.
+
+---
+
+## 8. Native Android Agent Hub Design System & First Page Architecture
+
+### 8.1 Landing Screen Philosophy
 The Android Native client (`native/android-app/`) First Page / Landing Screen establishes a high-density, multi-zone developer workbench directly inspired by DamHopper's web Agent Hub:
 - **Left Agents Zone:** Ambient cross-project agent observation (OMP, Codex, Claude), 7-status filter chips, urgency counters (`!N`, `●N`, `○N`), and direct jump-to-terminal routing.
 - **Center Projects Stage:** Core workspace project cards, Git worktree context (`⎇ wt: branch · #hash`), live terminal counts, zero-session open targets with safe dismissal, and direct capability launch triggers (`[Files]`, `[Terminal]`, `[Git]`).
 - **Right Workspace File Tree Zone:** Contextual file tree and Git file changes overview bound to the selected project, enabling one-tap file opening into `EditorPanelScreen` with canonical `DocumentId` leases.
 
-### 7.2 Form Factor & Breakpoint Rules
+### 8.2 Form Factor & Breakpoint Rules
 - **Compact Phone (`< 600dp`):** Single active stage. Center stage occupies 100% width. Left Agents Sidebar and Right Workspace File Tree open as modal drawers / bottom sheets with `50%` dark scrim. All interactive controls enforce minimum `48x48dp` touch targets.
 - **Foldable / Landscape (`600–839dp`):** Dual-column layout with a pinned collapsible left navigation rail (`240–280dp`) and center project stage (`weight(1f)`, `>= 360dp`). Right file tree operates as an expandable slide-over side sheet.
 - **Expanded Tablet / DeX (`>= 840dp`):** 3-column hybrid layout (Left Agents 240dp | Center Projects flex 1, ~380-480dp | Right File Tree 280-320dp, collapsible via toggle).
 
-### 7.3 Mandatory Touch & Contrast Invariants
+### 8.3 Mandatory Touch & Contrast Invariants
 - **Minimum Touch Target:** Inviolable `48x48dp` for all buttons, tabs, chips, and dismiss icons (`sizeIn(minWidth = 48.dp, minHeight = 48.dp)`).
 - **Safety Gaps:** Minimum `8dp` spacing between adjacent destructive/dismiss actions and primary triggers.
 - **WCAG 2.1 AA Contrast Compliance:** Text contrast exceeds `4.5:1` (Primary Text `#F0F6FC` on Canvas `#0D1117` = `15.8:1`; on Card `#161B22` = `14.2:1`). UI components exceed `3:0:1` (Accent `#58A6FF` on Card = `6.4:1`).

@@ -143,3 +143,30 @@ export interface AuthSessionList {
   sessions: AuthSessionInfo[];
   nextCursor: string | null;
 }
+
+export type BrowserResetState =
+  | "cleared"
+  | "cleanupPending"
+  | "retained"
+  | "unknown";
+
+export interface LogoutRequestOptions {
+  browserReset?: boolean;
+  confirmed?: boolean;
+  expectedProfileEpoch?: string;
+  operationId?: string;
+}
+
+export interface LogoutOutcome {
+  reachable: boolean;
+  ok: boolean;
+  status: number | null;
+  sessionRevoked?: boolean;
+  revocationUncertain?: boolean;
+  browserResetState: BrowserResetState;
+  browserCredentialsRetained: boolean;
+  resetRequired: boolean;
+  profileEpoch?: string;
+  operationId?: string;
+  reason?: string;
+}

@@ -220,11 +220,11 @@ export interface IntentPayloadMap {
   };
   "project:info": {
     profileId: string;
-    projectId: string;
+    projectId?: string;
   };
   "project:config": {
     profileId: string;
-    projectId: string;
+    projectId?: string;
   };
   "agent-store:open": {
     profileId: string;

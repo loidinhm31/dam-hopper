@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BrowserSelectionV1 } from "@dam-hopper/browser-bridge";
 import {
   useBrowserCapture,
@@ -27,8 +27,13 @@ import {
   type BrowserExtensionPresence,
 } from "@/hooks/use-browser-extension-presence.js";
 import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
-
-export type { BrowserDebugBridgeStatus } from "@/lib/browser-debug-host.js";
+import {
+  isBrowserTerminalTargetReady,
+  prepareBrowserTerminalArtifact,
+  type BrowserTerminalTarget,
+  type PreparedBrowserTerminalArtifact,
+} from "@/lib/browser-terminal-handoff.js";
+import { latestTerminalSessionIncarnation } from "@/lib/terminal-incarnation-state.js";
 
 export type { BrowserCaptureStatus } from "@/hooks/use-browser-capture.js";
 
@@ -71,6 +76,13 @@ export interface BrowserDebugController {
   startCapture: (targetFrame: CaptureRect | null) => Promise<void>;
   setManualImage: (file: Blob) => Promise<void>;
   stopCapture: () => void;
+  prepareTerminalArtifact: (
+    terminalTarget: BrowserTerminalTarget,
+  ) => Promise<PreparedBrowserTerminalArtifact>;
+  handoffTerminalArtifact: (
+    terminalTarget: BrowserTerminalTarget,
+    artifact: PreparedBrowserTerminalArtifact,
+  ) => Promise<{ inserted: boolean }>;
 }
 
 /** Owns Browser tool state while its iframe is kept alive outside tool shells. */
@@ -88,10 +100,15 @@ export function useBrowserDebug(options?: {
     getActiveProfileId() ??
     "default";
   const snap = getConnectionSnapshot(profileId);
-  const owner: ConnectionRef = options?.owner ?? snap?.owner ?? {
-    profileId,
-    generation: 0,
-  };
+  const rawOwnerProfileId = options?.owner?.profileId ?? snap?.owner.profileId ?? profileId;
+  const rawOwnerGeneration = options?.owner?.generation ?? snap?.owner.generation ?? 0;
+  const owner = useMemo<ConnectionRef>(
+    () => ({
+      profileId: rawOwnerProfileId,
+      generation: rawOwnerGeneration,
+    }),
+    [rawOwnerProfileId, rawOwnerGeneration],
+  );
   const boundApi = isCurrentConnection(owner) ? getApi(owner) : api;
   const targetRevisionRef = useRef(0);
   const [inputUrl, setInputUrl] = useState("");
@@ -288,6 +305,74 @@ export function useBrowserDebug(options?: {
 
   const clearConsole = useCallback(() => setConsoleEntries([]), []);
 
+  const prepareTerminalArtifact = useCallback(
+    async (terminalTarget: BrowserTerminalTarget): Promise<PreparedBrowserTerminalArtifact> => {
+      if (!selection) {
+        throw new Error("No browser selection available to prepare.");
+      }
+      const currentTarget = targetRef.current;
+      if (!isBrowserTerminalTargetReady(terminalTarget, currentTarget)) {
+        throw new Error("Selected terminal target is not ready.");
+      }
+      const incarnation =
+        terminalTarget.incarnation ??
+        latestTerminalSessionIncarnation({
+          profileId: owner.profileId,
+          id: terminalTarget.sessionId,
+        });
+      if (incarnation === undefined) {
+        throw new Error("Selected terminal is missing incarnation.");
+      }
+      const capturedOwner = { ...owner };
+      const capturedRevision = currentTarget?.revision;
+      const artifact = await boundApi.browserDebug.createArtifact(
+        terminalTarget.sessionId,
+        incarnation,
+        selection,
+      );
+      if (
+        !targetRef.current ||
+        targetRef.current.revision !== capturedRevision ||
+        (isCurrentConnection(capturedOwner) === false &&
+          getConnectionSnapshot(capturedOwner.profileId) !== null)
+      ) {
+        await Promise.resolve(
+          boundApi.browserDebug.deleteArtifact(artifact.artifactId),
+        ).catch(() => {});
+        throw new Error("Target navigation or owner changed during artifact preparation.");
+      }
+      if (capture.captureImage) {
+        const updated = await boundApi.browserDebug.uploadPng(
+          artifact.artifactId,
+          capture.captureImage,
+        );
+        return prepareBrowserTerminalArtifact(updated);
+      }
+      return prepareBrowserTerminalArtifact(artifact);
+    },
+    [boundApi.browserDebug, capture.captureImage, owner, selection],
+  );
+
+  const handoffTerminalArtifact = useCallback(
+    async (
+      terminalTarget: BrowserTerminalTarget,
+      prepared: PreparedBrowserTerminalArtifact,
+    ): Promise<{ inserted: boolean }> => {
+      const currentTarget = targetRef.current;
+      if (!isBrowserTerminalTargetReady(terminalTarget, currentTarget)) {
+        throw new Error("Selected terminal closed before insertion.");
+      }
+      if (
+        terminalTarget.incarnation !== undefined &&
+        terminalTarget.incarnation !== prepared.artifact.terminalIncarnation
+      ) {
+        throw new Error("Selected terminal incarnation mismatch.");
+      }
+      return boundApi.browserDebug.handoff(prepared.artifact.artifactId);
+    },
+    [boundApi.browserDebug],
+  );
+
   return {
     extensionPresence,
     inputUrl,
@@ -317,5 +402,7 @@ export function useBrowserDebug(options?: {
     startCapture: capture.startCapture,
     setManualImage: capture.setManualImage,
     stopCapture,
+    prepareTerminalArtifact,
+    handoffTerminalArtifact,
   };
 }

@@ -1,7 +1,7 @@
 export const DOUBLE_SHIFT_SHORTCUT = "DoubleShift";
 export const DEFAULT_SEARCH_TEXT_SHORTCUT = "Mod+Shift+KeyF";
 export const DEFAULT_SEARCH_FILENAME_SHORTCUT = DOUBLE_SHIFT_SHORTCUT;
-export const DEFAULT_TERMINAL_WORKSPACE_SHORTCUT = "Mod+Shift+Backquote";
+export const DEFAULT_OPEN_TERMINAL_SHORTCUT = "Ctrl+Shift+KeyT";
 export const DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT = "Mod+Shift+KeyE";
 export const DEFAULT_PROJECT_PANEL_SHORTCUT = "Mod+Shift+KeyZ";
 export const DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT = "Alt+F1";

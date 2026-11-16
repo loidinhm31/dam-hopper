@@ -68,14 +68,28 @@ import {
   saveOsSession,
   type PersistenceNotice,
 } from "./persistence.js";
+import {
+  BROWSER_RECOVERY_STORAGE_KEY,
+  loadBrowserRecoveryDisk,
+  resetAddressSuppression,
+  withBrowserRecoveryLock,
+} from "./browser/browser-recovery-store.js";
+import { restoreClosingGatesFromRecovery } from "./browser/browser-close-lifecycle.js";
+import { processWithheldCleanups } from "./browser/browser-create-lifecycle.js";
+import {
+  captureVerifiedBrowserOwner,
+  extractBrowserOwnerScopeFromSnapshot,
+  isCapturedBrowserOwnerCurrent,
+} from "./browser/browser-owner-scope.js";
+import { createBlankBrowserTab, createInitialBrowserWindowState } from "./browser/browser-tab-state.js";
+import { normalizeBrowserCommittedUrl } from "./browser/browser-url-normalization.js";
 import { recoverDurableLaunchRecordsOnStartup } from "./recipes/launch-records.js";
 import { generateUUID } from "@/lib/utils.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
-import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { editorDiffTabKey, editorFileTabKey, useEditorStore } from "@/stores/editor.js";
-import { normalizeFsTarget, toServerFsTarget, type FsTargetRef } from "@/api/ownership.js";
-import { normalizeProjectTarget } from "@/api/client.js";
+import { normalizeFsTarget, type FsTargetRef } from "@/api/ownership.js";
+import { resolveTerminalCreateParams } from "./terminal-launch-lifecycle.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 export function OsShell() {
   const session = useWindowStore((state) => state.session);
@@ -109,7 +123,6 @@ export function OsShell() {
   const restoreWindow = useWindowStore((state) => state.restoreWindow);
   const profile = useServerProfile();
   const profileId = profile?.id ?? "default";
-  const activeProject = useWorkspaceStore((state) => state.activeProject);
   const { observations } = useAggregatedTerminalSessions();
   const latestObservationsRef = useRef(observations);
   useEffect(() => {
@@ -191,41 +204,98 @@ export function OsShell() {
     ingestIpcActivityEvent(e);
   });
 
+  const [hydrated, setHydrated] = useState(false);
+
   // Initial load
   useEffect(() => {
+    let cancelled = false;
     recoverDurableLaunchRecordsOnStartup();
-    const loaded = loadOsSession(undefined, setNotice);
-    setSession(loaded);
+    void loadOsSession(undefined, setNotice).then((loaded) => {
+      if (!cancelled) {
+        setSession(loaded);
+        restoreClosingGatesFromRecovery();
+        setHydrated(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [setSession]);
 
   // Autosave
   const prevWindowCountRef = useRef(Object.keys(session.windows).length);
   useEffect(() => {
+    if (!hydrated) return;
     const currentWindowCount = Object.keys(session.windows).length;
     const delay = currentWindowCount < prevWindowCountRef.current ? 0 : 300;
     prevWindowCountRef.current = currentWindowCount;
     const timer = window.setTimeout(() => {
-      saveOsSession(session, undefined, setNotice);
+      void saveOsSession(session, undefined, setNotice);
     }, delay);
     return () => {
       clearTimeout(timer);
     };
-  }, [session]);
+  }, [session, hydrated]);
 
   useEffect(() => {
+    if (!hydrated) return;
     const handleFlush = () => {
-      saveOsSession(useWindowStore.getState().session);
+      void saveOsSession(useWindowStore.getState().session, undefined, setNotice);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        void saveOsSession(useWindowStore.getState().session, undefined, setNotice);
+      }
     };
     window.addEventListener("beforeunload", handleFlush);
     window.addEventListener("pagehide", handleFlush);
+    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       window.removeEventListener("beforeunload", handleFlush);
       window.removeEventListener("pagehide", handleFlush);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [hydrated]);
+
+  // Recovery storage event notification: locked reread of suppression/notices only
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === BROWSER_RECOVERY_STORAGE_KEY) {
+        void withBrowserRecoveryLock(() => {
+          const disk = loadBrowserRecoveryDisk();
+          restoreClosingGatesFromRecovery(disk);
+          const hasUnknown = disk.operations.some((op) => op.status === "unknown");
+          if (hasUnknown) {
+            setNotice({
+              kind: "storage-error",
+              message: "One or more browser target operations are in an unresolved recovery state",
+            });
+          }
+        }).catch((err: unknown) => {
+          setNotice({
+            kind: "storage-error",
+            message: `Failed to refresh browser recovery state: ${String(err)}`,
+          });
+        });
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
     };
   }, []);
+  // Process withheld late-create cleanups when connection scope becomes active
+  useEffect(() => {
+    if (connectionSnap?.status === "connected") {
+      const scope = extractBrowserOwnerScopeFromSnapshot(connectionSnap);
+      if (scope) {
+        processWithheldCleanups(scope, connectionSnap.owner);
+      }
+    }
+  }, [connectionSnap]);
   // Handle /os deep links once intent handlers are registered and ready
   useEffect(() => {
-    if (!handlersReady) return;
+    if (!hydrated || !handlersReady) return;
     if (typeof window === "undefined" || !window.location.search) return;
     if (lastProcessedSearchRef.current === window.location.search) return;
 
@@ -260,14 +330,12 @@ export function OsShell() {
               project: parsedProject,
               worktreePath: parsed.ctx?.worktreeId,
             })
-          : activeProject
-            ? normalizeFsTarget({ profileId, project: activeProject })
-            : { kind: "workspace", profileId };
+          : { kind: "workspace", profileId: explicitProfile };
 
       const qualified = qualifyOsDeepLink(parsed, {
         owner: snap.owner,
         target: explicitTarget,
-        projectId: parsedProject ?? (activeProject ?? undefined),
+        projectId: parsedProject,
         destinationDesktopId: useWindowStore.getState().session.activeDesktopId,
       });
 
@@ -303,6 +371,9 @@ export function OsShell() {
           if (existing) {
             if (existing.minimized) restoreWindow(existing.id);
             focusWindow(existing.id);
+            if (qualified.appState) {
+              useWindowStore.getState().updateAppState(existing.id, qualified.appState);
+            }
           } else {
             const newId = `${qualified.appId}-${generateUUID().slice(0, 8)}`;
             openWindow(
@@ -326,12 +397,11 @@ export function OsShell() {
       }
     }
   }, [
+    hydrated,
     handlersReady,
-    openWindow,
     focusWindow,
     restoreWindow,
     profileId,
-    activeProject,
     connectionSnap?.status,
   ]);
 
@@ -392,6 +462,48 @@ export function OsShell() {
   useEffect(() => {
     const getPlacement = () =>
       useSettingsStore.getState().defaultWindowPlacement ?? "float";
+    const openCanonicalBrowserIntentWindow = async (targetProfileId: string, rawUrl: string) => {
+      const validUrl = normalizeBrowserCommittedUrl(rawUrl);
+      const verified = captureVerifiedBrowserOwner(targetProfileId);
+      const id = `browser-${generateUUID().slice(0, 8)}`;
+      if (!validUrl) {
+        const tab = createBlankBrowserTab();
+        const appState = createInitialBrowserWindowState({
+          ...(verified ? { ownerScope: verified.scope } : {}),
+          tabs: [tab],
+          activeTabId: tab.tabId,
+        });
+        openWindow(
+          { id, appId: "browser", title: "Browser Preview", ctx: { profileId: targetProfileId }, mode: getPlacement(), appState: appState as unknown as Record<string, unknown> },
+          useWindowStore.getState().session.activeDesktopId,
+        );
+        return { status: "handled" as const, targetWindowId: id };
+      }
+      if (!verified) {
+        return { status: "unhandled" as const, reason: "Profile must be connected and verified before opening a browser URL" };
+      }
+      const capturedGen = verified.owner.generation;
+      const capturedScope = verified.scope;
+      try { await resetAddressSuppression(capturedScope); } catch (err) {
+        return { status: "unhandled" as const, reason: err instanceof Error ? err.message : "Browser recovery unavailable" };
+      }
+      if (!isCapturedBrowserOwnerCurrent(verified.owner, capturedScope) || getConnectionSnapshot(targetProfileId)?.owner.generation !== capturedGen) {
+        return { status: "unhandled" as const, reason: "Connection changed or disconnected before opening browser URL" };
+      }
+      const creationKey = generateUUID();
+      const tab = {
+        ...createBlankBrowserTab({ draftValue: validUrl, dirty: false }),
+        committedUrl: validUrl,
+        phase: "creating" as const,
+        createIntent: { operationId: generateUUID(), creationKey, request: { creationKey, url: validUrl, viewport: { width: 1280, height: 800, dpr: 1 } } },
+      };
+      const appState = createInitialBrowserWindowState({ ownerScope: capturedScope, tabs: [tab], activeTabId: tab.tabId });
+      openWindow(
+        { id, appId: "browser", title: "Browser Preview", ctx: { profileId: targetProfileId, generation: capturedGen }, mode: getPlacement(), appState: appState as unknown as Record<string, unknown> },
+        useWindowStore.getState().session.activeDesktopId,
+      );
+      return { status: "handled" as const, targetWindowId: id };
+    };
 
     const unregisterList: Array<() => void> = [
       registerIntentHandler("terminal:open", async (intent) => {
@@ -414,12 +526,18 @@ export function OsShell() {
           const originatingProfileId = snap.owner.profileId;
           try {
             const client = getApi(snap.owner);
-            const wireTarget = targetCtx.target ? toServerFsTarget(targetCtx.target) : undefined;
+            const { wireTarget, project: projectParam, cwd: cwdParam } =
+              resolveTerminalCreateParams({
+                target: targetCtx.target,
+                projectId: targetCtx.projectId,
+                cwd: intent.payload.cwd,
+                directoryKind: intent.payload.directoryKind,
+              });
             const session = await client.terminal.create({
               id: terminalId,
               command: "",
-              project: targetCtx.projectId,
-              cwd: intent.payload.cwd ?? undefined,
+              project: projectParam,
+              cwd: cwdParam,
               target: wireTarget,
               cols: 80,
               rows: 24,
@@ -664,21 +782,8 @@ export function OsShell() {
         );
         return { status: "handled", targetWindowId: id };
       }),
-      registerIntentHandler("browser:open", (intent) => {
-        const id = `browser-${generateUUID().slice(0, 8)}`;
-        openWindow(
-          {
-            id,
-            appId: "browser",
-            title: "Browser Preview",
-            ctx: { profileId: intent.payload.profileId },
-            mode: getPlacement(),
-            appState: { url: intent.payload.url },
-          },
-          useWindowStore.getState().session.activeDesktopId,
-        );
-        return { status: "handled", targetWindowId: id };
-      }),
+      registerIntentHandler("browser:open", (intent) => openCanonicalBrowserIntentWindow(intent.payload.profileId, intent.payload.url)),
+      registerIntentHandler("browser:preview", (intent) => openCanonicalBrowserIntentWindow(intent.payload.profileId, intent.payload.url)),
       registerIntentHandler("conflict:resolve", (intent) => {
         const targetCtx: WindowContext = {
           profileId: intent.payload.profileId,
@@ -824,17 +929,24 @@ export function OsShell() {
           profileId: intent.payload.profileId,
           projectId: intent.payload.projectId,
         };
+        const nextAppState: Record<string, unknown> = {
+          selectedItemId: intent.payload.itemId,
+          ...(intent.payload.projectId
+            ? { selectedProject: intent.payload.projectId }
+            : {}),
+        };
         const existing = findExistingWindowForApp(
           useWindowStore.getState().session.windows,
           "workflow-plans",
           targetCtx,
         );
         if (existing) {
+          if (existing.desktopId !== useWindowStore.getState().session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
           if (existing.minimized) restoreWindow(existing.id);
           focusWindow(existing.id);
-          useWindowStore.getState().updateAppState(existing.id, {
-            selectedItemId: intent.payload.itemId,
-          });
+          useWindowStore.getState().updateAppState(existing.id, nextAppState);
           return { status: "handled", targetWindowId: existing.id };
         }
         const id = `workflow-plans-${generateUUID().slice(0, 8)}`;
@@ -845,7 +957,46 @@ export function OsShell() {
             title: "Workflow & Plans",
             ctx: targetCtx,
             mode: getPlacement(),
-            appState: { selectedItemId: intent.payload.itemId },
+            appState: nextAppState,
+          },
+          useWindowStore.getState().session.activeDesktopId,
+        );
+        return { status: "handled", targetWindowId: id };
+      }),
+      registerIntentHandler("workflow:open-plan", (intent) => {
+        const targetCtx: WindowContext = {
+          profileId: intent.payload.profileId,
+          projectId: intent.payload.projectId,
+        };
+        const nextAppState: Record<string, unknown> = {
+          selectedItemId: intent.payload.planId,
+          ...(intent.payload.projectId
+            ? { selectedProject: intent.payload.projectId }
+            : {}),
+        };
+        const existing = findExistingWindowForApp(
+          useWindowStore.getState().session.windows,
+          "workflow-plans",
+          targetCtx,
+        );
+        if (existing) {
+          if (existing.desktopId !== useWindowStore.getState().session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          useWindowStore.getState().updateAppState(existing.id, nextAppState);
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const id = `workflow-plans-${generateUUID().slice(0, 8)}`;
+        openWindow(
+          {
+            id,
+            appId: "workflow-plans",
+            title: "Workflow & Plans",
+            ctx: targetCtx,
+            mode: getPlacement(),
+            appState: nextAppState,
           },
           useWindowStore.getState().session.activeDesktopId,
         );
@@ -932,16 +1083,28 @@ export function OsShell() {
       registerIntentHandler("project:info", (intent) => {
         const targetCtx: WindowContext = {
           profileId: intent.payload.profileId,
-          projectId: intent.payload.projectId,
+          ...(intent.payload.projectId
+            ? { projectId: intent.payload.projectId }
+            : {}),
         };
+        const nextAppState: Record<string, unknown> | undefined =
+          intent.payload.projectId
+            ? { selectedProject: intent.payload.projectId }
+            : undefined;
         const existing = findExistingWindowForApp(
           useWindowStore.getState().session.windows,
           "project-info",
           targetCtx,
         );
         if (existing) {
+          if (existing.desktopId !== useWindowStore.getState().session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
           if (existing.minimized) restoreWindow(existing.id);
           focusWindow(existing.id);
+          if (nextAppState) {
+            useWindowStore.getState().updateAppState(existing.id, nextAppState);
+          }
           return { status: "handled", targetWindowId: existing.id };
         }
         const id = `project-info-${generateUUID().slice(0, 8)}`;
@@ -952,6 +1115,7 @@ export function OsShell() {
             title: "Project Info",
             ctx: targetCtx,
             mode: getPlacement(),
+            ...(nextAppState ? { appState: nextAppState } : {}),
           },
           useWindowStore.getState().session.activeDesktopId,
         );
@@ -1616,25 +1780,28 @@ export function OsShell() {
 
   const handleLaunchApp = useCallback(
     async (appId: OsAppId, capturedContext?: ActionContext) => {
-      const defaultTarget: FsTargetRef = activeProject
-        ? normalizeFsTarget({ profileId, project: activeProject })
-        : { kind: "workspace", profileId };
-      const targetCtx: WindowContext = activeDesktop?.defaultCtx ?? {
-        profileId,
-        projectId: activeProject ?? undefined,
-        target: defaultTarget,
+      const effectiveProfileId =
+        capturedContext?.windowContext?.profileId ??
+        (activeDesktop?.defaultCtx?.profileId || profileId);
+      const globalTarget: FsTargetRef = {
+        kind: "workspace",
+        profileId: effectiveProfileId,
       };
-      const snap = getConnectionSnapshot(
-        capturedContext?.windowContext?.profileId ?? profileId,
-      );
+      const targetCtx: WindowContext = {
+        profileId: effectiveProfileId,
+        target: globalTarget,
+      };
+      const snap = getConnectionSnapshot(effectiveProfileId);
       const owner =
-        capturedContext?.owner ?? snap?.owner ?? { profileId, generation: 1 };
+        capturedContext?.owner ??
+        snap?.owner ?? { profileId: effectiveProfileId, generation: 1 };
 
       const context: ActionContext = capturedContext ?? {
         kind: "desktop",
         desktopId: session.activeDesktopId,
         windowContext: targetCtx,
         owner,
+        target: globalTarget,
       };
 
       await executeAction({
@@ -1642,7 +1809,7 @@ export function OsShell() {
         context,
       });
     },
-    [profileId, activeProject, activeDesktop, session.activeDesktopId],
+    [profileId, activeDesktop, session.activeDesktopId],
   );
 
 

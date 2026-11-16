@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseOsDeepLink, translateLegacyRoute } from "./deep-links.js";
+import { parseOsDeepLink, qualifyOsDeepLink, translateLegacyRoute } from "./deep-links.js";
+import { BROWSER_STATE_VERSION, type BrowserWindowState } from "./browser/browser-tab-types.js";
 import { createProjectDesktopTemplate } from "./desktop-templates.js";
 import type { ServerProfile } from "@/api/server-config.js";
 
@@ -96,6 +97,57 @@ describe("deep-links parser", () => {
     const portsRes = parseOsDeepLink("?open=ports-tunnels&profile=prof-2", TEST_PROFILES);
     expect(portsRes.status).toBe("valid");
     expect(portsRes.appId).toBe("ports-tunnels");
+  });
+
+  it("parses workflow-plans without requiring project and qualifies without inheriting ambient project", () => {
+    const wfRes = parseOsDeepLink("?open=workflow-plans&profile=prof-1", TEST_PROFILES);
+    expect(wfRes.status).toBe("valid");
+    expect(wfRes.appId).toBe("workflow-plans");
+    expect(wfRes.ctx?.projectId).toBeUndefined();
+
+    const qualified = qualifyOsDeepLink(wfRes, {
+      owner: { profileId: "prof-1", generation: 1 },
+      projectId: "ambient-project",
+      destinationDesktopId: "desk-1",
+    });
+    expect(qualified.status).toBe("qualified");
+    if (qualified.status === "qualified") {
+      expect(qualified.ctx.projectId).toBeUndefined();
+      expect(qualified.appState).toBeUndefined();
+    }
+  });
+
+  it("parses project-info without requiring project and qualifies without inheriting ambient project", () => {
+    const infoRes = parseOsDeepLink("?open=project-info&profile=prof-1", TEST_PROFILES);
+    expect(infoRes.status).toBe("valid");
+    expect(infoRes.appId).toBe("project-info");
+    expect(infoRes.ctx?.projectId).toBeUndefined();
+
+    const qualified = qualifyOsDeepLink(infoRes, {
+      owner: { profileId: "prof-1", generation: 1 },
+      projectId: "ambient-project",
+      destinationDesktopId: "desk-1",
+    });
+    expect(qualified.status).toBe("qualified");
+    if (qualified.status === "qualified") {
+      expect(qualified.ctx.projectId).toBeUndefined();
+      expect(qualified.appState).toBeUndefined();
+    }
+
+    const withExplicitProject = parseOsDeepLink(
+      "?open=project-info&profile=prof-1&project=demo-app",
+      TEST_PROFILES,
+    );
+    expect(withExplicitProject.status).toBe("valid");
+    const qualifiedExplicit = qualifyOsDeepLink(withExplicitProject, {
+      owner: { profileId: "prof-1", generation: 1 },
+      destinationDesktopId: "desk-1",
+    });
+    expect(qualifiedExplicit.status).toBe("qualified");
+    if (qualifiedExplicit.status === "qualified") {
+      expect(qualifiedExplicit.ctx.projectId).toBe("demo-app");
+      expect(qualifiedExplicit.appState).toEqual({ selectedProject: "demo-app" });
+    }
   });
 
   it("validates session-changes requires full owner tuple", () => {
@@ -206,6 +258,61 @@ describe("deep-links parser", () => {
     expect(res.intent?.payload).toMatchObject({
       profileId: "prof-1",
     });
+  });
+
+  it("qualifies Browser deep link with valid HTTP(S) URL to browser:open intent and invalid/missing URL to canonical blank New Tab", () => {
+    const withUrl = parseOsDeepLink(
+      "?open=browser&profile=prof-1&url=https%3A%2F%2Fexample.test%2Fapp%3Ftab%3D1%23sec",
+      TEST_PROFILES,
+    );
+    const qualUrl = qualifyOsDeepLink(withUrl, {
+      owner: { profileId: "prof-1", generation: 2 },
+      destinationDesktopId: "d-1",
+    });
+    expect(qualUrl.status).toBe("qualified");
+    if (qualUrl.status === "qualified") {
+      expect(qualUrl.intent?.action).toBe("browser:open");
+      expect(qualUrl.intent?.payload).toEqual({
+        profileId: "prof-1",
+        url: "https://example.test/app?tab=1#sec",
+      });
+    }
+
+    const noUrl = parseOsDeepLink("?open=browser&profile=prof-1", TEST_PROFILES);
+    const qualNoUrl = qualifyOsDeepLink(noUrl, {
+      owner: { profileId: "prof-1", generation: 2 },
+      destinationDesktopId: "d-1",
+    });
+    expect(qualNoUrl.status).toBe("qualified");
+    if (qualNoUrl.status === "qualified") {
+      expect(qualNoUrl.intent).toBeUndefined();
+      const st = qualNoUrl.appState as unknown as BrowserWindowState;
+      expect(st.browserStateVersion).toBe(BROWSER_STATE_VERSION);
+      expect(st.tabs[0]?.phase).toBe("new-tab");
+      expect((qualNoUrl.appState as Record<string, unknown>)?.presentation).toBeUndefined();
+    }
+
+    const badUrl = parseOsDeepLink("?open=browser&profile=prof-1&url=javascript:alert(1)", TEST_PROFILES);
+    const qualBad = qualifyOsDeepLink(badUrl, {
+      owner: { profileId: "prof-1", generation: 2 },
+      destinationDesktopId: "d-1",
+    });
+    expect(qualBad.status).toBe("qualified");
+    if (qualBad.status === "qualified") {
+      expect(qualBad.intent).toBeUndefined();
+      expect((qualBad.appState as unknown as BrowserWindowState).tabs[0]?.phase).toBe("new-tab");
+    }
+
+    // Editor chooser behavior unchanged
+    const editorBlank = parseOsDeepLink("?open=editor&profile=prof-1&project=dam-hopper", TEST_PROFILES);
+    const qualEditor = qualifyOsDeepLink(editorBlank, {
+      owner: { profileId: "prof-1", generation: 2 },
+      destinationDesktopId: "d-1",
+    });
+    expect(qualEditor.status).toBe("qualified");
+    if (qualEditor.status === "qualified") {
+      expect((qualEditor.appState as Record<string, unknown>)?.presentation).toMatchObject({ kind: "choose-target" });
+    }
   });
 
   describe("translateLegacyRoute", () => {

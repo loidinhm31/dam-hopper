@@ -40,6 +40,10 @@ import {
   updateFloatBounds,
 } from "./window-ops.js";
 import { settleTerminalLaunch } from "./persistence.js";
+import { closeBrowserSession } from "@/api/browser-host-client.js";
+import { coordinateBrowserWindowClose } from "./browser/browser-window-close-coordinator.js";
+import { getConnectionSnapshot } from "@/api/connections.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 
 let monotonicFocusCounter = 0;
 const windowFocusTimestamps = new Map<string, number>();
@@ -146,6 +150,10 @@ export const useWindowStore = create<WindowStoreState>((set, get) => ({
           reason: "Terminal window closed before dispatch",
         });
       }
+    }
+    if (win?.appId === "browser") {
+      coordinateBrowserWindowClose(windowId, win, get, set);
+      return;
     }
     set((state) => ({
       session: closeWindow(state.session, windowId),

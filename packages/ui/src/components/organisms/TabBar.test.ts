@@ -2,7 +2,11 @@
 import { Children, createElement, isValidElement, act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import { setTerminalStreamReady } from "@/lib/terminal-output-activity.js";
+import {
+  registerTerminalOutputActivity,
+  setTerminalStreamReady,
+} from "@/lib/terminal-output-activity.js";
+import { terminalTargetKey } from "@/api/terminal-session-contract.js";
 import { DraggableTab, splitActionToPaneDirection } from "./TabBar.js";
 
 vi.mock("@dnd-kit/core", () => ({
@@ -149,6 +153,78 @@ describe("splitActionToPaneDirection", () => {
       "Output unavailable",
     );
 
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("shows quiet (yellow), receiving (green), and stopped (red) indicator colors when registered by TerminalTarget", () => {
+    const terminalRef = { profileId: "local", id: "term-hub-1" };
+    const terminalTarget = {
+      profileId: "local",
+      generation: 1,
+      serverEpoch: "epoch-1",
+      terminalId: "term-hub-1",
+      incarnation: "42",
+    };
+    const sessionId = JSON.stringify(["local", "term-hub-1"]);
+    const activity = registerTerminalOutputActivity(
+      terminalTargetKey(terminalTarget),
+      terminalRef,
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    const renderTab = (alive: boolean) =>
+      act(() => {
+        root.render(
+          createElement(DraggableTab, {
+            paneId: "pane-hub",
+            tab: {
+              sessionId,
+              profileId: "local",
+              terminalRef,
+              terminalTarget,
+              label: "omp",
+              title: {
+                baseLabel: "omp",
+                ordinal: 1,
+                fullText: "omp #1",
+              },
+              session: {
+                id: sessionId,
+                project: "proj",
+                command: "omp",
+                cwd: "/repo/proj",
+                type: "custom",
+                alive,
+                startedAt: 1,
+              },
+            },
+            isActive: true,
+            onSelect: vi.fn(),
+            onClose: vi.fn(),
+          }),
+        );
+      });
+
+    renderTab(true);
+    act(() => activity.setStreamReady(true));
+    expect(
+      container.querySelector<HTMLElement>('span[title="Quiet; no recent output observed"]')?.className,
+    ).toContain("color-warning");
+
+    act(() => activity.markOutput());
+    expect(
+      container.querySelector<HTMLElement>('span[title="Receiving output"]')?.className,
+    ).toContain("color-success");
+
+    renderTab(false);
+    expect(
+      container.querySelector<HTMLElement>('span[title="Terminal stopped"]')?.className,
+    ).toContain("color-danger");
+
+    activity.dispose();
     act(() => root.unmount());
     container.remove();
   });

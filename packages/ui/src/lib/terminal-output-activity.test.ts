@@ -271,4 +271,40 @@ describe("terminal output activity", () => {
     });
     expect(vi.getTimerCount()).toBe(0);
   });
+  it("mirrors activity to an alias ref without allowing an obsolete owner to clobber a newer incarnation", () => {
+    const ref = { profileId: "local", id: "term-1" };
+    const targetV1 = JSON.stringify(["local", 1, "epoch-1", "term-1", "1"]);
+    const targetV2 = JSON.stringify(["local", 1, "epoch-1", "term-1", "2"]);
+
+    const listener = vi.fn();
+    const unsub = subscribeToTerminalOutputActivity(ref, listener);
+
+    const v1 = registerTerminalOutputActivity(targetV1, ref);
+    v1.setStreamReady(true);
+    v1.markOutput();
+    expect(getTerminalOutputActivitySnapshot(ref)).toEqual({
+      recentOutput: true,
+      streamReady: true,
+    });
+
+    const v2 = registerTerminalOutputActivity(targetV2, ref);
+    v1.dispose();
+    v2.setStreamReady(true);
+    expect(getTerminalOutputActivitySnapshot(ref)).toEqual({
+      recentOutput: false,
+      streamReady: true,
+    });
+    v2.markOutput();
+    expect(getTerminalOutputActivitySnapshot(ref)).toEqual({
+      recentOutput: true,
+      streamReady: true,
+    });
+    expect(getTerminalOutputActivitySnapshot(targetV2)).toEqual({
+      recentOutput: true,
+      streamReady: true,
+    });
+
+    v2.dispose();
+    unsub();
+  });
 });

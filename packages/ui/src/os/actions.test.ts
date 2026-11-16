@@ -25,7 +25,7 @@ import {
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
-  DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  DEFAULT_OPEN_TERMINAL_SHORTCUT,
 } from "../lib/shortcuts.js";
 import type {
   ActionContext,
@@ -119,7 +119,7 @@ describe("OS Action Catalog (C1 Contract)", () => {
 describe("Presence-Aware Binding Resolution (C1 & C4 Contracts)", () => {
   it("resolves default bindings when settings projection is null or empty", () => {
     expect(resolveActionBinding("app.terminals.open", null)).toBe(
-      DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+      DEFAULT_OPEN_TERMINAL_SHORTCUT,
     );
     expect(resolveActionBinding("app.search.open", {})).toBe(
       DEFAULT_SEARCH_TEXT_SHORTCUT,
@@ -145,7 +145,7 @@ describe("Presence-Aware Binding Resolution (C1 & C4 Contracts)", () => {
 
   it("resolves configured replacement chord for scalar actions", () => {
     const settings: ActionBindingsSettingsProjection = {
-      terminalWorkspaceShortcut: "Ctrl+KeyT",
+      openTerminalShortcut: "Ctrl+KeyT",
       searchTextShortcut: "Mod+KeyF",
     };
 
@@ -159,7 +159,7 @@ describe("Presence-Aware Binding Resolution (C1 & C4 Contracts)", () => {
 
   it("resolves explicit null as unbound for scalar actions", () => {
     const settings: ActionBindingsSettingsProjection = {
-      terminalWorkspaceShortcut: null,
+      openTerminalShortcut: null,
       searchTextShortcut: null,
     };
 

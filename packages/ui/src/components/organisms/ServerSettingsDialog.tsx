@@ -1,8 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import {
-  useShellInputContext,
-  type ShellInputContextValue,
-} from "@/os/shell-input-context.js";
+import { useShellInputContext } from "@/os/shell-input-context.js";
 import {
   Dialog,
   DialogContent,
@@ -11,13 +8,40 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/Dialog.js";
-import { X, Server, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Button } from "@/components/atoms/Button.js";
+import {
+  X,
+  Server,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  AlertTriangle,
+} from "lucide-react";
 import { revokeCurrentMediaSession } from "@/api/media-session.js";
 import {
   getMediaClientIdForProfile,
   getConnectionSnapshot,
 } from "@/api/connections.js";
 import type { ServerProfile } from "@/api/server-config.js";
+import {
+  AccountLogoutDialog,
+  type AccountLogoutTarget,
+} from "@/components/organisms/AccountLogoutDialog.js";
+import {
+  BrowserHostClientError,
+  preflightBrowserCapabilitiesForOrigin,
+  resetBrowserProfileForOrigin,
+  getBrowserProfileResetStatusForOrigin,
+  getPendingBrowserResetContext,
+  setPendingBrowserResetContext,
+  type BrowserResetPreflightResult,
+  type ProfileResetStatusResponse,
+} from "@/api/browser-host-client.js";
+import {
+  fenceBrowserViewsForProfile,
+  clearBrowserViewFenceForProfile,
+} from "@/os/BrowserStreamKeepAliveHost.js";
+import { generateUUID } from "@/lib/utils.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { LoginDevicesSection } from "@/components/organisms/LoginDevicesSection.js";
 import type { LoginDevicesOwner } from "./login-devices-owner.js";
@@ -57,6 +81,7 @@ import {
   setActiveProfile,
 } from "@/api/server-config.js";
 import { connectProfile, disconnectProfile } from "@/api/connections.js";
+import { fenceThenDisconnectProfile } from "@/os/browser/browser-logout-fence.js";
 
 interface Props {
   open: boolean;
@@ -74,19 +99,7 @@ interface CredentialDraftScope {
   revokedToken?: string;
 }
 
-function secureBearerHeaders(
-  serverUrl: string,
-  token: string | null,
-): Record<string, string> {
-  if (!token) return {};
-  try {
-    return new URL(serverUrl).protocol === "https:"
-      ? { Authorization: `Bearer ${token}` }
-      : {};
-  } catch {
-    return {};
-  }
-}
+
 
 export function ServerSettingsDialog({
   open,
@@ -131,21 +144,56 @@ export function ServerSettingsDialog({
   const credentialDraftScopeRef = useRef<CredentialDraftScope | null>(null);
   const { registerModalMount } = useShellInputContext();
   const [dirtyConfirmOpen, setDirtyConfirmOpen] = useState(false);
+  const [logoutTarget, setLogoutTarget] = useState<AccountLogoutTarget | null>(
+    null,
+  );
+  const [browserResetConfirmOpen, setBrowserResetConfirmOpen] = useState(false);
+  const [browserResetPreflight, setBrowserResetPreflight] =
+    useState<BrowserResetPreflightResult | null>(null);
+  const [browserResetPreflightLoading, setBrowserResetPreflightLoading] =
+    useState(false);
+  const [browserResetSubmitting, setBrowserResetSubmitting] = useState(false);
+  const [browserResetStatusChecking, setBrowserResetStatusChecking] =
+    useState(false);
+  const [browserResetOutcome, setBrowserResetOutcome] =
+    useState<ProfileResetStatusResponse | null>(null);
+  const [browserResetPendingOpId, setBrowserResetPendingOpId] = useState<
+    string | null
+  >(null);
+  const [browserResetError, setBrowserResetError] = useState<string | null>(
+    null,
+  );
+  const browserResetCancelRef = useRef<HTMLButtonElement | null>(null);
+  const browserResetAbortRef = useRef<AbortController | null>(null);
+  const dialogSessionRef = useRef(0);
+  const browserResetOpRef = useRef(0);
+  const logoutWasStaleRef = useRef(false);
 
   useEffect(() => {
     if (open) {
       return registerModalMount("server-settings-dialog");
     }
+    dialogSessionRef.current += 1;
+    browserResetOpRef.current += 1;
+    setLogoutTarget(null);
+    setBrowserResetConfirmOpen(false);
+    setBrowserResetPreflightLoading(false);
+    setBrowserResetSubmitting(false);
+    setBrowserResetStatusChecking(false);
+    browserResetAbortRef.current?.abort();
   }, [open, registerModalMount]);
-
   useEffect(() => {
-    if (dirtyConfirmOpen) {
+    if (dirtyConfirmOpen || logoutTarget !== null || browserResetConfirmOpen) {
       return registerModalMount("confirm-dialog");
     }
-  }, [dirtyConfirmOpen, registerModalMount]);
+  }, [
+    dirtyConfirmOpen,
+    logoutTarget,
+    browserResetConfirmOpen,
+    registerModalMount,
+  ]);
 
   const isEditMode = profile !== undefined;
-
   const isDirty = useMemo(() => {
     if (isEditMode) {
       if (profile) {
@@ -204,7 +252,8 @@ export function ServerSettingsDialog({
     if (!open) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (dirtyConfirmOpen) return;
+      if (dirtyConfirmOpen || logoutTarget !== null || browserResetConfirmOpen)
+        return;
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
@@ -214,7 +263,14 @@ export function ServerSettingsDialog({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, dirtyConfirmOpen, handleRequestClose]);
+  }, [
+    open,
+    dirtyConfirmOpen,
+    logoutTarget,
+    browserResetConfirmOpen,
+    handleRequestClose,
+  ]);
+
   const handleSelfRevoked = (owner: LoginDevicesOwner) => {
     if (!credentialDraftScope || credentialDraftScopeRef.current !== credentialDraftScope ||
         owner.profileId !== credentialDraftScope.profileId ||
@@ -268,6 +324,8 @@ export function ServerSettingsDialog({
 
   useEffect(() => {
     if (open) {
+      dialogSessionRef.current += 1;
+      browserResetOpRef.current += 1;
       const storedUrl =
         profile?.url ?? (profile === undefined ? getServerUrl() : "");
       latestUrlRef.current = normalizeServerUrl(storedUrl);
@@ -314,6 +372,30 @@ export function ServerSettingsDialog({
       setTestError(null);
       clearAuthDraft();
       setSaved(false);
+      setBrowserResetConfirmOpen(false);
+      setBrowserResetPreflight(null);
+      setBrowserResetPreflightLoading(false);
+      setBrowserResetSubmitting(false);
+      setBrowserResetStatusChecking(false);
+      setBrowserResetError(null);
+      const pendingCtx = getPendingBrowserResetContext(tokenProfileId);
+      if (pendingCtx?.operationId && pendingCtx.browserResetState === "cleanupPending") {
+        setBrowserResetPendingOpId(pendingCtx.operationId);
+        // No canonical epoch retained: the status check supplies the outcome, never a guess.
+        setBrowserResetOutcome(
+          pendingCtx.profileEpoch === undefined
+            ? null
+            : {
+                status: "cleanupPending",
+                profileEpoch: pendingCtx.profileEpoch,
+                operationId: pendingCtx.operationId,
+                reason: pendingCtx.reason,
+              },
+        );
+      } else {
+        setBrowserResetPendingOpId(null);
+        setBrowserResetOutcome(null);
+      }
       if (profile && storedToken) {
         const snap = getConnectionSnapshot(profile.id);
         if (snap?.status === "mfa-required") {
@@ -326,7 +408,10 @@ export function ServerSettingsDialog({
       }
     }
     return () => {
+      dialogSessionRef.current += 1;
+      browserResetOpRef.current += 1;
       credentialDraftScopeRef.current = null;
+      browserResetAbortRef.current?.abort();
       clearAuthDraft();
     };
   }, [open, profile, isEditMode, clearAuthDraft, initiateStepUp]);
@@ -420,6 +505,12 @@ export function ServerSettingsDialog({
           setToken(result.data.token);
           setTestState("ok");
           clearAuthDraft();
+          clearBrowserViewFenceForProfile(
+            profile?.id ??
+              (profile === undefined
+                ? (getActiveProfileId() ?? undefined)
+                : undefined),
+          );
           if (result.data.dev_mode || result.data.devMode) {
             setTestError("✓ Dev mode active");
           }
@@ -500,6 +591,12 @@ export function ServerSettingsDialog({
         setToken(session.token);
         setTestState("ok");
         clearAuthDraft();
+        clearBrowserViewFenceForProfile(
+          profile?.id ??
+            (profile === undefined
+              ? (getActiveProfileId() ?? undefined)
+              : undefined),
+        );
       } finally {
         clearTimeout(timeout);
       }
@@ -833,7 +930,7 @@ export function ServerSettingsDialog({
     setPassword("");
   }
 
-  async function handleLogout() {
+  function handleLogout() {
     const storedProfile = profile?.id
       ? getProfiles().find((candidate) => candidate.id === profile.id)
       : getActiveProfile();
@@ -847,54 +944,350 @@ export function ServerSettingsDialog({
     const targetServerUrl =
       storedProfile?.url ?? profile?.url ?? getServerUrl();
     const targetToken = getAuthToken(targetProfileId);
-    if (targetToken) {
-      // Local logout must complete even when the old server is unreachable; its
-      // bounded media-session TTL remains the cleanup fallback.
-      await revokeCurrentMediaSession(
-        targetServerUrl,
-        targetToken,
-        targetProfileId ? getMediaClientIdForProfile(targetProfileId) : null,
-      );
-    }
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    try {
-      await fetch(`${targetServerUrl}/api/auth/logout`, {
-        method: "POST",
-        headers: secureBearerHeaders(targetServerUrl, targetToken),
-        credentials: "include",
-        signal: controller.signal,
-      });
-    } catch {
-      // ignore network errors on logout
-    } finally {
-      clearTimeout(timeout);
-    }
-    if (targetToken && getAuthToken(targetProfileId) === targetToken) {
-      if (!clearAuthToken(targetProfileId)) {
-        setTestState("fail");
-        setTestError("Unable to clear the login token in this browser");
-        return;
-      }
-    }
-    clearAuthUsername();
-    setToken("");
-    setUsername("");
-    setPassword("");
-    setTestState("idle");
-    setSaved(false);
-    // Only the active profile needs a full app reload.
-    if (profile === undefined || profile?.id === getActiveProfileId()) {
-      window.location.reload();
-    } else {
-      onClose();
-    }
+    const targetName =
+      storedProfile?.name ?? profile?.name ?? targetServerUrl;
+    const targetGeneration = targetProfileId
+      ? (getConnectionSnapshot(targetProfileId)?.owner.generation ?? 0)
+      : undefined;
+    logoutWasStaleRef.current = false;
+    setLogoutTarget({
+      profileId: targetProfileId,
+      generation: targetGeneration,
+      profileName: targetName,
+      serverUrl: targetServerUrl,
+      token: targetToken,
+      mediaClientId: targetProfileId
+        ? getMediaClientIdForProfile(targetProfileId)
+        : null,
+      sourceProfile: storedProfile ?? profile ?? undefined,
+    });
   }
 
   const targetProfileId =
     profile?.id ??
     (profile === undefined ? (getActiveProfileId() ?? undefined) : undefined);
-  const hasToken = profile !== null && Boolean(getAuthToken(targetProfileId));
+  const storedProfileToken =
+    profile !== null ? getAuthToken(targetProfileId) : null;
+  const effectiveBrowserToken =
+    (token.trim() || storedProfileToken) ?? null;
+  const hasToken = profile !== null && Boolean(storedProfileToken);
+
+  const canManageBrowserReset =
+    profile !== null &&
+    Boolean(normalized) &&
+    urlSchemeValid &&
+    (hasToken ||
+      testState === "ok" ||
+      Boolean(browserResetOutcome) ||
+      Boolean(browserResetPendingOpId));
+
+  const canConfirmBrowserReset =
+    !browserResetSubmitting &&
+    !browserResetPreflightLoading &&
+    browserResetPreflight?.kind === "admitted" &&
+    (browserResetPreflight.available ||
+      browserResetPreflight.managedProfilePresent ||
+      /cleanup pending/i.test(browserResetPreflight.unavailableReason ?? ""));
+
+  function isCurrentBrowserResetAttempt(
+    capturedDialogSession: number,
+    capturedResetOp: number,
+    capturedUrl: string,
+    capturedPropProfileId: string | undefined,
+  ): boolean {
+    return (
+      dialogSessionRef.current === capturedDialogSession &&
+      browserResetOpRef.current === capturedResetOp &&
+      latestUrlRef.current === capturedUrl &&
+      latestProfileIdRef.current === capturedPropProfileId
+    );
+  }
+
+  async function openBrowserResetConfirm() {
+    if (!normalized || !urlSchemeValid) return;
+    browserResetAbortRef.current?.abort();
+    const controller = new AbortController();
+    browserResetAbortRef.current = controller;
+    const capturedDialogSession = dialogSessionRef.current;
+    const capturedResetOp = ++browserResetOpRef.current;
+    const capturedUrl = normalized;
+    const capturedProfileId = profile?.id;
+    const timer = setTimeout(() => controller.abort(), 10000);
+
+    setBrowserResetError(null);
+    setBrowserResetPreflight(null);
+    setBrowserResetPreflightLoading(true);
+    setBrowserResetConfirmOpen(true);
+
+    try {
+      const res = await preflightBrowserCapabilitiesForOrigin(
+        capturedUrl,
+        effectiveBrowserToken,
+        controller.signal,
+      );
+      if (
+        !controller.signal.aborted &&
+        isCurrentBrowserResetAttempt(
+          capturedDialogSession,
+          capturedResetOp,
+          capturedUrl,
+          capturedProfileId,
+        )
+      ) {
+        setBrowserResetPreflight(res);
+      }
+    } catch (err) {
+      if (
+        !controller.signal.aborted &&
+        isCurrentBrowserResetAttempt(
+          capturedDialogSession,
+          capturedResetOp,
+          capturedUrl,
+          capturedProfileId,
+        )
+      ) {
+        setBrowserResetPreflight({
+          kind: "unreachable",
+          status: null,
+          reason:
+            err instanceof Error
+              ? err.message
+              : "Unable to verify Browser admission",
+        });
+      }
+    } finally {
+      clearTimeout(timer);
+      if (
+        dialogSessionRef.current === capturedDialogSession &&
+        browserResetOpRef.current === capturedResetOp
+      ) {
+        setBrowserResetPreflightLoading(false);
+      }
+    }
+  }
+
+  async function handleConfirmBrowserReset() {
+    if (
+      !normalized ||
+      !urlSchemeValid ||
+      !canConfirmBrowserReset ||
+      browserResetPreflight?.kind !== "admitted"
+    ) {
+      return;
+    }
+    const capturedDialogSession = dialogSessionRef.current;
+    const capturedResetOp = ++browserResetOpRef.current;
+    const capturedUrl = normalized;
+    const capturedProfileId = targetProfileId;
+    const capturedPropProfileId = profile?.id;
+    const capturedToken = effectiveBrowserToken;
+    const capturedGeneration = capturedProfileId
+      ? (getConnectionSnapshot(capturedProfileId)?.owner.generation ?? 0)
+      : undefined;
+    const opId = browserResetPendingOpId ?? generateUUID();
+    const controller = new AbortController();
+    browserResetAbortRef.current = controller;
+    const timer = setTimeout(() => controller.abort(), 10000);
+
+    setBrowserResetSubmitting(true);
+    setBrowserResetError(null);
+    setBrowserResetPendingOpId(opId);
+    setPendingBrowserResetContext(capturedProfileId, {
+      operationId: opId,
+      profileEpoch: browserResetPreflight.profileEpoch,
+      browserResetState: "cleanupPending",
+      reason: "Shared Browser reset requested",
+    });
+
+    try {
+      const outcome = await resetBrowserProfileForOrigin(
+        capturedUrl,
+        capturedToken,
+        {
+          operationId: opId,
+          expectedProfileEpoch: browserResetPreflight.profileEpoch,
+          confirmed: true,
+        },
+        controller.signal,
+      );
+      fenceBrowserViewsForProfile(
+        capturedProfileId,
+        "Shared Browser profile reset or logged out",
+        capturedGeneration,
+      );
+      if (
+        !isCurrentBrowserResetAttempt(
+          capturedDialogSession,
+          capturedResetOp,
+          capturedUrl,
+          capturedPropProfileId,
+        )
+      ) {
+        return;
+      }
+      setBrowserResetOutcome(outcome);
+      setBrowserResetConfirmOpen(false);
+      if (outcome.status === "cleanupPending") {
+        const trackedOp = outcome.operationId ?? opId;
+        setBrowserResetPendingOpId(trackedOp);
+        setPendingBrowserResetContext(capturedProfileId, {
+          operationId: trackedOp,
+          profileEpoch: outcome.profileEpoch,
+          browserResetState: "cleanupPending",
+          reason: outcome.reason,
+        });
+      } else {
+        setBrowserResetPendingOpId(null);
+        setPendingBrowserResetContext(capturedProfileId, null);
+      }
+    } catch (err) {
+      const adoptedOpId =
+        err instanceof BrowserHostClientError && err.operationId
+          ? err.operationId
+          : opId;
+      const isCleanupPendingConflict =
+        err instanceof BrowserHostClientError &&
+        (err.kind === "cleanupPending" || err.status === 409) &&
+        Boolean(
+          err.operationId || /cleanupPending|cleanup already/i.test(err.message),
+        );
+      const isExplicitPreCommitReject =
+        err instanceof BrowserHostClientError &&
+        err.status !== undefined &&
+        err.status >= 400 &&
+        err.status < 500 &&
+        !isCleanupPendingConflict;
+
+      if (isExplicitPreCommitReject) {
+        setPendingBrowserResetContext(capturedProfileId, null);
+        if (
+          isCurrentBrowserResetAttempt(
+            capturedDialogSession,
+            capturedResetOp,
+            capturedUrl,
+            capturedPropProfileId,
+          )
+        ) {
+          setBrowserResetPendingOpId(null);
+          setBrowserResetError(err.message);
+        }
+      } else {
+        fenceBrowserViewsForProfile(
+          capturedProfileId,
+          "Shared Browser profile reset or logged out",
+          capturedGeneration,
+        );
+        const pendingReason =
+          err instanceof Error
+            ? err.message
+            : "Shared Browser reset outcome uncertain; check status or resume cleanup.";
+        setPendingBrowserResetContext(capturedProfileId, {
+          operationId: adoptedOpId,
+          profileEpoch: browserResetPreflight.profileEpoch,
+          browserResetState: "cleanupPending",
+          reason: pendingReason,
+        });
+        if (
+          isCurrentBrowserResetAttempt(
+            capturedDialogSession,
+            capturedResetOp,
+            capturedUrl,
+            capturedPropProfileId,
+          )
+        ) {
+          setBrowserResetPendingOpId(adoptedOpId);
+          setBrowserResetOutcome({
+            status: "cleanupPending",
+            profileEpoch: browserResetPreflight.profileEpoch,
+            operationId: adoptedOpId,
+            reason: pendingReason,
+          });
+          setBrowserResetConfirmOpen(false);
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+      if (
+        dialogSessionRef.current === capturedDialogSession &&
+        browserResetOpRef.current === capturedResetOp
+      ) {
+        setBrowserResetSubmitting(false);
+      }
+    }
+  }
+
+  async function handleCheckBrowserResetStatus() {
+    const opId = browserResetPendingOpId ?? browserResetOutcome?.operationId;
+    if (!normalized || !urlSchemeValid || !opId) return;
+    const capturedDialogSession = dialogSessionRef.current;
+    const capturedResetOp = ++browserResetOpRef.current;
+    const capturedUrl = normalized;
+    const capturedProfileId = targetProfileId;
+    const capturedPropProfileId = profile?.id;
+    const capturedToken = effectiveBrowserToken;
+    const capturedGeneration = capturedProfileId
+      ? (getConnectionSnapshot(capturedProfileId)?.owner.generation ?? 0)
+      : undefined;
+    const controller = new AbortController();
+    browserResetAbortRef.current = controller;
+    const timer = setTimeout(() => controller.abort(), 10000);
+
+    setBrowserResetStatusChecking(true);
+    setBrowserResetError(null);
+    try {
+      const status = await getBrowserProfileResetStatusForOrigin(
+        capturedUrl,
+        capturedToken,
+        opId,
+        controller.signal,
+      );
+      fenceBrowserViewsForProfile(
+        capturedProfileId,
+        "Shared Browser profile reset or logged out",
+        capturedGeneration,
+      );
+      if (status.status === "completed") {
+        setPendingBrowserResetContext(capturedProfileId, null);
+      }
+      if (
+        !isCurrentBrowserResetAttempt(
+          capturedDialogSession,
+          capturedResetOp,
+          capturedUrl,
+          capturedPropProfileId,
+        )
+      ) {
+        return;
+      }
+      setBrowserResetOutcome(status);
+      if (status.status === "completed") {
+        setBrowserResetPendingOpId(null);
+      }
+    } catch (err) {
+      if (
+        isCurrentBrowserResetAttempt(
+          capturedDialogSession,
+          capturedResetOp,
+          capturedUrl,
+          capturedPropProfileId,
+        )
+      ) {
+        setBrowserResetError(
+          err instanceof Error
+            ? err.message
+            : "Unable to query Browser reset status",
+        );
+      }
+    } finally {
+      clearTimeout(timer);
+      if (
+        dialogSessionRef.current === capturedDialogSession &&
+        browserResetOpRef.current === capturedResetOp
+      ) {
+        setBrowserResetStatusChecking(false);
+      }
+    }
+  }
 
   if (!open) return null;
 
@@ -903,7 +1296,14 @@ export function ServerSettingsDialog({
       className="safe-area-inline safe-area-bottom fixed inset-0 z-50 flex items-center justify-center p-3"
       style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
       onClick={(e) => {
-        if (closable && e.target === e.currentTarget) handleRequestClose();
+        if (
+          closable &&
+          e.target === e.currentTarget &&
+          logoutTarget === null &&
+          !browserResetConfirmOpen
+        ) {
+          handleRequestClose();
+        }
       }}
     >
       <div
@@ -1156,6 +1556,79 @@ export function ServerSettingsDialog({
             onSelfRevoked={handleSelfRevoked}
           />
 
+          {canManageBrowserReset && (
+            <div
+              data-testid="browser-reset-section"
+              className="pt-3 border-t border-[var(--color-border)] space-y-2"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                    Shared Browser Data
+                  </label>
+                  <p className="text-[11px] text-[var(--color-text-muted)]">
+                    Clears shared server Browser cookies and active targets while keeping your login session.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  data-testid="browser-reset-open-btn"
+                  disabled={!effectiveBrowserToken && authType !== "none"}
+                  onClick={() => void openBrowserResetConfirm()}
+                >
+                  {browserResetPendingOpId
+                    ? "Resume cleanup…"
+                    : "Reset Browser data now…"}
+                </Button>
+              </div>
+
+              {(browserResetOutcome || browserResetPendingOpId) && (
+                <div
+                  data-testid="browser-reset-status-panel"
+                  className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs space-y-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-[var(--color-text)]">
+                      {browserResetOutcome?.status === "completed"
+                        ? `Shared Browser data cleared (profile epoch ${browserResetOutcome.profileEpoch})`
+                        : `Shared Browser cleanup pending (${browserResetPendingOpId ?? browserResetOutcome?.operationId ?? "pending"}, epoch ${browserResetOutcome?.profileEpoch ?? "—"})`}
+                    </span>
+                    {(browserResetOutcome?.status === "cleanupPending" ||
+                      browserResetPendingOpId) &&
+                      effectiveBrowserToken && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          loading={browserResetStatusChecking}
+                          data-testid="browser-reset-status-btn"
+                          onClick={() => void handleCheckBrowserResetStatus()}
+                        >
+                          Check status
+                        </Button>
+                      )}
+                  </div>
+                  {browserResetOutcome?.reason && (
+                    <p className="text-[var(--color-text-muted)]">
+                      {browserResetOutcome.reason}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {browserResetError && (
+                <p
+                  data-testid="browser-reset-error"
+                  className="text-xs text-red-400"
+                >
+                  {browserResetError}
+                </p>
+              )}
+            </div>
+          )}
+
           {profile && (
             <div className="pt-3 border-t border-[var(--color-border)]">
               <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
@@ -1272,6 +1745,178 @@ export function ServerSettingsDialog({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <Dialog
+        open={browserResetConfirmOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !browserResetSubmitting) {
+            setBrowserResetConfirmOpen(false);
+          }
+        }}
+      >
+        <DialogContent
+          data-testid="browser-reset-confirm-dialog"
+          className="sm:max-w-lg"
+          closeDisabled={browserResetSubmitting}
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            browserResetCancelRef.current?.focus();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Reset shared Browser data?</DialogTitle>
+            <DialogDescription className="text-xs text-[var(--color-text-muted)] space-y-2">
+              <span className="block">
+                This clears shared server Browser cookies and closes all active
+                Browser targets across sibling login sessions on{" "}
+                <span className="font-mono">{normalized}</span>, while keeping
+                your current login active.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <div
+            data-testid="browser-reset-preflight-status"
+            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs space-y-1.5"
+          >
+            {browserResetPreflightLoading ? (
+              <p className="text-[var(--color-text-muted)]">
+                Checking server Browser profile status…
+              </p>
+            ) : browserResetPreflight?.kind === "admitted" ? (
+              <>
+                <div className="flex items-start gap-2 text-amber-300">
+                  <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                  <span>
+                    Confirmed reset bumps profile epoch from{" "}
+                    {browserResetPreflight.profileEpoch} and fences all active
+                    Browser viewers immediately.
+                  </span>
+                </div>
+                <p className="text-[var(--color-text-muted)]">
+                  {browserResetPreflight.managedProfilePresent
+                    ? "Saved shared Browser profile detected on server."
+                    : browserResetPreflight.unavailableReason
+                      ? `Browser status: ${browserResetPreflight.unavailableReason}`
+                      : "No saved shared Browser profile directory detected on server."}
+                </p>
+              </>
+            ) : (
+              <p className="text-[var(--color-text-muted)]">
+                Shared Browser reset is unavailable (
+                {browserResetPreflight?.reason ??
+                  "requires live admitted Admin connection"}
+                ).
+              </p>
+            )}
+          </div>
+          {browserResetError && (
+            <p className="text-xs text-red-400">{browserResetError}</p>
+          )}
+          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              ref={browserResetCancelRef}
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-testid="browser-reset-cancel-btn"
+              disabled={browserResetSubmitting}
+              onClick={() => setBrowserResetConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              data-testid="browser-reset-confirm-btn"
+              loading={browserResetSubmitting}
+              disabled={!canConfirmBrowserReset}
+              onClick={() => void handleConfirmBrowserReset()}
+            >
+              Reset Browser data
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AccountLogoutDialog
+        target={logoutTarget}
+        onCancel={() => setLogoutTarget(null)}
+        onCompleteLogout={(captured, outcome) => {
+          const tokenMatches =
+            !captured.token ||
+            getAuthToken(captured.profileId) === captured.token;
+          const currentGen = captured.profileId
+            ? (getConnectionSnapshot(captured.profileId)?.owner.generation ?? 0)
+            : undefined;
+          const generationMatches =
+            captured.generation === undefined ||
+            currentGen === captured.generation;
+
+          if (!tokenMatches || !generationMatches) {
+            logoutWasStaleRef.current = true;
+            return true;
+          }
+
+          if (captured.token) {
+            if (!clearAuthToken(captured.profileId)) {
+              setTestState("fail");
+              setTestError("Unable to clear the login token in this browser");
+              return false;
+            }
+          }
+          if (captured.profileId) {
+            fenceThenDisconnectProfile(captured.profileId, captured.generation, outcome);
+          }
+          if (
+            latestUrlRef.current === normalizeServerUrl(captured.serverUrl) &&
+            latestProfileIdRef.current === captured.profileId
+          ) {
+            clearAuthUsername();
+            setToken("");
+            setUsername("");
+            setPassword("");
+            setTestState("idle");
+            setSaved(false);
+          }
+          return true;
+        }}
+        onDone={() => {
+          setLogoutTarget(null);
+          if (logoutWasStaleRef.current) {
+            logoutWasStaleRef.current = false;
+            return;
+          }
+          // Only the active profile needs a full app reload.
+          if (profile === undefined || profile?.id === getActiveProfileId()) {
+            window.location.reload();
+          } else {
+            onClose();
+          }
+        }}
+        onReauthenticate={(captured, outcome) => {
+          if (outcome.operationId || outcome.browserResetState === "cleanupPending") {
+            setPendingBrowserResetContext(captured.profileId, {
+              operationId: outcome.operationId,
+              profileEpoch: outcome.profileEpoch,
+              browserResetState: outcome.browserResetState,
+              reason: outcome.reason,
+            });
+          }
+          if (outcome.browserResetState === "cleanupPending") {
+            setBrowserResetPendingOpId(outcome.operationId ?? null);
+            setBrowserResetOutcome(
+              outcome.profileEpoch === undefined
+                ? null
+                : {
+                    status: "cleanupPending",
+                    profileEpoch: outcome.profileEpoch,
+                    operationId: outcome.operationId,
+                    reason: outcome.reason,
+                  },
+            );
+          }
+          setLogoutTarget(null);
+        }}
+      />
     </div>
   );
 }

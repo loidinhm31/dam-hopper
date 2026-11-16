@@ -482,5 +482,142 @@ describe("TerminalsApp (Phase 04 B1 revealWindow & F2 presentation input)", () =
         expect(read.record.state).toBe("confirmed-success");
       }
     });
+
+    it("omits target and cwd for profile-default workspace launches", async () => {
+      const mockCreate = vi.fn().mockResolvedValue({
+        id: "term-profile-default",
+        incarnationExact: "1",
+        incarnation: 1,
+        serverEpoch: "123e4567-e89b-12d3-a456-426614174000",
+      });
+
+      __setConnectionSnapshotForTests("profile-1", {
+        status: "connected",
+        owner: { profileId: "profile-1", generation: 1 },
+        intent: true,
+        serverUrl: "http://127.0.0.1:4803",
+        api: {
+          terminal: {
+            create: mockCreate,
+          },
+        } as unknown as Parameters<typeof __setConnectionSnapshotForTests>[1],
+      });
+
+      const identity = {
+        profileId: "profile-1",
+        endpointBinding: "default-endpoint",
+        action: "terminal.create" as const,
+        targetKind: "workspace",
+        workspaceId: "profile-1",
+        cwd: null,
+      };
+      const reserved = await reserveTerminalLaunch(identity, {
+        generation: 1,
+        desktopId: "desk-1",
+      });
+      if (reserved.status !== "reserved") throw new Error("Reservation failed");
+
+      const launchWin: OsWindow = {
+        id: "win-workspace-default",
+        appId: "terminals",
+        title: "Terminals",
+        ctx: {
+          profileId: "profile-1",
+          target: { kind: "workspace", profileId: "profile-1" },
+        },
+        mode: "float",
+        desktopId: "desk-1",
+        maximized: false,
+        minimized: false,
+        appState: {
+          sessionId: reserved.requestedTerminalId,
+          requestedTerminalId: reserved.requestedTerminalId,
+          attemptId: reserved.attemptId,
+          directoryKind: "profile-default",
+          dispatched: false,
+        },
+      };
+
+      useWindowStore.getState().openWindow(launchWin, "desk-1");
+
+      await act(async () => {
+        root?.render(<ConnectedTerminalsApp windowId="win-workspace-default" />);
+      });
+
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      const createArg = mockCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(createArg.target).toBeUndefined();
+      expect(createArg.cwd).toBeUndefined();
+      expect(createArg.project).toBeUndefined();
+    });
+
+    it("preserves workspace target and cwd for explicit-folder workspace launches", async () => {
+      const mockCreate = vi.fn().mockResolvedValue({
+        id: "term-workspace-folder",
+        incarnationExact: "1",
+        incarnation: 1,
+        serverEpoch: "123e4567-e89b-12d3-a456-426614174000",
+      });
+
+      __setConnectionSnapshotForTests("profile-1", {
+        status: "connected",
+        owner: { profileId: "profile-1", generation: 1 },
+        intent: true,
+        serverUrl: "http://127.0.0.1:4803",
+        api: {
+          terminal: {
+            create: mockCreate,
+          },
+        } as unknown as Parameters<typeof __setConnectionSnapshotForTests>[1],
+      });
+
+      const identity = {
+        profileId: "profile-1",
+        endpointBinding: "default-endpoint",
+        action: "terminal.create" as const,
+        targetKind: "workspace",
+        workspaceId: "profile-1",
+        cwd: "subdir",
+      };
+      const reserved = await reserveTerminalLaunch(identity, {
+        generation: 1,
+        desktopId: "desk-1",
+      });
+      if (reserved.status !== "reserved") throw new Error("Reservation failed");
+
+      const launchWin: OsWindow = {
+        id: "win-workspace-folder",
+        appId: "terminals",
+        title: "Terminals",
+        ctx: {
+          profileId: "profile-1",
+          target: { kind: "workspace", profileId: "profile-1" },
+        },
+        mode: "float",
+        desktopId: "desk-1",
+        maximized: false,
+        minimized: false,
+        appState: {
+          sessionId: reserved.requestedTerminalId,
+          requestedTerminalId: reserved.requestedTerminalId,
+          attemptId: reserved.attemptId,
+          directoryKind: "explicit-folder",
+          cwd: "subdir",
+          dispatched: false,
+        },
+      };
+
+      useWindowStore.getState().openWindow(launchWin, "desk-1");
+
+      await act(async () => {
+        root?.render(<ConnectedTerminalsApp windowId="win-workspace-folder" />);
+      });
+
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      const createArg = mockCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(createArg.target).toEqual({ type: "workspace" });
+      expect(createArg.cwd).toBe("subdir");
+      expect(createArg.project).toBeUndefined();
+    });
   });
 });

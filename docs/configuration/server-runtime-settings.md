@@ -81,6 +81,67 @@ session_changes_enabled = false
   - On success, invalidates config queries and cancels/removes all `session-changes` queries for that target owner.
   - Surfaces an honest restart notice on enable (`Restart active OMP sessions to load the Session Changes extension`) and actionable errors on failure without optimistic local state.
   - Terminal triggers across desktop `TabBar`, `ActiveTerminalRuntimeDisplay`, and `TerminalAccessoryControls` query `useSessionChangesEnabled(terminalOwner)` and hide/disable when tracking is disabled, loading, or unavailable.
+### Host Browser Configuration
+
+The Host Browser CDP streaming subsystem provides candidate headless Chromium process management and CDP streaming. Configuration is defined under `[server.browser]` and `[server.browser.budgets]` in `config.toml`:
+
+```toml
+[server.browser]
+enabled = false
+executable_path = "/usr/bin/google-chrome" # Path to browser executable (mode 0755 or stricter)
+profile_root = "~/.config/dam-hopper/browser-profiles" # Principal profile root (mode 0700)
+allowed_target_origins = ["http://127.0.0.1:5173"] # Approved target page origins
+allowed_asset_origins = [] # Approved asset origins
+allowed_dev_origins = [] # Approved dev origins
+denied_destinations = ["169.254.169.254", "fd00:ec2::254", "metadata.google.internal", "100.100.100.200"] # Cloud metadata
+
+[server.browser.budgets]
+max_processes = 1 # Global browser process capacity (1..=4)
+max_targets = 2 # Shared native target capacity per principal across REST, raw CDP and popups (1..=16)
+max_viewers = 2 # Max concurrent viewers per target (1..=16)
+max_raw_cdp_connections = 2 # Max raw CDP proxy connections (1..=8)
+memory_ceiling_bytes = 134217728 # Hard memory ceiling (default 128 MiB, 32 MiB..=1 GiB)
+jpeg_quality = 75 # Screencast JPEG quality ceiling (10..=100)
+max_width = 1280 # Capture frame width ceiling (64..=1920)
+max_height = 900 # Capture frame height ceiling (64..=1080)
+frame_rate_fps = 24 # Capture frame rate ceiling (1..=30)
+```
+
+**Settings page:** Settings > Host Browser edits the same `[server.browser]` keys without hand-editing `config.toml`: an enable switch, the browser executable path, an optional profile directory, and allowed local/private target origins (one per line).
+
+- The executable path must be entered explicitly (for example `/usr/bin/chromium`); it is never auto-detected from `PATH`. Server validation errors are shown verbatim on Save.
+- Save writes `config.toml` only. Changes to `enabled`, `executable_path`, or `profile_root` need a server restart; the section shows live status from `GET /api/browser/capabilities`. Restart-pending is only detectable when the saved config enables the host while the running host is disabled (or the reverse); the status then says "Restart the server to apply". A changed executable or profile on an already-running host also needs a restart, but the UI cannot detect it. Cached live data is never shown as "Running and available" while the capabilities query errors or the target server is not connected.
+- Save preserves keys the form does not own (`budgets`, `denied_destinations`, `allowed_asset_origins`, `allowed_dev_origins`). The section targets the selected Settings Target Server.
+
+**Configuration Fields:**
+
+| Field | Type | Default | Validation & Rules |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | Defaults disabled. Requires valid executable and policy before enabling. |
+| `executable_path` | string/path | `None` | Must be a regular file with execute permissions (`mode & 0o111 != 0`) and not world-writable (`mode & 0o002 == 0`). |
+| `profile_root` | string/path | `None` | Defaults to `~/.config/dam-hopper/browser-profiles`. Must be a directory, not a symlink, with mode `0700` (`mode & 0o077 == 0`). |
+| `allowed_target_origins` | string[] | `[]` | Scheme (`http`/`https`) + host + optional port. Paths, queries, fragments, credentials, and trailing slashes are forbidden. Public HTTP/HTTPS destinations are allowed by default; this list grants explicit navigation + subresource exceptions for local/private origins (e.g., `http://127.0.0.1:5173`). |
+| `allowed_asset_origins` | string[] | `[]` | Approved subresource-only local/private origins. Same strict validation as target origins. |
+| `allowed_dev_origins` | string[] | `[]` | Approved developer debug origins. Same strict validation as target origins. |
+| `denied_destinations` | string[] | Metadata IPs | Blocked destination addresses. Accepts IP, IP CIDR, hostname, or `host:port`. |
+
+**Validation, Streaming Policy & Operational Constraints:**
+
+- **Hard Ceilings for Adaptive Capture Tiers (`budgets.frame_rate_fps`, `budgets.jpeg_quality`, `budgets.max_width`, `budgets.max_height`):** Configured parameters act as hard **admin ceilings** (`CaptureCeilings`) for the server adaptive stream tiers. No tier stage, probe, or viewer preference can exceed them:
+  - `frame_rate_fps`: Hard ceiling on producer capture rate and per-viewer delivery pacing (`1..=30`, default `24 FPS`).
+  - `jpeg_quality`: Hard ceiling on screencast compression quality (`10..=100`, default `75`).
+  - `max_width` / `max_height`: Hard ceilings on capture frame pixel dimensions (`64..=1920` and `64..=1080`, defaults `1280` and `900`).
+  - **Tier Behavior (effective values):** Each ladder rung is clamped per knob (`fps = min(rung, frame_rate_fps)`, `jpeg = min(rung, jpeg_quality)`, floors 1 fps and q10; adjacent rungs that become identical are merged). Capture size is the page CSS size clamped to `max_width`/`max_height` (minimum 64), then multiplied by the rung's scale (1.0, 0.75, 0.5). Under the defaults (24 fps, q75, 1280x900) all nine rungs stay distinct and only the quality ceiling bites: High (stage 0) is 20 fps / q75 / 1.0 (the built-in q80 becomes q75, also on stage 1), Medium (stage 2) 10 fps / q65, Low (stage 5) 6 fps / q60 / 0.75, Constrained (stage 8) 2 fps / q55 / 0.5; stages 6-8 carry the Constrained label. Auto mode warm-starts at Medium (stage 2) clamped to these ceilings. `everyNthFrame` is fixed at 1; no further settings exist for tier thresholds. Direct `ScreencastProducer::new` and `ViewerCreditController::new` constructors retain legacy `100ms` (10 FPS) / JPEG `65` defaults for compatibility.
+  - **Measured scope:** Stage values and controller constants were checked on a shaped-link matrix on one Linux host with Chromium 156.0.8078.79 (results and limitations in [`calibration-qualification.md`](../../plans/261112-1205-browser-adaptive-stream-quality-and-performance/reports/calibration-qualification.md)); the ceilings above are the only operator controls. Lowering `frame_rate_fps` or `jpeg_quality` merges rungs and was not separately measured. Rollback is the previous matched backend/UI pair (static capture policy); there is no runtime switch.
+- **Chromium Autoplay & Media Privacy Defaults:** Supervised Chromium launches with `--autoplay-policy=no-user-gesture-required` (exact allowlisted flag in `is_allowlisted_arg`; default sandboxing, TLS verification, and site isolation stay active). Document-start preload (`stealth.rs`) installs unified non-stacked `navigator.permissions.query` defaults (`27` entries + `Notification.permission` correlation + native fallback), privacy-fenced `navigator.mediaDevices.enumerateDevices()` (blanks `deviceId`, `label`, and `groupId` while preserving `kind` and count), and `HTMLMediaElement.prototype.canPlayType` / `MediaSource.isTypeSupported` codec normalization without advertising unsupported EME/DRM.
+- **Live Tab Audio Streaming & Viewer Controls:** Streams `24 kHz` mono PCM16LE (`pcm16le`) `audioChunk` JSON text frames over `/api/browser/media` while a visible viewer is attached, independently of BHJF video credits and without extra `config.toml` keys. Audio playback and Mute/Unmute (`"Unlock Audio"`) controls in `BrowserApp` are ephemeral and viewer-local (no control lease required), and synchronous `PcmPlayer.flush()` immediately silences queued playback on mute, hide, Cognito mode, LockScreen, profile reset, or navigation.
+- **Memory Ceiling Cross-Product:** Estimated reservation `(max_targets * 12.1 MiB) + (max_viewers * 4.2 MiB) + (max_raw_cdp_connections * 8.0 MiB)`—covering the per-target `broadcast::channel(4)` shared `Arc<str>` audio ring (`<= 26,624 B` inside `103,792 B` target headroom) and per-viewer `<= 8 KiB` serialized `audioChunk` envelope—must not exceed `memory_ceiling_bytes`. Overbudget configuration fails validation with `MemoryCeilingExceeded`.
+- **Permissions Enforcement:** Unsafe executable permissions (missing execute bit, world-writable) or profile root permissions (symlink, group/world accessible) fail validation.
+- **Restart Boundaries:** Changes to `enabled`, `executable_path`, `profile_root`, or `budgets.max_processes` require a server restart and do not hot-swap active directories.
+- **Shared Target Capacity:** `budgets.max_targets` bounds total concurrent native pages (REST sessions, raw CDP instances, and popups). Exceeding this limit returns HTTP 429 `kind: "browserBusy"`.
+- **Public Server Origin for Raw CDP:** Raw CDP discovery URL rewriting requires setting the `DAM_HOPPER_PUBLIC_SERVER_ORIGIN` environment variable (`http` or `https`). The request `Host` header is never reflected; if unset in production, discovery returns HTTP 503 `kind: "publicOriginUnavailable"`.
+- **OS Kernel & Platform Requirements:** Supervised headless Chromium strictly requires Linux 6.9+ for process group pidfd signalling (`pidfd_send_signal(PIDFD_SIGNAL_PROCESS_GROUP)`) and `close_range` 5.9+. Launch fails closed on older Linux kernels (< 6.9). Windows process containment is unimplemented and fails closed (`ContainmentUnavailable`).
+
 ### Deferred host-action scaffolding (inactive)
 
 The current release has no supported host-action configuration or client

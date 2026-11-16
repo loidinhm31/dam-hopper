@@ -2085,11 +2085,16 @@ impl PtySessionManager {
             }
         }
     }
+    /// Writes `data` to a live session only if its incarnation still matches and `authorize`
+    /// still holds. `authorize` runs under the PTY mutex, after any wait for it and immediately
+    /// before the write, so nothing can change between the final authority check and the
+    /// mutation. It must be synchronous and non-blocking.
     pub fn write_if_incarnation(
         &self,
         id: &str,
         incarnation: u64,
         data: &[u8],
+        authorize: impl FnOnce() -> bool,
     ) -> Result<(), AppError> {
         if data.is_empty() {
             return Ok(());
@@ -2119,6 +2124,10 @@ impl PtySessionManager {
             return Err(AppError::BrowserDebug(
                 BrowserDebugError::IncarnationMismatch,
             ));
+        }
+
+        if !authorize() {
+            return Err(AppError::BrowserDebug(BrowserDebugError::NotFound));
         }
 
         if inner.input_revision == u64::MAX {

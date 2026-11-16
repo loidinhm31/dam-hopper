@@ -25,7 +25,7 @@ All MFA endpoints validate their challenge or session credential directly; a cha
 | `GET /api/auth/status` | Bearer token or `damhopper-auth` cookie | Current session state and deadlines |
 | `GET /api/auth/sessions` | Bearer token or `damhopper-auth` cookie; optional `?cursor=<opaque>` | Keyset page of active login sessions and `nextCursor` |
 | `DELETE /api/auth/sessions/{id}` | Validated explicit Bearer token only | `204 No Content` on owned revocation; `404` foreign/missing |
-| `POST /api/auth/logout` | Bearer token or `damhopper-auth` cookie (optional) | Revoke session when supplied; clear cookie |
+| `POST /api/auth/logout` | Optional Bearer/cookie + optional `LogoutRequestBody` | Revoke session/media FIRST, clear cookie; optional confirmed Browser reset (`LogoutOutcome`) |
 The MFA route group enforces a `16 KiB` request body limit (`router.rs:56`). `setup`, `confirm`, and `verify` accept JSON bodies; `challenge` has no request body. MFA challenge handles expire after 5 minutes and are single-purpose. Setup can be fetched repeatedly with the same pending enrollment challenge and returns the same secret.
 
 ## Login and Enrollment
@@ -288,7 +288,7 @@ Cookie credentials alone cannot authorize a revocation write. Authentication mid
 - Self-revoking the current session invalidates the server session and clears only the owning profile's local credentials; unrelated or replacement browser cookies in the cookie jar remain intact. A retained revoked cookie grants no access.
 
 **Media Capability Cleanup:**
-Revoking a session immediately invalidates all active media capabilities and tickets issued for that session (`media_tickets.revoke_by_actor_or_session`).
+Revoking a session immediately invalidates all active media capabilities and tickets issued for that session (`media_tickets.revoke_by_actor_or_session`) and tears down matching Browser host attachments and held input leases (`revoke_device_session_with_browser_cleanup` via `revoke_auth_session_browser_resources`) without wiping shared Browser profile credentials.
 
 **Development Mode (`--no-auth`):** Returns HTTP `409 Conflict` with `code: "DEVICE_SESSIONS_UNAVAILABLE"`.
 
@@ -296,20 +296,60 @@ Revoking a session immediately invalidates all active media capabilities and tic
 
 The UI client (`packages/ui/src/api/auth-client.ts`) enforces strict transport invariants:
 - **HTTPS or Loopback HTTP Only:** Target URLs must use `https:` or loopback `http:` (`localhost`, `127.0.0.0/8`, `[::1]`). Remote plain HTTP URLs are rejected with `UNSAFE_AUTH_TRANSPORT`.
-- **Omit Cookies:** Client requests use `credentials: "omit"` and `cache: "no-store"`.
-- **Owner Fencing & Revoked-Draft Save Guard:** Requests, subscriptions, and self-revocation cleanup capture profile ID, URL, credential, and connection generation (`{ profileId, generation }`); stale responses or superseded generations cannot clear replacement credentials, leak into newer login drafts, or affect another profile. On self-revocation acknowledgement, the Server Settings dialog clears the draft credential. A subsequent Save will not re-save the dead revoked token or overwrite any newly established replacement login.
+- **Cleartext Non-Loopback Bearer Omission:** `logoutAccount` and `revokeCurrentMediaSession` (`packages/ui/src/api/media-session.ts`) check `isSecureOrLoopbackOrigin(baseUrl)` and withhold `Authorization: Bearer` over non-loopback `http:` origins; omitted-Bearer logouts mark `revocationUncertain: true` unless the server confirms `sessionRevoked === true`.
+- **Omit Cookies (Session Inventory/Revocation):** Device session management requests use `credentials: "omit"` and `cache: "no-store"`; `logoutAccount` defaults to `credentials: "include"` to support HTTP-only cookie clearing and CSRF-checked logout flows.
+- **Owner Fencing & Revoked-Draft Save Guard:** Requests, subscriptions, logout completion callbacks, and self-revocation cleanup capture profile ID, URL, credential, and connection generation (`{ profileId, generation }`); stale responses or superseded generations cannot clear replacement credentials, leak into newer login drafts, or affect another profile. On self-revocation acknowledgement, the Server Settings dialog clears the draft credential. Unified `AccountLogoutDialog` offers Cancel-first focus with zero preselected keep/clear choices, while `ServerProfilesDialog` local profile deletion explicitly warns that server sessions and shared Browser credentials are retained.
 
 ## Logout and Errors
 
 ### `POST /api/auth/logout`
 
-Revokes the supplied session when valid, clears the `damhopper-auth` cookie, and returns:
+Executes **revoke-first** session teardown and optional confirmed shared-Browser profile reset (`16 KiB` body cap, `Cache-Control: no-store`).
 
+**Ordering Invariants:**
+1. **Pre-Revocation Admission Capture:** When authenticated mode is active and a valid JWT (preferring `Authorization: Bearer` when the header is present, without falling back to cookies on malformed `Authorization` headers) passes `evaluate_claims`, captures live Admin Browser admission (`evaluate_browser_admission`) prior to revocation.
+2. **Revoke-First Execution:** Always runs idempotent server session revocation (`store.revoke_session`), media-ticket revocation (`media_tickets.revoke_by_actor_or_session`), Browser host attachment/lease teardown (`revoke_auth_session_browser_resources`), and clears `damhopper-auth` (`Max-Age=0`) **before** evaluating any Browser profile reset. Stale MFA freshness does not block logout.
+3. **Authorized Browser Reset Gate:** Only executes destructive `user-data/` wipe when `browserReset: true`, `confirmed: true`, a valid `operationId` (`1..=128` `[A-Za-z0-9_-]`), matching `expectedProfileEpoch`, pre-revocation live Admin admission, CSRF/Origin validation (`validate_destructive_browser_csrf`), and a lock-guarded live Admin recheck all succeed. Old, expired, malformed, unauthenticated, non-Admin, or stale-confirmation callers still receive `200 OK` with the session revoked and Browser credentials retained (`browserResetState: "retained"`, `resetRequired: true`, or `"cleanupPending"` when a tombstone exists)—never HTTP `202` or false `"cleared"`.
+
+**Request Body (`LogoutRequestBody`, optional / empty body allowed; `deny_unknown_fields`):**
 ```json
-{ "ok": true, "token": null, "role": null }
+{
+  "browserReset": true,
+  "confirmed": true,
+  "expectedProfileEpoch": 1,
+  "operationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+}
 ```
 
-Stale MFA freshness does not prevent logout.
+- `expectedProfileEpoch` accepts a JSON `u64` integer or canonical decimal string.
+
+**Response (`200 OK`, `LogoutOutcome` wire fields):**
+```json
+{
+  "ok": true,
+  "token": null,
+  "role": null,
+  "sessionRevoked": true,
+  "sessionIdentified": true,
+  "revocationUncertain": false,
+  "browserResetState": "cleared",
+  "browserCredentialsRetained": false,
+  "resetRequired": false,
+  "profileEpoch": 2,
+  "operationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+}
+```
+
+| Field | Type | Semantics |
+| --- | --- | --- |
+| `sessionRevoked` | `boolean` | `true` only when the credential carried by THIS request was identified and its server session revoked; `false` for uncredentialed/anonymous logouts or when storage revocation failed. Clients never trust `sessionRevoked: true` for an unsent Bearer token. |
+| `sessionIdentified` | `boolean` | `true` when the request provided an identifiable session credential (Bearer token or cookie); `false` when no usable credential was present. |
+| `revocationUncertain` | `boolean` | `true` on storage revocation error or auth backend unavailability (and client-side when non-loopback cleartext HTTP withholds Bearer or HTTP fails). |
+| `browserResetState` | `string` | `"cleared"`, `"cleanupPending"` (bounded 2s wait elapsed, durable tombstone, or incomplete artifact purge; includes `reason`), `"retained"`, or `"unknown"` (`--no-auth` or unadmitted/malformed cases). |
+| `browserCredentialsRetained` | `boolean` | `false` only when `browserResetState === "cleared"`. |
+| `resetRequired` | `boolean` | `true` whenever reauthenticated Admin reset is still required (`false` only when `"cleared"`). |
+| `profileEpoch` | `number` *(optional)* | Resulting `profileEpoch` after confirmed reset (`"cleared"` or `"cleanupPending"`). |
+| `operationId` | `string` *(optional)* | Echoed reset operation identifier; poll `GET /api/browser/profile/reset/{operationId}` after reauthenticating when `"cleanupPending"`. |
 
 ### Error Handling
 

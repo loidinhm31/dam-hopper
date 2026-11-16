@@ -4,6 +4,10 @@ import { isAppId, getAppManifest } from "./app-registry.js";
 import type { OsAppId, WindowContext } from "./types.js";
 import type { OsIntent } from "./intents.js";
 import { createIntent } from "./intents.js";
+import { getConnectionSnapshot } from "@/api/connections.js";
+import { extractBrowserOwnerScopeFromSnapshot } from "./browser/browser-owner-scope.js";
+import { createBlankBrowserTab, createInitialBrowserWindowState } from "./browser/browser-tab-state.js";
+import { normalizeBrowserCommittedUrl } from "./browser/browser-url-normalization.js";
 
 export interface ParsedOsDeepLink {
   status: "valid" | "empty" | "invalid";
@@ -247,14 +251,19 @@ export function parseOsDeepLink(
       }
       break;
 
-    case "browser":
-      if (url) {
+    case "browser": {
+      const rawUrl = url?.trim();
+      const validBrowserUrl = rawUrl && /^https?:\/\//i.test(rawUrl)
+        ? normalizeBrowserCommittedUrl(rawUrl)
+        : undefined;
+      if (validBrowserUrl) {
         intent = createIntent("browser:open", {
           profileId,
-          url,
+          url: validBrowserUrl,
         });
       }
       break;
+    }
 
     case "files":
       if (file) {
@@ -372,7 +381,7 @@ export function parseOsDeepLink(
     case "project-info":
       intent = createIntent("project:info", {
         profileId,
-        projectId: project ?? "",
+        ...(project ? { projectId: project } : {}),
       });
       break;
 
@@ -561,11 +570,14 @@ export function qualifyOsDeepLink(
   }
 
   if (parsed.appId === "browser") {
-    const url = params?.get("url");
-    if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
+    const rawUrl = params?.get("url")?.trim();
+    const validUrl = rawUrl && /^https?:\/\//i.test(rawUrl)
+      ? normalizeBrowserCommittedUrl(rawUrl)
+      : undefined;
+    if (validUrl) {
       const intent = createIntent("browser:open", {
         profileId: capture.owner.profileId,
-        url,
+        url: validUrl,
       });
       return {
         status: "qualified",
@@ -574,30 +586,56 @@ export function qualifyOsDeepLink(
         ctx: qualifiedCtx,
       };
     }
-    // Omitted valid URL: open real chooser
+    // Omitted or unsupported URL: canonical blank New Tab, never restores last-closed group
+    const scope = extractBrowserOwnerScopeFromSnapshot(getConnectionSnapshot(capture.owner.profileId));
+    const blankTab = createBlankBrowserTab();
     return {
       status: "qualified",
       appId: "browser",
       ctx: qualifiedCtx,
-      appState: {
-        presentation: {
-          kind: "choose-target",
-          capturedContext: {
-            kind: "desktop",
-            desktopId: capture.destinationDesktopId,
-            owner: capture.owner,
-          },
-          ownerGeneration: generation,
-          destinationDesktopId: capture.destinationDesktopId,
-          deliveryToken:
-            typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-              ? crypto.randomUUID()
-              : `tok-${Date.now()}`,
-        },
-      },
+      appState: createInitialBrowserWindowState({
+        ...(scope ? { ownerScope: scope } : {}),
+        tabs: [blankTab],
+        activeTabId: blankTab.tabId,
+      }) as unknown as Record<string, unknown>,
     };
   }
 
+  if (parsed.appId === "workflow-plans") {
+    const workflowCtx: WindowContext = {
+      profileId: capture.owner.profileId,
+      generation,
+      projectId: parsed.ctx?.projectId,
+      worktreeId: parsed.ctx?.worktreeId,
+    };
+    return {
+      status: "qualified",
+      appId: "workflow-plans",
+      intent: parsed.intent,
+      ctx: workflowCtx,
+      ...(parsed.ctx?.projectId
+        ? { appState: { selectedProject: parsed.ctx.projectId } }
+        : {}),
+    };
+  }
+
+  if (parsed.appId === "project-info") {
+    const projectInfoCtx: WindowContext = {
+      profileId: capture.owner.profileId,
+      generation,
+      projectId: parsed.ctx?.projectId,
+      worktreeId: parsed.ctx?.worktreeId,
+    };
+    return {
+      status: "qualified",
+      appId: "project-info",
+      intent: parsed.intent,
+      ctx: projectInfoCtx,
+      ...(parsed.ctx?.projectId
+        ? { appState: { selectedProject: parsed.ctx.projectId } }
+        : {}),
+    };
+  }
   return {
     status: "qualified",
     appId: parsed.appId,

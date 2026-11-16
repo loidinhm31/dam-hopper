@@ -7,13 +7,14 @@ import {
   requestMfaStepUpChallenge,
   checkAuthStatus,
   logout,
+  logoutAccount,
+  isSecureOrLoopbackOrigin,
+  parsePositiveEpoch,
   listAuthSessions,
   revokeAuthSession,
   AUTH_PROTOCOL_VERSION,
-  AUTH_ERROR_CODES,
   AuthClientError,
 } from "./auth-client.js";
-
 describe("auth-client", () => {
   const originalFetch = globalThis.fetch;
 
@@ -319,12 +320,265 @@ describe("auth-client", () => {
         expect(status.code).toBe("SESSION_EXPIRED");
       }
     });
+    it("falls back to 127.0.0.1 when localhost fails with a network error", async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("localhost")) {
+          throw new TypeError("Failed to fetch (ERR_CONNECTION_REFUSED)");
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            authenticated: true,
+            user: "bob",
+            role: "user",
+            workbenchProtocol: 2,
+            authProtocol: 2,
+          }),
+        };
+      });
+
+      const status = await checkAuthStatus("http://localhost:4803", "tok");
+      expect(status.authenticated).toBe(true);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(globalThis.fetch).mock.calls[0]?.[0]).toContain("http://localhost:4803");
+      expect(vi.mocked(globalThis.fetch).mock.calls[1]?.[0]).toContain("http://127.0.0.1:4803");
+    });
   });
 
-  describe("logout", () => {
+  describe("logout & logoutAccount", () => {
     it("completes without error even if server responds with error", async () => {
       globalThis.fetch = vi.fn().mockRejectedValue(new Error("network failure"));
       await expect(logout("http://localhost:4801", "tok")).resolves.toBeUndefined();
+    });
+
+    it("restricts explicit Bearer transmission to https and loopback origins", () => {
+      expect(isSecureOrLoopbackOrigin("https://remote.example")).toBe(true);
+      expect(isSecureOrLoopbackOrigin("http://127.0.0.1:4801")).toBe(true);
+      expect(isSecureOrLoopbackOrigin("http://localhost:4801")).toBe(true);
+      expect(isSecureOrLoopbackOrigin("http://[::1]:4801")).toBe(true);
+      expect(isSecureOrLoopbackOrigin("http://insecure.test")).toBe(false);
+    });
+
+    it("sends keep-data payload with Bearer on loopback/https and omits Bearer on cleartext remote HTTP", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            authenticated: false,
+            browserResetState: "retained",
+            browserCredentialsRetained: true,
+            resetRequired: true,
+            profileEpoch: "2",
+          }),
+          { status: 200 },
+        ),
+      );
+      globalThis.fetch = fetchMock;
+
+      const outcome = await logoutAccount(
+        "http://127.0.0.1:4801",
+        "secret-tok",
+        { browserReset: false },
+      );
+      expect(outcome).toMatchObject({
+        reachable: true,
+        ok: true,
+        status: 200,
+        browserResetState: "retained",
+        browserCredentialsRetained: true,
+        resetRequired: true,
+        profileEpoch: "2",
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:4801/api/auth/logout",
+        expect.objectContaining({
+          method: "POST",
+          credentials: "include",
+          body: JSON.stringify({ browserReset: false }),
+          headers: expect.objectContaining({
+            Authorization: "Bearer secret-tok",
+            "Content-Type": "application/json",
+          }),
+        }),
+      );
+
+      fetchMock.mockClear();
+      const insecureOutcome = await logoutAccount(
+        "http://insecure.test",
+        "secret-tok",
+        {
+          browserReset: false,
+        },
+      );
+      const [, insecureInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(new Headers(insecureInit.headers).get("Authorization")).toBeNull();
+      expect(insecureOutcome.revocationUncertain).toBe(true);
+    });
+
+    it("sends confirmed clear-data payload and degrades inconsistent or unreachable responses safely to unknown", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              authenticated: false,
+              browserResetState: "cleared",
+              browserCredentialsRetained: false,
+              resetRequired: false,
+              profileEpoch: "5",
+              operationId: "op-1",
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              authenticated: false,
+              browserResetState: "cleared",
+              browserCredentialsRetained: true,
+              resetRequired: true,
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+        .mockRejectedValueOnce(new Error("offline"));
+      globalThis.fetch = fetchMock;
+
+      const cleared = await logoutAccount("https://server.test", "tok", {
+        browserReset: true,
+        confirmed: true,
+        expectedProfileEpoch: "4",
+        operationId: "op-1",
+      });
+      expect(cleared.browserResetState).toBe("cleared");
+      expect(cleared.browserCredentialsRetained).toBe(false);
+      expect(cleared.resetRequired).toBe(false);
+      expect(cleared.profileEpoch).toBe("5");
+
+      // Contradictory server payload must never report cleared
+      const contradictory = await logoutAccount("https://server.test", "tok", {
+        browserReset: false,
+      });
+      expect(contradictory.browserResetState).toBe("unknown");
+      expect(contradictory.browserCredentialsRetained).toBe(true);
+      expect(contradictory.resetRequired).toBe(true);
+
+      // Legacy { ok: true } without browserResetState never claims cleared
+      const legacy = await logoutAccount("https://server.test", "tok", {
+        browserReset: false,
+      });
+      expect(legacy.browserResetState).toBe("unknown");
+      expect(legacy.browserCredentialsRetained).toBe(true);
+      expect(legacy.resetRequired).toBe(true);
+
+      // Offline failure reports reachable: false and unknown/retained
+      const offline = await logoutAccount("https://server.test", "tok", {
+        browserReset: false,
+      });
+      expect(offline.reachable).toBe(false);
+      expect(offline.browserResetState).toBe("unknown");
+      expect(offline.browserCredentialsRetained).toBe(true);
+      expect(offline.resetRequired).toBe(true);
+    });
+
+    it("reports revocationUncertain truthfully when server session revocation fails (W9)", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            sessionRevoked: false,
+            revocationUncertain: true,
+            browserResetState: "cleared",
+            browserCredentialsRetained: false,
+            resetRequired: false,
+            revocationError: "database write error",
+          }),
+          { status: 200 },
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const revokeFailed = await logoutAccount("https://server.test", "tok", {
+        browserReset: false,
+      });
+      expect(revokeFailed.ok).toBe(true);
+      expect(revokeFailed.sessionRevoked).toBe(false);
+      expect(revokeFailed.revocationUncertain).toBe(true);
+      expect(revokeFailed.reason).toBe("database write error");
+    });
+
+    it("never trusts sessionRevoked for a saved Bearer token that was deliberately not sent", async () => {
+      // Exact shape of the production server's uncredentialed (anonymous) public logout.
+      const anonymousShape = {
+        ok: true,
+        token: null,
+        role: null,
+        sessionRevoked: false,
+        sessionIdentified: false,
+        revocationUncertain: false,
+        browserResetState: "unknown",
+        browserCredentialsRetained: true,
+        resetRequired: true,
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(anonymousShape), { status: 200 }))
+        // A cookie-only request revokes the cookie session, which says nothing about the unsent token.
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ ...anonymousShape, sessionRevoked: true, sessionIdentified: true }),
+            { status: 200 },
+          ),
+        )
+        // A legacy server that claims success regardless must not be believed either.
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ...anonymousShape, sessionRevoked: true }), { status: 200 }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      for (let i = 0; i < 3; i++) {
+        const outcome = await logoutAccount("http://remote.test", "saved-bearer", {
+          browserReset: false,
+        });
+        const [, init] = fetchMock.mock.calls[i] as [string, RequestInit];
+        expect(new Headers(init.headers).get("Authorization")).toBeNull();
+        expect(outcome.sessionRevoked).toBe(false);
+        expect(outcome.revocationUncertain).toBe(true);
+        expect(outcome.reason).toContain("revocation unconfirmed");
+        expect(outcome.browserResetState).toBe("unknown");
+        expect(outcome.browserCredentialsRetained).toBe(true);
+      }
+    });
+
+    it("reports an anonymous response honestly and still trusts a revocation of the credential actually sent", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ ok: true, sessionRevoked: false, sessionIdentified: false, revocationUncertain: false }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ ok: true, sessionRevoked: true, sessionIdentified: true, revocationUncertain: false }),
+            { status: 200 },
+          ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const anonymous = await logoutAccount("https://server.test", "expired-or-garbage", {
+        browserReset: false,
+      });
+      expect(anonymous.sessionRevoked).toBe(false);
+      expect(anonymous.revocationUncertain).toBe(true);
+
+      const revoked = await logoutAccount("https://server.test", "live-token", { browserReset: false });
+      const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+      expect(new Headers(init.headers).get("Authorization")).toBe("Bearer live-token");
+      expect(revoked.sessionRevoked).toBe(true);
+      expect(revoked.revocationUncertain).toBe(false);
     });
   });
 });
@@ -385,5 +639,63 @@ describe("device session boundary", () => {
     await expect(listAuthSessions("https://server.test", "old")).rejects.toMatchObject({ status: 401 });
     await expect(revokeAuthSession("https://server.test", "token", "id")).rejects.toMatchObject({ code: "INCOMPATIBLE_PROTOCOL" });
     await expect(revokeAuthSession("https://server.test", "token", "foreign")).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe("browser profile epoch decimal strings", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("accepts only canonical positive decimal u64 strings", () => {
+    expect(parsePositiveEpoch("1")).toBe("1");
+    expect(parsePositiveEpoch("9007199254740993")).toBe("9007199254740993");
+    expect(parsePositiveEpoch("18446744073709551615")).toBe("18446744073709551615");
+    for (const bad of [1, 9007199254740993, 1.5, "0", "01", "+1", "-1", " 1", "1 ", "1e3", "0x1", "", "18446744073709551616", null, undefined, {}]) {
+      expect(parsePositiveEpoch(bad), String(bad)).toBeUndefined();
+    }
+  });
+
+  it("round-trips profile epochs through the logout request and outcome without Number conversion", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          authenticated: false,
+          browserResetState: "cleanupPending",
+          browserCredentialsRetained: true,
+          resetRequired: true,
+          operationId: "op-big",
+          profileEpoch: "18446744073709551615",
+        }),
+        { status: 200 },
+      ),
+    );
+    globalThis.fetch = fetchMock;
+    const outcome = await logoutAccount("https://server.test", "tok", {
+      browserReset: true,
+      confirmed: true,
+      expectedProfileEpoch: "9007199254740993",
+      operationId: "op-big",
+    });
+    expect(outcome.profileEpoch).toBe("18446744073709551615");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(init.body)).toContain('"expectedProfileEpoch":"9007199254740993"');
+  });
+
+  it("drops a numeric profileEpoch from the server rather than coercing it", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          authenticated: false,
+          browserResetState: "cleanupPending",
+          browserCredentialsRetained: true,
+          resetRequired: true,
+          profileEpoch: 2,
+        }),
+        { status: 200 },
+      ),
+    );
+    const outcome = await logoutAccount("https://server.test", "tok", { browserReset: false });
+    expect(outcome.profileEpoch).toBeUndefined();
   });
 });

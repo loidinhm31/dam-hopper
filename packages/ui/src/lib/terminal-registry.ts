@@ -6,7 +6,12 @@ import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { TerminalFindController } from "@/lib/terminal-find-controller.js";
 import { cancelScheduledTerminalFit } from "@/lib/terminal-fit-scheduler.js";
-import { toTerminalKey, type TerminalRef } from "@/api/ownership.js";
+import {
+  parseTerminalKey,
+  terminalKey,
+  toTerminalKey,
+  type TerminalRef,
+} from "@/api/ownership.js";
 import type { TerminalTarget } from "@/api/terminal-session-contract.js";
 
 export interface TerminalEntry {
@@ -18,8 +23,8 @@ export interface TerminalEntry {
   invalidateSuggestionGeometry?: () => void;
   terminalRef?: TerminalRef;
   commitDesiredRenderer?: () => void;
+  primaryKey?: string;
 }
-
 export const terminalRegistry = new Map<string, TerminalEntry>();
 
 type RegistrySubscriber = (id: string) => void;
@@ -45,9 +50,9 @@ export function registerTerminal(
   const key = toTerminalKey(target);
   const terminalRef: TerminalRef | undefined =
     typeof target === "object"
-      ? ("terminalId" in target
-          ? { profileId: target.profileId, id: target.terminalId }
-          : target)
+      ? "terminalId" in target
+        ? { profileId: target.profileId, id: target.terminalId }
+        : target
       : ref;
   const entry: TerminalEntry = {
     terminal,
@@ -56,11 +61,20 @@ export function registerTerminal(
     attachmentElement,
     terminalRef,
     commitDesiredRenderer,
+    primaryKey: key,
   };
   terminalRegistry.set(key, entry);
+  if (terminalRef) {
+    const refKey = terminalKey(terminalRef);
+    if (refKey !== key) {
+      terminalRegistry.set(refKey, entry);
+    }
+  }
   const rawId =
     typeof target === "object"
-      ? ("terminalId" in target ? target.terminalId : target.id)
+      ? "terminalId" in target
+        ? target.terminalId
+        : target.id
       : (terminalRef?.id ?? null);
   if (rawId && rawId !== key) {
     if (!terminalRegistry.has(rawId)) {
@@ -98,33 +112,56 @@ export function getTerminal(
   const direct = terminalRegistry.get(toTerminalKey(target));
   if (direct) return direct;
   if (typeof target === "string") {
+    const parsed = parseTerminalKey(target);
+    if (parsed) {
+      const refKey = terminalKey(parsed);
+      return terminalRegistry.get(refKey);
+    }
     return terminalRegistry.get(target);
   }
   return undefined;
 }
 
-export function hasTerminal(target: TerminalTarget | TerminalRef | string): boolean {
+export function hasTerminal(
+  target: TerminalTarget | TerminalRef | string,
+): boolean {
   return getTerminal(target) !== undefined;
 }
 
-export function removeTerminal(target: TerminalTarget | TerminalRef | string): void {
-  const key = toTerminalKey(target);
+export function removeTerminal(
+  target: TerminalTarget | TerminalRef | string,
+): void {
+  const directKey = toTerminalKey(target);
   const entry =
-    terminalRegistry.get(key) ??
-    (typeof target === "string" ? terminalRegistry.get(target) : undefined);
+    terminalRegistry.get(directKey) ??
+    (typeof target === "string" ? terminalRegistry.get(target) : undefined) ??
+    getTerminal(target);
+
+  if (!entry) return;
+
   cancelScheduledTerminalFit(entry);
-  let deleted = terminalRegistry.delete(key);
-  if (typeof target === "string") {
+  let deleted = false;
+
+  if (terminalRegistry.get(directKey) === entry) {
+    deleted = terminalRegistry.delete(directKey) || deleted;
+  }
+  if (typeof target === "string" && terminalRegistry.get(target) === entry) {
     deleted = terminalRegistry.delete(target) || deleted;
   }
-  const rawId =
-    typeof target === "object"
-      ? ("terminalId" in target ? target.terminalId : target.id)
-      : (entry?.terminalRef?.id ?? null);
+  if (entry.primaryKey && terminalRegistry.get(entry.primaryKey) === entry) {
+    deleted = terminalRegistry.delete(entry.primaryKey) || deleted;
+  }
+  if (entry.terminalRef) {
+    const refKey = terminalKey(entry.terminalRef);
+    if (terminalRegistry.get(refKey) === entry) {
+      deleted = terminalRegistry.delete(refKey) || deleted;
+    }
+  }
+  const rawId = entry.terminalRef?.id;
   if (rawId && terminalRegistry.get(rawId) === entry) {
     deleted = terminalRegistry.delete(rawId) || deleted;
   }
   if (deleted) {
-    notifyRegistryChange(key);
+    notifyRegistryChange(entry.primaryKey ?? directKey);
   }
 }

@@ -19,9 +19,9 @@ export interface ConfirmDialogProps {
   cancelText?: string;
   variant?: "primary" | "secondary" | "danger" | "ghost";
   loading?: boolean;
+  extraFooterActions?: ReactNode;
   children?: ReactNode;
 }
-
 export function ConfirmDialog({
   open,
   onClose,
@@ -32,6 +32,7 @@ export function ConfirmDialog({
   cancelText = "Cancel",
   variant = "primary",
   loading = false,
+  extraFooterActions,
   children,
 }: ConfirmDialogProps) {
   return (
@@ -53,7 +54,7 @@ export function ConfirmDialog({
           )}
         </DialogHeader>
         {children}
-        <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
           {cancelText && (
             <Button
               type="button"
@@ -65,8 +66,8 @@ export function ConfirmDialog({
               {cancelText}
             </Button>
           )}
+          {extraFooterActions}
           <Button
-            type="button"
             variant={variant}
             size="sm"
             loading={loading}

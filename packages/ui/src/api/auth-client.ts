@@ -9,12 +9,15 @@ import {
   type AuthStatusResult,
   type AuthSessionResponse,
   type LoginResult,
-  type LoginChallengeResponse,
   type MfaChallengeResponse,
   type MfaSetupResponse,
   type AuthSessionInfo,
   type AuthSessionList,
+  type BrowserResetState,
+  type LogoutOutcome,
+  type LogoutRequestOptions,
 } from "./auth-types.js";
+import { isValidPositiveDecimalU64 } from "./browser-host-types.js";
 
 export * from "./auth-types.js";
 
@@ -439,11 +442,29 @@ export async function checkAuthStatus(
       signal,
     });
   } catch (err) {
-    throw new AuthClientError(
-      err instanceof Error ? err.message : "Network error checking auth status",
-      AUTH_ERROR_CODES.NETWORK_ERROR,
-      0,
-    );
+    if (/^https?:\/\/localhost(?::\d+)?\b/i.test(url)) {
+      const fallbackUrl = url.replace(/^(https?:\/\/)localhost\b/i, "$1127.0.0.1");
+      try {
+        res = await fetch(fallbackUrl, {
+          method: "GET",
+          headers,
+          credentials: "omit",
+          signal,
+        });
+      } catch {
+        throw new AuthClientError(
+          err instanceof Error ? err.message : "Network error checking auth status",
+          AUTH_ERROR_CODES.NETWORK_ERROR,
+          0,
+        );
+      }
+    } else {
+      throw new AuthClientError(
+        err instanceof Error ? err.message : "Network error checking auth status",
+        AUTH_ERROR_CODES.NETWORK_ERROR,
+        0,
+      );
+    }
   }
 
   const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -504,33 +525,222 @@ export async function checkAuthStatus(
 }
 
 /**
- * Logs out of the current session on the server.
+ * Only transmit explicit Bearer tokens to HTTPS origins or local loopback HTTP.
+ */
+export function isSecureOrLoopbackOrigin(baseUrl: string): boolean {
+  try {
+    const parsed = new URL(baseUrl);
+    if (parsed.protocol === "https:") return true;
+    if (parsed.protocol !== "http:") return false;
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]" ||
+      host === "::1"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A Browser profile epoch is a canonical positive decimal u64 string end to end; numbers and
+ * non-canonical strings are rejected (no lossy `Number` identity).
+ */
+export function parsePositiveEpoch(value: unknown): string | undefined {
+  return isValidPositiveDecimalU64(value) ? value : undefined;
+}
+
+function parseLogoutOutcome(status: number, data: unknown): LogoutOutcome {
+  if (!data || typeof data !== "object") {
+    return {
+      reachable: true,
+      ok: true,
+      status,
+      sessionRevoked: true,
+      revocationUncertain: false,
+      browserResetState: "unknown",
+      browserCredentialsRetained: true,
+      resetRequired: true,
+    };
+  }
+  const rec = data as Record<string, unknown>;
+  const rawState = rec.browserResetState;
+  let browserResetState: BrowserResetState =
+    rawState === "cleared" ||
+    rawState === "cleanupPending" ||
+    rawState === "retained" ||
+    rawState === "unknown"
+      ? rawState
+      : "unknown";
+  let browserCredentialsRetained =
+    typeof rec.browserCredentialsRetained === "boolean"
+      ? rec.browserCredentialsRetained
+      : browserResetState !== "cleared";
+  let resetRequired =
+    typeof rec.resetRequired === "boolean"
+      ? rec.resetRequired
+      : browserResetState !== "cleared";
+
+  // Never claim cleared if any retained/resetRequired field contradicts it.
+  if (
+    browserResetState === "cleared" &&
+    (browserCredentialsRetained || resetRequired)
+  ) {
+    browserResetState = "unknown";
+    browserCredentialsRetained = true;
+    resetRequired = true;
+  } else if (browserResetState !== "cleared") {
+    browserCredentialsRetained = true;
+    resetRequired = true;
+  }
+
+  const revocationUncertain =
+    rec.revocationUncertain === true || rec.sessionRevoked === false;
+  const sessionRevoked =
+    typeof rec.sessionRevoked === "boolean"
+      ? rec.sessionRevoked && !revocationUncertain
+      : !revocationUncertain;
+
+  return {
+    reachable: true,
+    ok: true,
+    status,
+    sessionRevoked,
+    revocationUncertain,
+    browserResetState,
+    browserCredentialsRetained,
+    resetRequired,
+    profileEpoch: parsePositiveEpoch(rec.profileEpoch),
+    operationId: typeof rec.operationId === "string" ? rec.operationId : undefined,
+    reason:
+      typeof rec.revocationError === "string"
+        ? rec.revocationError
+        : typeof rec.reason === "string"
+          ? rec.reason
+          : undefined,
+  };
+}
+/**
+ * Logs out of the current session on the server with explicit browserReset
+ * semantics and returns a conservative, truthful outcome.
+ */
+export async function logoutAccount(
+  baseUrl: string,
+  token?: string | null,
+  request: LogoutRequestOptions = { browserReset: false },
+  options?: {
+    signal?: AbortSignal;
+    credentials?: RequestCredentials;
+    includeBearerOnlyIfSecureOrLoopback?: boolean;
+  },
+): Promise<LogoutOutcome> {
+  const normalizedBase = baseUrl.replace(/\/+$/, "");
+  const url = `${normalizedBase}/api/auth/logout`;
+  const includeBearer =
+    Boolean(token) &&
+    (options?.includeBearerOnlyIfSecureOrLoopback === false ||
+      isSecureOrLoopbackOrigin(normalizedBase));
+
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+  };
+  if (includeBearer && token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const payload: LogoutRequestOptions = request.browserReset
+    ? {
+        browserReset: true,
+        confirmed: Boolean(request.confirmed),
+        ...(request.expectedProfileEpoch !== undefined
+          ? { expectedProfileEpoch: request.expectedProfileEpoch }
+          : {}),
+        ...(request.operationId ? { operationId: request.operationId } : {}),
+      }
+    : { browserReset: false };
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      credentials: options?.credentials ?? "include",
+      signal: options?.signal,
+    });
+  } catch (err) {
+    return {
+      reachable: false,
+      ok: false,
+      status: null,
+      sessionRevoked: false,
+      revocationUncertain: true,
+      browserResetState: "unknown",
+      browserCredentialsRetained: true,
+      resetRequired: true,
+      reason: err instanceof Error ? err.message : "Server unreachable",
+    };
+  }
+
+  const data: unknown =
+    typeof res.json === "function" ? await res.json().catch(() => null) : null;
+  if (!res.ok) {
+    const record =
+      data && typeof data === "object"
+        ? (data as Record<string, unknown>)
+        : null;
+    const reason =
+      record && typeof record.error === "string"
+        ? record.error
+        : `Server returned HTTP ${res.status}`;
+    return {
+      reachable: true,
+      ok: false,
+      status: res.status,
+      sessionRevoked: false,
+      revocationUncertain: true,
+      browserResetState: "unknown",
+      browserCredentialsRetained: true,
+      resetRequired: true,
+      reason,
+    };
+  }
+  const outcome = parseLogoutOutcome(res.status, data);
+  if (token && !includeBearer) {
+    // The saved Bearer token was deliberately not sent. Whatever the response says (e.g. an
+    // unrelated cookie session or an anonymous request reporting sessionRevoked:true), it
+    // cannot confirm revocation of that token, so the outcome stays unconfirmed.
+    return {
+      ...outcome,
+      sessionRevoked: false,
+      revocationUncertain: true,
+      reason:
+        outcome.reason ??
+        "Bearer token not sent over unencrypted non-loopback HTTP; server revocation unconfirmed",
+    };
+  }
+  return outcome;
+}
+
+/**
+ * Logs out of the current session on the server (non-destructive keep-data).
  */
 export async function logout(
   baseUrl: string,
   token?: string | null,
   signal?: AbortSignal,
 ): Promise<void> {
-  const url = `${baseUrl.replace(/\/+$/, "")}/api/auth/logout`;
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-  };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  try {
-    await fetch(url, {
-      method: "POST",
-      headers,
-      credentials: "omit",
-      signal,
-    });
-  } catch {
-    // Logout is best-effort and idempotent
-  }
+  await logoutAccount(
+    baseUrl,
+    token,
+    { browserReset: false },
+    { signal, credentials: "omit" },
+  );
 }
-
 /** Normalize session request URL while omitting cookies. */
 function sessionRequestUrl(baseUrl: string): string {
   let url: URL;

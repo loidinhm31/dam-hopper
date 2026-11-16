@@ -23,10 +23,11 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | [WebSocket](./api/websocket.md) | WebSocket endpoint and event/message contract |
 | [Session changes review](#session-changes-review-api) | Read-only session changes status, files, file diff, and private tool-event capture endpoints |
 | [Terminal inventory and termination](#terminal-inventory-and-guarded-termination-api) | Additive inventory headers/fields and guarded termination protocol |
+| [Host browser CDP streaming](./api/browser-host.md) | Admission security model, REST routes (/api/browser/*), capability tickets, leased input |
 
 ## Authentication
 
-See the [authentication API reference](./api/authentication.md). Covers registration, TOTP MFA enrollment and verification, session status, account-wide device login sessions inventory (`GET /api/auth/sessions`), and bearer-only session revocation (`DELETE /api/auth/sessions/{id}`). `--no-auth` is a development bypass, not a production mode; bind it to loopback only. Privileged idle-suspend mutations and login device sessions remain denied in no-auth mode (`409 DEVICE_SESSIONS_UNAVAILABLE`).
+See the [authentication API reference](./api/authentication.md). Covers registration, TOTP MFA enrollment and verification, session status, account-wide device login sessions inventory (`GET /api/auth/sessions`), bearer-only session revocation (`DELETE /api/auth/sessions/{id}`), and revoke-first logout (`POST /api/auth/logout`). Logout reports `sessionRevoked: true` only when the request's own credential was identified and revoked (accompanied by `sessionIdentified`), ensuring clients never trust it for an unsent Bearer. `--no-auth` is a development bypass, not a production mode; bind it to loopback only. Privileged idle-suspend mutations and login device sessions remain denied in no-auth mode (`409 DEVICE_SESSIONS_UNAVAILABLE`).
 
 ## Terminal idle suspend
 
@@ -220,6 +221,10 @@ Ordinary launched terminal views in the UI do not initially possess captured des
 4. **Originating Incarnation:** Canonical positive u64 string and/or safe positive integer with mutual consistency, strictly matching `row.incarnationExact`.
 
 If any of these 4 criteria is missing or mismatched, destructive actions ("End Session", "Cancel Restart") remain disabled with an explanatory reason ("End session is unavailable: connection disconnected, legacy headerless server, or unverified session identity"), failing closed without ambient epoch promotion, while preserving safe presentation "Close View".
+
+## Host Browser CDP Streaming
+
+See the [Host browser CDP streaming API reference](./api/browser-host.md). Covers live Admin admission verification, `--no-auth` dev bypass loopback/Origin checks, secure-or-loopback transport guards (`isSecureOrLoopbackOrigin`), REST routes (`GET/POST /api/browser/sessions`, `/navigate`, `/history`, `/reload`, `/viewport`, `/dialog`, `/selection/*`, `/find`, `/selected-text`), session lifecycle status truth (`initializing`, `running`, `closing`, `lost`, `closed`), failed close handling (502 `nativeCloseUnconfirmed`), raw CDP discovery public origin resolution (503 `publicOriginUnavailable`), shared target capacity (`max_targets`), configured viewer capacity (`budgets.max_viewers`), viewport no-op detection and 1-active/1-pending transaction coalescing, single-use capability tickets (`POST /api/browser/attachments`), cooperative 30s control leases with reliable input queue semantics (128 records / 256 KiB) and client input pacing budgets ($\le 40$/s replaceable, $\le 80$/s normal, $\le 100$/s releases), and network destination policies. Media streaming WebSocket contracts (`GET /api/browser/media`) cover binary BHJF v1 screencast frames, interleaved `audioChunk` text messages (`audioRun` source identity, default audio suppression on connect), authoritative `streamQuality` events (15 keys, preference ack, monotonic `captureVersion` per run), and inbound client controls (`qualityPreference`, `muteState`, coalesced $\le 4$/s, immediate local silence), requiring matched backend/UI pair deployment (Phase 03+04). Architectural boundaries and binary wire framing are detailed in the [Host Browser CDP Streaming Architecture](./architecture/host-browser-cdp-streaming.md).
 
 ## Retired plugin API anchors
 

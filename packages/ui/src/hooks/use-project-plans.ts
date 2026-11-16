@@ -35,6 +35,7 @@ import {
   normalizePlanPath,
   normalizePlanDocumentPath,
 } from "../api/project-plans-queries.js";
+import { GLOBAL_WORKSPACE_PROJECT } from "../api/workflow-dto-types.js";
 
 const MAX_ACTIVE_WATCH_PATHS = 33;
 const MAX_CONCURRENT_REGISTRATIONS = 8;
@@ -408,8 +409,12 @@ export function useProjectPlans(
         let cleanupEvent: (() => void) | undefined;
         let cleanupOverflow: (() => void) | undefined;
         try {
+          const watchTarget =
+            normalizedTarget.project === GLOBAL_WORKSPACE_PROJECT
+              ? { kind: "workspace" as const, profileId: owner.profileId }
+              : normalizedTarget;
           const result = await Promise.resolve().then(() =>
-            seam.fsSubscribeTree!(normalizedTarget, path, { watchOnly: true }),
+            seam.fsSubscribeTree!(watchTarget, path, { watchOnly: true }),
           );
           subId = typeof result === "number" ? result : result.sub_id;
           if (!isCurrent() || stalePaths.has(path)) {

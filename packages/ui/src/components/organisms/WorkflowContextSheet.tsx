@@ -44,6 +44,10 @@ export interface WorkflowContextSheetProps {
   onCloseAutoFocus?: () => void;
   target?: ProjectTargetRef | null;
   projects: ProjectDto[];
+  configuredProjects?: Array<{ name: string }>;
+  mutationTarget?: ProjectTargetRef;
+  quickCaptureTarget?: ProjectTargetRef;
+  targetOptions?: ProjectTargetRef[];
   plans: ItemOverviewNodeDto[];
   standaloneTasks: ItemOverviewNodeDto[];
   sessions: SessionDto[];
@@ -108,6 +112,10 @@ export function WorkflowContextSheet({
   onCloseAutoFocus,
   target,
   projects,
+  configuredProjects = [],
+  mutationTarget,
+  quickCaptureTarget,
+  targetOptions,
   plans,
   standaloneTasks,
   sessions,
@@ -159,7 +167,19 @@ export function WorkflowContextSheet({
     setLocalSegment(s);
     onSegmentChange?.(s);
   };
-  const effectiveTarget = selectedTarget ?? target ?? { project: "default" };
+  const displayTarget =
+    selectedTarget !== undefined ? selectedTarget : (target ?? null);
+  const effectiveTarget =
+    mutationTarget ??
+    (displayTarget && displayTarget.project !== "default"
+      ? displayTarget
+      : { project: "default" });
+  const effectiveFileTarget =
+    displayTarget &&
+    displayTarget.project &&
+    displayTarget.project !== "default"
+      ? displayTarget
+      : null;
 
   const segments = [
     { id: "projects" as const, label: "Projects", icon: FolderGit2 },
@@ -239,7 +259,8 @@ export function WorkflowContextSheet({
           {segment === "projects" && (
             <WorkflowProjectList
               projects={projects}
-              selectedTarget={selectedTarget}
+              configuredProjects={configuredProjects}
+              selectedTarget={displayTarget}
               onSelectTarget={(t) => {
                 onSelectTarget(t);
                 setSegment("items");
@@ -293,13 +314,11 @@ export function WorkflowContextSheet({
                   plansMode !== "files" && "hidden",
                 )}
               >
-                {effectiveTarget &&
-                effectiveTarget.project &&
-                effectiveTarget.project !== "default" ? (
+                {effectiveFileTarget ? (
                   <ProjectPlansDashboard
-                    key={`${owner?.profileId ?? "none"}:${owner?.generation ?? 0}:${effectiveTarget.project}:${effectiveTarget.worktreePath ?? ""}`}
+                    key={`${owner?.profileId ?? "none"}:${owner?.generation ?? 0}:${effectiveFileTarget.project}:${effectiveFileTarget.worktreePath ?? ""}`}
                     owner={owner}
-                    target={effectiveTarget}
+                    target={effectiveFileTarget}
                     enabled={
                       isOpen && segment === "items" && plansMode === "files"
                     }
@@ -370,9 +389,10 @@ export function WorkflowContextSheet({
                       </span>
                     </div>
                   ) : isQuickCaptureOpen && onCreateItem ? (
-                    <WorkflowQuickCapture
-                      target={effectiveTarget}
-                      initialKind={quickCaptureKind}
+                  <WorkflowQuickCapture
+                    target={quickCaptureTarget ?? effectiveTarget}
+                    targetOptions={quickCaptureParentId ? undefined : targetOptions}
+                    initialKind={quickCaptureKind}
                       initialParentId={quickCaptureParentId}
                       onSubmit={async (item) => {
                         await onCreateItem(item);

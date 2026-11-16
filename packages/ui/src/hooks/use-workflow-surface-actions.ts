@@ -27,7 +27,11 @@ export interface WorkflowSurfaceActions {
   }) => Promise<void>;
   handleStatusChange: (item: ItemDto, status: ItemStatus) => Promise<unknown>;
   handleAddNote: (itemId: string, body: string) => Promise<unknown>;
-  handleStartSession: (startedAt: string, itemId?: string | null) => Promise<unknown>;
+  handleStartSession: (
+    startedAt: string,
+    itemId?: string | null,
+    targetOverride?: ProjectTargetRef,
+  ) => Promise<unknown>;
   handleEndSession: (sessionId: string, endedAt: string) => Promise<unknown>;
   handleAbandonSession: (sessionId: string) => Promise<unknown>;
   handleLinkResource: (
@@ -131,10 +135,14 @@ export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): Wo
       body,
     });
 
-  const handleStartSession = (startedAt: string, itemId?: string | null) =>
+  const handleStartSession = (
+    startedAt: string,
+    itemId?: string | null,
+    targetOverride?: ProjectTargetRef,
+  ) =>
     createSession.mutateAsync({
       requestId: generateWorkflowRequestId(),
-      target: effectiveTarget,
+      target: targetOverride ?? effectiveTarget,
       itemId,
       startedAt,
     });

@@ -46,7 +46,7 @@ import {
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
-  DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  DEFAULT_OPEN_TERMINAL_SHORTCUT,
   DEFAULT_OS_PALETTE_SHORTCUT,
   DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
 } from "@/lib/shortcuts.js";
@@ -91,7 +91,7 @@ interface PersistedSettingsState {
   editorZoomWheelEnabled: boolean;
   searchTextShortcut: string | null;
   searchFilenameShortcut: string | null;
-  terminalWorkspaceShortcut: string | null;
+  openTerminalShortcut: string | null;
   terminalFilePanelShortcut: string | null;
   projectPanelShortcut: string | null;
   revealActiveFileShortcut: string | null;
@@ -199,8 +199,8 @@ function applySnapshotToStore(
     clamped.searchTextShortcut = snapshot.searchTextShortcut;
   if (typeof snapshot.searchFilenameShortcut === "string" || snapshot.searchFilenameShortcut === null)
     clamped.searchFilenameShortcut = snapshot.searchFilenameShortcut;
-  if (typeof snapshot.terminalWorkspaceShortcut === "string" || snapshot.terminalWorkspaceShortcut === null)
-    clamped.terminalWorkspaceShortcut = snapshot.terminalWorkspaceShortcut;
+  if (typeof snapshot.openTerminalShortcut === "string" || snapshot.openTerminalShortcut === null)
+    clamped.openTerminalShortcut = snapshot.openTerminalShortcut;
   if (typeof snapshot.terminalFilePanelShortcut === "string" || snapshot.terminalFilePanelShortcut === null)
     clamped.terminalFilePanelShortcut = snapshot.terminalFilePanelShortcut;
   if (typeof snapshot.projectPanelShortcut === "string" || snapshot.projectPanelShortcut === null)
@@ -315,7 +315,7 @@ function pickPersistedSettings(
     editorZoomWheelEnabled: state.editorZoomWheelEnabled,
     searchTextShortcut: state.searchTextShortcut,
     searchFilenameShortcut: state.searchFilenameShortcut,
-    terminalWorkspaceShortcut: state.terminalWorkspaceShortcut,
+    openTerminalShortcut: state.openTerminalShortcut,
     terminalFilePanelShortcut: state.terminalFilePanelShortcut,
     projectPanelShortcut: state.projectPanelShortcut,
     revealActiveFileShortcut: state.revealActiveFileShortcut,
@@ -373,7 +373,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   editorZoomWheelEnabled: true,
   searchTextShortcut: DEFAULT_SEARCH_TEXT_SHORTCUT,
   searchFilenameShortcut: DEFAULT_SEARCH_FILENAME_SHORTCUT,
-  terminalWorkspaceShortcut: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  openTerminalShortcut: DEFAULT_OPEN_TERMINAL_SHORTCUT,
   terminalFilePanelShortcut: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   projectPanelShortcut: DEFAULT_PROJECT_PANEL_SHORTCUT,
   revealActiveFileShortcut: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
@@ -473,7 +473,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         editorZoomWheelEnabled: ui.editorZoomWheelEnabled,
         searchTextShortcut: ui.searchTextShortcut,
         searchFilenameShortcut: ui.searchFilenameShortcut,
-        terminalWorkspaceShortcut: ui.terminalWorkspaceShortcut,
+        openTerminalShortcut: ui.openTerminalShortcut,
         terminalFilePanelShortcut: ui.terminalFilePanelShortcut,
         projectPanelShortcut: ui.projectPanelShortcut,
         revealActiveFileShortcut: ui.revealActiveFileShortcut,
@@ -561,8 +561,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.searchTextShortcut = partial.searchTextShortcut;
     if (partial.searchFilenameShortcut !== undefined)
       clamped.searchFilenameShortcut = partial.searchFilenameShortcut;
-    if (partial.terminalWorkspaceShortcut !== undefined)
-      clamped.terminalWorkspaceShortcut = partial.terminalWorkspaceShortcut;
+    if (partial.openTerminalShortcut !== undefined)
+      clamped.openTerminalShortcut = partial.openTerminalShortcut;
     if (partial.terminalFilePanelShortcut !== undefined)
       clamped.terminalFilePanelShortcut = partial.terminalFilePanelShortcut;
     if (partial.projectPanelShortcut !== undefined)

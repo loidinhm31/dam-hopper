@@ -24,6 +24,26 @@ import {
 import type { FsTargetRef } from "@/api/ownership.js";
 import { createIntent, dispatchIntent } from "./intents.js";
 import { getActiveShellDelegate } from "./action-dispatch.js";
+import { getConnectionSnapshot } from "@/api/connections.js";
+import {
+  areBrowserOwnerScopesEqual,
+  captureVerifiedBrowserOwner,
+  extractBrowserOwnerScopeFromSnapshot,
+  isCapturedBrowserOwnerCurrent,
+} from "./browser/browser-owner-scope.js";
+import {
+  isOwnerAddressSuppressed,
+  loadBrowserRecoveryDisk,
+  resetAddressSuppression,
+  saveBrowserRecoveryDisk,
+  withBrowserRecoveryLock,
+} from "./browser/browser-recovery-store.js";
+import {
+  createBlankBrowserTab,
+  createInitialBrowserWindowState,
+} from "./browser/browser-tab-state.js";
+import type { BrowserTabRuntime, BrowserWindowState } from "./browser/browser-tab-types.js";
+import { normalizeBrowserCommittedUrl } from "./browser/browser-url-normalization.js";
 
 function generateUUID(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -352,6 +372,13 @@ export async function executeAction(
         request.context.windowContext?.profileId ??
         "default";
       const generation = request.context.owner?.generation ?? 1;
+      const ownerScope = extractBrowserOwnerScopeFromSnapshot(getConnectionSnapshot(profileId));
+      const blankTab = createBlankBrowserTab();
+      const initialAppState = createInitialBrowserWindowState({
+        ...(ownerScope ? { ownerScope } : {}),
+        tabs: [blankTab],
+        activeTabId: blankTab.tabId,
+      });
 
       state.openWindow(
         {
@@ -363,15 +390,7 @@ export async function executeAction(
             generation,
           },
           mode: manifest?.defaultPlacement ?? "float",
-          appState: {
-            presentation: {
-              kind: "choose-target",
-              capturedContext: request.context,
-              ownerGeneration: generation,
-              destinationDesktopId: activeDesktopId,
-              deliveryToken: generateUUID(),
-            },
-          },
+          appState: initialAppState as unknown as Record<string, unknown>,
         },
         activeDesktopId,
       );
@@ -430,10 +449,17 @@ export async function executeAction(
         w.ctx.worktreeId === targetCtx.worktreeId,
     );
   } else if (manifest?.instancing === "multi-instance") {
-    // Multi-instance search: search compatible views for profile
-    candidates = allWindows.filter(
-      (w) => w.appId === appId && w.ctx.profileId === targetProfileId,
-    );
+    const verifiedScope = extractBrowserOwnerScopeFromSnapshot(getConnectionSnapshot(targetProfileId));
+    candidates = allWindows.filter((w) => {
+      if (w.appId !== appId || w.ctx.profileId !== targetProfileId) return false;
+      if (appId !== "browser") return true;
+      const bState = w.appState as Partial<BrowserWindowState> | undefined;
+      if (bState?.closing) return false;
+      if (bState?.ownerScope && verifiedScope && !areBrowserOwnerScopesEqual(bState.ownerScope, verifiedScope)) {
+        return false;
+      }
+      return true;
+    });
   }
 
   // Sort candidates: prefer active desktop, then MRU focus timestamp descending, ties broken by window id
@@ -463,6 +489,22 @@ export async function executeAction(
           activeTab: "general",
         });
       }
+    } else if (appId === "search" && request.id === "app.search.open") {
+      const editorQuery =
+        request.context.kind === "editor" && request.context.selectedText?.trim()
+          ? request.context.selectedText.trim()
+          : undefined;
+      state.updateAppState(chosen.id, {
+        mode: "content",
+        searchMode: "content",
+        scope: targetCtx.projectId ? "project" : "workspace",
+        ...(editorQuery !== undefined ? { query: editorQuery } : {}),
+        deliveryId: generateUUID(),
+      });
+    } else if (appId === "project-info" && targetCtx.projectId) {
+      state.updateAppState(chosen.id, {
+        selectedProject: targetCtx.projectId,
+      });
     }
 
     if (chosen.minimized) {
@@ -490,8 +532,23 @@ export async function executeAction(
         activeTab: "general",
       };
     }
+  } else if (appId === "project-info" && targetCtx.projectId) {
+    initialAppState = {
+      selectedProject: targetCtx.projectId,
+    };
+  } else if (appId === "search" && request.id === "app.search.open") {
+    const editorQuery =
+      request.context.kind === "editor" && request.context.selectedText?.trim()
+        ? request.context.selectedText.trim()
+        : undefined;
+    initialAppState = {
+      mode: "content",
+      searchMode: "content",
+      scope: targetCtx.projectId ? "project" : "workspace",
+      ...(editorQuery !== undefined ? { query: editorQuery } : {}),
+      deliveryId: generateUUID(),
+    };
   } else if (appId === "editor") {
-    // Generic editor open with no existing window opens chooser if no selected resource
     if (request.context.kind === "editor" && request.context.filePath) {
       initialAppState = {
         presentation: {
@@ -513,15 +570,171 @@ export async function executeAction(
       };
     }
   } else if (appId === "browser") {
-    initialAppState = {
-      presentation: {
-        kind: "choose-target",
-        capturedContext: request.context,
-        ownerGeneration: targetGeneration,
-        destinationDesktopId: activeDesktopId,
-        deliveryToken: generateUUID(),
-      },
-    };
+    let reqUrl: string | undefined;
+    if (request.context && typeof request.context === "object" && "url" in request.context) {
+      const raw = (request.context as Record<string, unknown>).url;
+      if (typeof raw === "string") reqUrl = raw;
+    }
+    if (!reqUrl && typeof request === "object" && "url" in request) {
+      const raw = (request as Record<string, unknown>).url;
+      if (typeof raw === "string") reqUrl = raw;
+    }
+    const verified = captureVerifiedBrowserOwner(targetProfileId);
+    const ownerVerifiedForLaunch = Boolean(verified && verified.owner.generation === targetGeneration);
+    const validReqUrl = reqUrl ? normalizeBrowserCommittedUrl(reqUrl) : undefined;
+
+    if (reqUrl) {
+      if (validReqUrl && ownerVerifiedForLaunch && verified) {
+        try {
+          await resetAddressSuppression(verified.scope);
+        } catch (err) {
+          return { kind: "blocked", reason: err instanceof Error ? err.message : String(err) };
+        }
+        if (!isCapturedBrowserOwnerCurrent(verified.owner, verified.scope)) {
+          return { kind: "blocked", reason: "Profile disconnected or generation changed before opening browser URL" };
+        }
+        const creationKey = generateUUID();
+        const tab: BrowserTabRuntime = {
+          ...createBlankBrowserTab({ draftValue: validReqUrl, dirty: false }),
+          committedUrl: validReqUrl,
+          phase: "creating",
+          createIntent: {
+            operationId: generateUUID(),
+            creationKey,
+            request: { creationKey, url: validReqUrl, viewport: { width: 1280, height: 800, dpr: 1 } },
+          },
+        };
+        initialAppState = createInitialBrowserWindowState({
+          ownerScope: verified.scope,
+          tabs: [tab],
+          activeTabId: tab.tabId,
+        }) as unknown as Record<string, unknown>;
+      } else {
+        const tab = createBlankBrowserTab();
+        initialAppState = createInitialBrowserWindowState({
+          ...(verified ? { ownerScope: verified.scope } : {}),
+          tabs: [tab],
+          activeTabId: tab.tabId,
+        }) as unknown as Record<string, unknown>;
+      }
+    } else if (ownerVerifiedForLaunch && verified) {
+      try {
+        const lockedResult = await withBrowserRecoveryLock<ActionResult>(() => {
+          if (!isCapturedBrowserOwnerCurrent(verified.owner, verified.scope)) {
+            return { kind: "blocked", reason: "Profile disconnected or generation changed before opening browser" };
+          }
+          const currentStore = useWindowStore.getState();
+          const existingEligible = Object.values(currentStore.session.windows).find((w) => {
+            if (w.appId !== "browser" || w.ctx.profileId !== targetProfileId) return false;
+            const bState = w.appState as Partial<BrowserWindowState> | undefined;
+            if (bState?.closing) return false;
+            return !bState?.ownerScope || areBrowserOwnerScopesEqual(bState.ownerScope, verified.scope);
+          });
+          if (existingEligible) {
+            if (existingEligible.minimized) currentStore.restoreWindow(existingEligible.id);
+            if (existingEligible.desktopId !== currentStore.session.activeDesktopId) {
+              currentStore.switchDesktop(existingEligible.desktopId);
+            }
+            currentStore.focusWindow(existingEligible.id);
+            recordWindowFocus(existingEligible.id);
+            return { kind: "focused", windowId: existingEligible.id };
+          }
+
+          const disk = loadBrowserRecoveryDisk();
+          const suppressed = isOwnerAddressSuppressed(verified.scope, disk);
+          const targetGroup = !suppressed
+            ? disk.groups.find((g) => areBrowserOwnerScopesEqual(g.ownerScope, verified.scope))
+            : undefined;
+          const groupBlocked = targetGroup
+            ? disk.operations.some((op) =>
+                areBrowserOwnerScopesEqual(op.ownerScope, verified.scope) &&
+                op.groupId === targetGroup.groupId &&
+                (op.status === "pending" || op.status === "unknown"))
+            : false;
+
+          let nextAppState: BrowserWindowState;
+          if (targetGroup && !groupBlocked) {
+            const validAddresses = targetGroup.addresses
+              .map((addr) => normalizeBrowserCommittedUrl(addr))
+              .filter((u): u is string => Boolean(u));
+            if (validAddresses.length > 0) {
+              saveBrowserRecoveryDisk({
+                ...disk,
+                groups: disk.groups.filter((g) => g.groupId !== targetGroup.groupId),
+              });
+              const activeIdx = Math.min(Math.max(0, targetGroup.activeIndex), validAddresses.length - 1);
+              const tabs: BrowserTabRuntime[] = validAddresses.map((addr, idx) => {
+                if (idx === activeIdx) {
+                  const creationKey = generateUUID();
+                  return {
+                    ...createBlankBrowserTab({ draftValue: addr, dirty: false }),
+                    committedUrl: addr,
+                    phase: "creating",
+                    createIntent: {
+                      operationId: generateUUID(),
+                      creationKey,
+                      request: { creationKey, url: addr, viewport: { width: 1280, height: 800, dpr: 1 } },
+                    },
+                  };
+                }
+                return {
+                  ...createBlankBrowserTab({ draftValue: addr, dirty: false }),
+                  committedUrl: addr,
+                  phase: "deferred",
+                };
+              });
+              nextAppState = createInitialBrowserWindowState({
+                ownerScope: verified.scope,
+                tabs,
+                activeTabId: tabs[activeIdx]!.tabId,
+                restoreGroupId: targetGroup.groupId,
+              });
+            } else {
+              saveBrowserRecoveryDisk({
+                ...disk,
+                groups: disk.groups.filter((g) => g.groupId !== targetGroup.groupId),
+              });
+              const blank = createBlankBrowserTab();
+              nextAppState = createInitialBrowserWindowState({
+                ownerScope: verified.scope,
+                tabs: [blank],
+                activeTabId: blank.tabId,
+              });
+            }
+          } else {
+            const blank = createBlankBrowserTab();
+            nextAppState = createInitialBrowserWindowState({
+              ownerScope: verified.scope,
+              tabs: [blank],
+              activeTabId: blank.tabId,
+            });
+          }
+
+          currentStore.openWindow(
+            {
+              id: newWindowId,
+              appId: "browser",
+              title: manifest?.displayName ?? "Browser Preview",
+              ctx: targetCtx,
+              mode: manifest?.defaultPlacement ?? "float",
+              appState: nextAppState as unknown as Record<string, unknown>,
+            },
+            activeDesktopId,
+          );
+          recordWindowFocus(newWindowId);
+          return { kind: "opened", windowId: newWindowId };
+        });
+        return lockedResult;
+      } catch (err) {
+        return { kind: "blocked", reason: err instanceof Error ? err.message : String(err) };
+      }
+    } else {
+      const blank = createBlankBrowserTab();
+      initialAppState = createInitialBrowserWindowState({
+        tabs: [blank],
+        activeTabId: blank.tabId,
+      }) as unknown as Record<string, unknown>;
+    }
   }
 
   state.openWindow(

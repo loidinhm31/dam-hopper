@@ -13,8 +13,16 @@ import {
   isLaunchAttemptActive,
   resetActiveLaunchAttemptsForTests,
 } from "./terminal-launch-lifecycle.js";
+import {
+  BROWSER_RECOVERY_STORAGE_KEY,
+  saveBrowserRecoveryDisk,
+  loadBrowserRecoveryDisk,
+} from "./browser/browser-recovery-store.js";
+import { BROWSER_STATE_VERSION, type BrowserWindowState } from "./browser/browser-tab-types.js";
 import { getLaunchAttempt } from "./persistence.js";
+import { getConnectionSnapshot } from "@/api/connections.js";
 vi.mock("@/api/connections.js", () => ({
+  isCurrentConnection: vi.fn((ref: { profileId: string; generation: number }) => ref.generation === 1),
   getConnectionSnapshot: vi.fn((profileId: string) => ({
     owner: { profileId, generation: 1 },
     status: "connected",
@@ -82,7 +90,34 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
       reason: "Action 'app.terminals.open' requires an active profile connection",
     });
 
-    // Project-required action fails without project
+    // Project-info opens with profile only (no project target required)
+    expect(
+      canExecuteAction({
+        id: "app.project-info.open",
+        context: {
+          kind: "desktop",
+          desktopId: "desk-1",
+          owner: { profileId: "prof-1", generation: 1 },
+        },
+      }),
+    ).toEqual({ canExecute: true });
+
+    // Worktree-required action fails without project or target
+    expect(
+      canExecuteAction({
+        id: "app.git.open",
+        context: {
+          kind: "desktop",
+          desktopId: "desk-1",
+          owner: { profileId: "prof-1", generation: 1 },
+        },
+      }),
+    ).toEqual({
+      canExecute: false,
+      reason: "Action 'app.git.open' requires a project or worktree target",
+    });
+
+    // Workflow & Plans opens with profile only (no project target select required)
     expect(
       canExecuteAction({
         id: "app.workflow-plans.open",
@@ -92,10 +127,65 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
           owner: { profileId: "prof-1", generation: 1 },
         },
       }),
-    ).toEqual({
-      canExecute: false,
-      reason: "Action 'app.workflow-plans.open' requires a project context",
+    ).toEqual({ canExecute: true });
+  });
+
+  it("opens workflow-plans without project context and focuses same profile window regardless of project selection", async () => {
+    const firstResult = await executeAction({
+      id: "app.workflow-plans.open",
+      context: {
+        kind: "desktop",
+        desktopId: "desk-1",
+        owner: { profileId: "prof-1", generation: 1 },
+      },
     });
+    expect(firstResult.kind).toBe("opened");
+    if (firstResult.kind !== "opened") return;
+
+    const secondResult = await executeAction({
+      id: "app.workflow-plans.open",
+      context: {
+        kind: "desktop",
+        desktopId: "desk-1",
+        windowContext: { profileId: "prof-1", projectId: "some-project" },
+        owner: { profileId: "prof-1", generation: 1 },
+      },
+    });
+    expect(secondResult).toEqual({
+      kind: "focused",
+      windowId: firstResult.windowId,
+    });
+  });
+
+  it("opens project-info without project context and focuses same profile window while honoring optional projectId", async () => {
+    const firstResult = await executeAction({
+      id: "app.project-info.open",
+      context: {
+        kind: "desktop",
+        desktopId: "desk-1",
+        owner: { profileId: "prof-1", generation: 1 },
+      },
+    });
+    expect(firstResult.kind).toBe("opened");
+    if (firstResult.kind !== "opened") return;
+
+    const secondResult = await executeAction({
+      id: "app.project-info.open",
+      context: {
+        kind: "desktop",
+        desktopId: "desk-1",
+        windowContext: { profileId: "prof-1", projectId: "some-project" },
+        owner: { profileId: "prof-1", generation: 1 },
+      },
+    });
+    expect(secondResult).toEqual({
+      kind: "focused",
+      windowId: firstResult.windowId,
+    });
+    expect(
+      useWindowStore.getState().session.windows[firstResult.windowId]?.appState
+        ?.selectedProject,
+    ).toBe("some-project");
   });
 
   it("focuses existing window on current desktop and restores if minimized", async () => {
@@ -198,10 +288,13 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
     if (browserResult.kind === "opened") {
       const win = useWindowStore.getState().session.windows[browserResult.windowId];
       expect(win.appId).toBe("browser");
-      expect(win.appState?.presentation).toMatchObject({
-        kind: "choose-target",
-      });
+      const st = win.appState as unknown as BrowserWindowState;
+      expect(st.browserStateVersion).toBe(BROWSER_STATE_VERSION);
+      expect(st.tabs).toHaveLength(1);
+      expect(st.tabs[0]?.phase).toBe("new-tab");
+      expect(st.tabs[0]?.committedUrl).toBeUndefined();
       expect(win.appState?.url).toBeUndefined();
+      expect(win.appState?.presentation).toBeUndefined();
     }
   });
 
@@ -345,6 +438,194 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
 
       // After settlement, attempt is no longer active in this page
       expect(isLaunchAttemptActive(attemptId)).toBe(false);
+    });
+  });
+  describe("Browser launch, focus-or-open, and locked closed-group consume", () => {
+    const scope = {
+      profileId: "prof-1",
+      endpoint: "http://127.0.0.1:4803",
+      principal: "alice",
+      namespace: "prod" as const,
+    };
+
+    beforeEach(() => {
+      Object.defineProperty(navigator, "locks", {
+        configurable: true,
+        value: { request: async (_n: string, _o: unknown, cb: () => Promise<unknown>) => cb() },
+      });
+      vi.mocked(getConnectionSnapshot).mockImplementation((profileId: string) => ({
+        owner: { profileId, generation: 1 },
+        status: "connected",
+        intent: false,
+        serverUrl: "http://127.0.0.1:4803",
+        verifiedBrowserIdentity: { principal: "alice", namespace: "prod" },
+      }));
+    });
+
+    it("focuses existing eligible window unchanged and does not consume saved closed group", async () => {
+      saveBrowserRecoveryDisk({
+        version: 1,
+        groups: [{ version: 1, groupId: "grp-1", ownerScope: scope, addresses: ["https://saved.test/1"], activeIndex: 0 }],
+        addressSuppressedScopes: [],
+        operations: [],
+      });
+      useWindowStore.getState().openWindow(
+        {
+          id: "win-existing",
+          appId: "browser",
+          title: "Browser",
+          ctx: { profileId: "prof-1" },
+          mode: "tile",
+          desktopId: "desk-1",
+          maximized: false,
+          minimized: false,
+          appState: {
+            browserStateVersion: BROWSER_STATE_VERSION,
+            ownerScope: scope,
+            activeTabId: "t1",
+            tabs: [{ tabId: "t1", kind: "ordinary", phase: "new-tab", draft: { value: "", dirty: false }, actionSequence: 0 }],
+          },
+        },
+        "desk-1",
+      );
+      const res = await executeAction({
+        id: "app.browser.open",
+        context: { kind: "desktop", desktopId: "desk-1", owner: { profileId: "prof-1", generation: 1 } },
+      });
+      expect(res).toEqual({ kind: "focused", windowId: "win-existing" });
+      expect(loadBrowserRecoveryDisk().groups).toHaveLength(1);
+    });
+
+    it("consumes saved group once across overlapping open actions under recovery lock and blocks replay after store reset", async () => {
+      saveBrowserRecoveryDisk({
+        version: 1,
+        groups: [{
+          version: 1,
+          groupId: "grp-1",
+          ownerScope: scope,
+          addresses: ["https://a.test/1?x=1", "https://b.test/2#h"],
+          activeIndex: 1,
+        }],
+        addressSuppressedScopes: [],
+        operations: [],
+      });
+      let lockTail = Promise.resolve();
+      Object.defineProperty(navigator, "locks", {
+        configurable: true,
+        value: {
+          request: async (_n: string, _o: unknown, cb: () => Promise<unknown>) => {
+            const prev = lockTail;
+            const gate = Promise.withResolvers<void>();
+            lockTail = gate.promise;
+            await prev;
+            try { return await cb(); } finally { gate.resolve(); }
+          },
+        },
+      });
+
+      // Fire overlapping open actions contending on the origin-wide lock; only the first consumes grp-1.
+      const doc1Promise = executeAction({
+        id: "app.browser.open",
+        context: { kind: "desktop", desktopId: "desk-1", owner: { profileId: "prof-1", generation: 1 } },
+      });
+      const doc2Promise = executeAction({
+        id: "app.browser.open",
+        context: { kind: "desktop", desktopId: "desk-1", owner: { profileId: "prof-1", generation: 1 } },
+      });
+      const [res1, res2] = await Promise.all([doc1Promise, doc2Promise]);
+      expect(res1.kind).toBe("opened");
+      expect(res2.kind).toBe("focused");
+      if (res1.kind === "opened") {
+        const st1 = useWindowStore.getState().session.windows[res1.windowId].appState as unknown as BrowserWindowState;
+        expect(st1.restoreGroupId).toBe("grp-1");
+        expect(st1.tabs).toHaveLength(2);
+        expect(st1.tabs[0]?.phase).toBe("deferred");
+        expect(st1.tabs[1]?.phase).toBe("creating");
+      }
+      // After store reset (empty local window map), consumed grp-1 cannot replay
+      useWindowStore.setState((prev) => ({ session: { ...prev.session, windows: {} } }));
+      const resFreshDoc = await executeAction({
+        id: "app.browser.open",
+        context: { kind: "desktop", desktopId: "desk-1", owner: { profileId: "prof-1", generation: 1 } },
+      });
+      expect(resFreshDoc.kind).toBe("opened");
+      if (resFreshDoc.kind === "opened") {
+        const stFresh = useWindowStore.getState().session.windows[resFreshDoc.windowId].appState as unknown as BrowserWindowState;
+        expect(stFresh.restoreGroupId).toBeUndefined();
+        expect(stFresh.tabs[0]?.phase).toBe("new-tab");
+      }
+      expect(JSON.parse(localStorage.getItem(BROWSER_RECOVERY_STORAGE_KEY)!).groups).toHaveLength(0);
+    });
+
+    it("blocks app.browser.open when Web Locks is unavailable while New Window remains blank New Tab", async () => {
+      Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+      const openRes = await executeAction({
+        id: "app.browser.open",
+        context: { kind: "desktop", desktopId: "desk-1", owner: { profileId: "prof-1", generation: 1 } },
+      });
+      expect(openRes.kind).toBe("blocked");
+
+      const newWinRes = await executeAction({
+        id: "app.browser.new-window",
+        context: { kind: "desktop", desktopId: "desk-1", owner: { profileId: "prof-1", generation: 1 } },
+      });
+      expect(newWinRes.kind).toBe("opened");
+    });
+
+    it("blocks group restore when an unresolved recovery operation affects that group", async () => {
+      saveBrowserRecoveryDisk({
+        version: 1,
+        groups: [{ version: 1, groupId: "grp-blocked", ownerScope: scope, addresses: ["https://blocked.test"], activeIndex: 0 }],
+        addressSuppressedScopes: [],
+        operations: [{ operationId: "op-1", ownerScope: scope, kind: "close-window", groupId: "grp-blocked", windowId: "w-old", status: "unknown" }],
+      });
+      const res = await executeAction({
+        id: "app.browser.open",
+        context: { kind: "desktop", desktopId: "desk-1", owner: { profileId: "prof-1", generation: 1 } },
+      });
+      expect(res.kind).toBe("opened");
+      if (res.kind === "opened") {
+        const st = useWindowStore.getState().session.windows[res.windowId].appState as unknown as BrowserWindowState;
+        expect(st.tabs[0]?.phase).toBe("new-tab");
+        expect(loadBrowserRecoveryDisk().groups).toHaveLength(1);
+      }
+    });
+
+    it("switches an existing Search window from filename mode to content mode on app.search.open", async () => {
+      useWindowStore.getState().openWindow(
+        {
+          id: "search-win-1",
+          appId: "search",
+          title: "Search",
+          ctx: { profileId: "prof-1", projectId: "demo" },
+          mode: "float",
+          appState: { mode: "filename", searchMode: "filename" },
+        },
+        "desk-1",
+      );
+
+      const res = await executeAction({
+        id: "app.search.open",
+        context: {
+          kind: "running-window",
+          desktopId: "desk-1",
+          windowId: "files-1",
+          owner: { profileId: "prof-1", generation: 1 },
+          windowContext: {
+            profileId: "prof-1",
+            projectId: "demo",
+            target: { kind: "project", profileId: "prof-1", project: "demo" },
+          },
+          target: { kind: "project", profileId: "prof-1", project: "demo" },
+        },
+      });
+
+      expect(res).toEqual({ kind: "focused", windowId: "search-win-1" });
+      const win = useWindowStore.getState().session.windows["search-win-1"];
+      expect(win.appState?.mode).toBe("content");
+      expect(win.appState?.searchMode).toBe("content");
+      expect(win.appState?.scope).toBe("project");
+      expect(typeof win.appState?.deliveryId).toBe("string");
     });
   });
 });

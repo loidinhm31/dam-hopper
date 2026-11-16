@@ -60,7 +60,7 @@ pub async fn create(
     let request_id = parse_uuid(&req.request_id)?;
     let started = mapping::parse_timestamp(&req.started_at)
         .map_err(|_| err(WorkflowError::InvalidRequest))?;
-    let resolved = service.resolve_target(&req.target).await?;
+    let resolved_wt = service.resolve_workflow_target(&req.target).await?;
     let now = mapping::now_ms();
     let ws = service.workspace(now).await?;
 
@@ -114,7 +114,7 @@ pub async fn create(
         id: Uuid::new_v4().to_string(),
         workspace_id: ws.id.clone(),
         project_name: req.target.project,
-        worktree_path: mapping::target_path(&resolved),
+        worktree_path: resolved_wt,
         item_id: item_id_val,
         status: SessionStatus::Running,
         started_at: started,
@@ -324,9 +324,14 @@ pub async fn link(
         });
         match pty_match {
             Some(p) => {
-                if p.project.as_deref() != Some(session.project_name.as_str())
-                    || p.worktree_path.as_deref() != session.worktree_path.as_deref()
-                {
+                let target_matches =
+                    if session.project_name == crate::workflow::GLOBAL_WORKSPACE_PROJECT {
+                        p.project.is_none() && p.worktree_path.is_none()
+                    } else {
+                        p.project.as_deref() == Some(session.project_name.as_str())
+                            && p.worktree_path.as_deref() == session.worktree_path.as_deref()
+                    };
+                if !target_matches {
                     return Err(err(WorkflowError::TargetUnavailable));
                 }
                 resolved_incarnation = resolved_incarnation.or(Some(p.incarnation));

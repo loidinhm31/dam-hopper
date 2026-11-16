@@ -76,20 +76,20 @@ describe("app-registry", () => {
     expect(APP_MANIFESTS["agent-store"].minimumCtx).toBe("profile");
     expect(APP_MANIFESTS["session-changes"].minimumCtx).toBe("profile");
     expect(APP_MANIFESTS.files.minimumCtx).toBe("profile");
+    expect(APP_MANIFESTS["workflow-plans"].minimumCtx).toBe("profile");
 
     expect(APP_MANIFESTS.editor.minimumCtx).toBe("project");
     expect(APP_MANIFESTS.changes.minimumCtx).toBe("project");
     expect(APP_MANIFESTS.git.minimumCtx).toBe("project");
     expect(APP_MANIFESTS["conflict-resolver"].minimumCtx).toBe("project");
-    expect(APP_MANIFESTS["project-info"].minimumCtx).toBe("project");
-    expect(APP_MANIFESTS["workflow-plans"].minimumCtx).toBe("project");
+    expect(APP_MANIFESTS["project-info"].minimumCtx).toBe("profile");
   });
 
   it("adheres to approved instancing rules", () => {
     expect(APP_MANIFESTS.settings.instancing).toBe("single-instance");
     expect(APP_MANIFESTS["agent-store"].instancing).toBe("profile-instance");
     expect(APP_MANIFESTS["ports-tunnels"].instancing).toBe("profile-instance");
-
+    expect(APP_MANIFESTS["workflow-plans"].instancing).toBe("profile-instance");
     expect(APP_MANIFESTS.terminals.instancing).toBe("multi-instance");
     expect(APP_MANIFESTS.editor.instancing).toBe("multi-instance");
     expect(APP_MANIFESTS.browser.instancing).toBe("multi-instance");
@@ -100,8 +100,7 @@ describe("app-registry", () => {
     expect(APP_MANIFESTS.git.instancing).toBe("worktree-instance");
 
     expect(APP_MANIFESTS["conflict-resolver"].instancing).toBe("project-instance");
-    expect(APP_MANIFESTS["project-info"].instancing).toBe("project-instance");
-    expect(APP_MANIFESTS["workflow-plans"].instancing).toBe("project-instance");
+    expect(APP_MANIFESTS["project-info"].instancing).toBe("profile-instance");
     expect(APP_MANIFESTS["session-changes"].instancing).toBe("tuple-instance");
   });
 

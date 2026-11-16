@@ -242,7 +242,7 @@ vi.mock("@/stores/settings.js", () => ({
     {
       getState: () => ({
         terminalFontSize: 14,
-        terminalWorkspaceShortcut: "Mod+Shift+Backquote",
+        openTerminalShortcut: "Ctrl+Shift+KeyT",
         revealActiveFileShortcut: "Alt+F1",
         cognitoModeShortcut: "Mod+Alt+KeyB",
       }),

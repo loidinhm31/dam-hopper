@@ -1,4 +1,5 @@
 import { isAppId } from "../app-registry.js";
+import { parseBrowserWindowDisk, projectBrowserWindowState } from "../browser/browser-persistence.js";
 import type { FloatBounds, OsAppId } from "../types.js";
 import type { TileNode, TilePaneNode, TileSplitNode } from "@/types/tile-tree.js";
 import type {
@@ -15,7 +16,33 @@ const MAX_TREE_DEPTH = 10;
 const MAX_TREE_NODES = 64;
 
 export const RECIPE_EXPORT_WARNING =
-  "Exported recipes include authored commands and local file paths. Review thoroughly before sharing.";
+  "Exported recipes include authored commands, local file paths, and ordinary browser addresses (including query strings and hash fragments) in plaintext. Review thoroughly before sharing.";
+
+export function sanitizeBrowserRecipeAppState(rawAppState: unknown):
+  | { readonly ok: true; readonly appState: Record<string, unknown> | undefined }
+  | { readonly ok: false; readonly error: string } {
+  if (rawAppState === undefined || rawAppState === null) {
+    return { ok: true, appState: undefined };
+  }
+  if (typeof rawAppState !== "object" || Array.isArray(rawAppState)) {
+    return { ok: false, error: "Browser step appState must be an object" };
+  }
+  const obj = rawAppState as Record<string, unknown>;
+  if (
+    obj.browserStateVersion === undefined &&
+    obj.url === undefined &&
+    obj.sessionId === undefined &&
+    obj.tabs === undefined
+  ) {
+    return { ok: true, appState: undefined };
+  }
+  const parsed = parseBrowserWindowDisk(rawAppState, "recipe");
+  if (!parsed.valid || !parsed.state) {
+    return { ok: false, error: parsed.error ?? "Invalid browser metadata in recipe" };
+  }
+  const projected = projectBrowserWindowState(parsed.state, "recipe");
+  return { ok: true, appState: projected as unknown as Record<string, unknown> };
+}
 
 export interface ValidationSuccess {
   readonly valid: true;
@@ -286,14 +313,25 @@ export function validateRecipeV1(raw: unknown): RecipeValidationResult {
         }
       }
 
+      let nextAppState: Record<string, unknown> | undefined;
+      if (typeof step.appState === "object" && step.appState !== null) {
+        if (step.appId === "browser") {
+          const projected = sanitizeBrowserRecipeAppState(step.appState);
+          if (!projected.ok) {
+            errors.push(`appSteps[${i}].appState: ${projected.error}`);
+          } else {
+            nextAppState = projected.appState;
+          }
+        } else {
+          nextAppState = step.appState as Record<string, unknown>;
+        }
+      }
+
       validatedAppSteps.push({
         key: String(step.key),
         appId: step.appId as OsAppId,
         worktreePath: step.worktreePath ? String(step.worktreePath) : undefined,
-        appState:
-          typeof step.appState === "object" && step.appState !== null
-            ? (step.appState as Record<string, unknown>)
-            : undefined,
+        appState: nextAppState,
       });
     }
   }
@@ -420,12 +458,19 @@ export function exportRecipeJson(recipe: RecipeV1): {
       worktreePath: s.worktreePath,
       agent: s.agent,
     })),
-    appSteps: recipe.appSteps.map((s) => ({
-      key: s.key,
-      appId: s.appId,
-      worktreePath: s.worktreePath,
-      appState: s.appState,
-    })),
+    appSteps: recipe.appSteps.map((s) => {
+      let cleanAppState = s.appState;
+      if (s.appId === "browser") {
+        const projected = sanitizeBrowserRecipeAppState(s.appState);
+        cleanAppState = projected.ok ? projected.appState : undefined;
+      }
+      return {
+        key: s.key,
+        appId: s.appId,
+        worktreePath: s.worktreePath,
+        appState: cleanAppState,
+      };
+    }),
     layout: recipe.layout,
     createdAt: recipe.createdAt,
     updatedAt: recipe.updatedAt,

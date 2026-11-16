@@ -407,6 +407,51 @@ describe("recipe-engine", () => {
       expect(recipe.terminalSteps[0].worktreePath).toBe("feat-branch");
       expect(recipe.terminalSteps[0].command).toBe("cargo build");
     });
+  it("captures Browser portable ordinary tabs + active selection while stripping popup, owner, session, and runtime fields", () => {
+    const winBrowser: OsWindow = {
+      id: "win-browser-1",
+      appId: "browser",
+      title: "Browser",
+      ctx: { profileId: "server-a", projectId: "proj-1" },
+      mode: "tile",
+      desktopId: "d-1",
+      maximized: false,
+      minimized: false,
+      appState: {
+        browserStateVersion: 1,
+        ownerScope: { profileId: "server-a", endpoint: "https://hub.test", principal: "alice", namespace: "prod" },
+        tabs: [
+          { tabId: "t1", kind: "ordinary", committedUrl: "http://localhost:5173/a?k=1#s", sessionId: "s-1", phase: "live", draft: { value: "dirty-draft", dirty: true }, actionSequence: 3 },
+          { tabId: "p1", kind: "popup", committedUrl: "https://oauth.test/secret", sessionId: "s-pop", phase: "live", parentTabId: "t1", draft: { value: "x", dirty: false }, actionSequence: 0 },
+          { tabId: "t2", kind: "ordinary", committedUrl: "https://docs.test/guide", sessionId: "s-2", phase: "live", draft: { value: "https://docs.test/guide", dirty: false }, actionSequence: 0 },
+        ],
+        activeTabId: "p1",
+      },
+    };
+    const desktop: OsDesktop = {
+      id: "d-1",
+      name: "Browser Desktop",
+      tree: { type: "pane", id: "p-1", items: ["win-browser-1"], active: "win-browser-1" },
+      floatingWindowIds: [],
+    };
+    const { recipe } = buildRecipeFromDesktopSubset({
+      recipeId: "recipe-browser",
+      name: "Browser Recipe",
+      desktop,
+      windows: { "win-browser-1": winBrowser },
+      chosenProfileId: "server-a",
+      chosenProjectId: "proj-1",
+    });
+    expect(recipe.appSteps).toHaveLength(1);
+    expect(recipe.appSteps[0]?.appState).toEqual({
+      browserStateVersion: 1,
+      tabs: [
+        { tabId: "t1", committedUrl: "http://localhost:5173/a?k=1#s" },
+        { tabId: "t2", committedUrl: "https://docs.test/guide" },
+      ],
+      activeTabId: "t1",
+    });
+  });
   });
 
   describe("preflightRecipeLaunch and executeRecipeLaunch", () => {

@@ -9,7 +9,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use error::BrowserDebugError;
-pub use store::BrowserDebugArtifactManager;
+pub use store::{
+    ArtifactSource, BoxFuture, BrowserAdmissionAuthority, BrowserDebugArtifactManager,
+    HandoffFence, MAX_GLOBAL_ARTIFACT_BYTES, MAX_GLOBAL_ARTIFACT_RECORDS,
+};
 
 pub const MAX_SELECTION_JSON_BYTES: usize = 64 * 1024;
 pub const MAX_PNG_BYTES: usize = 4 * 1024 * 1024;

@@ -7,6 +7,7 @@ import {
   isEventHandledByCoordinator,
   registerEditorSlot,
   registerShellDelegate,
+  registerWindowActionContext,
   setCognitoPhysicalPolicy,
   type ShellInputDelegate,
 } from "./action-dispatch.js";
@@ -140,5 +141,152 @@ describe("action-dispatch - root keyboard coordinator (C5)", () => {
 
     unregister();
     expect(getEditorContextForWindow("win-editor-1")).toBeUndefined();
+  });
+
+  it("opens Text Search in content mode when only Agent Hub is open (focused or unfocused)", () => {
+    useSettingsStore.setState({
+      searchTextShortcut: "Ctrl+Shift+KeyF",
+    });
+    useWindowStore.getState().openWindow(
+      {
+        id: "agent-hub-1",
+        appId: "agent-hub",
+        title: "Agent Hub",
+        ctx: { profileId: "" },
+        mode: "tile",
+      },
+      "desktop-1",
+    );
+    const unregisterCtx = registerWindowActionContext("agent-hub-1", () => ({
+      kind: "running-window",
+      desktopId: "desktop-1",
+      windowId: "agent-hub-1",
+      windowContext: {
+        profileId: "prof-hub",
+        projectId: "proj-alpha",
+        target: { kind: "project", profileId: "prof-hub", project: "proj-alpha" },
+      },
+      owner: { profileId: "prof-hub", generation: 1 },
+      target: { kind: "project", profileId: "prof-hub", project: "proj-alpha" },
+    }));
+
+    // Clear explicit focus to verify sole-visible-window fallback too
+    const sess = useWindowStore.getState().session;
+    useWindowStore.getState().setSession({
+      ...sess,
+      desktops: sess.desktops.map((d) => ({ ...d, focusedWindowId: null })),
+    });
+
+    const event = new KeyboardEvent("keydown", {
+      key: "F",
+      code: "KeyF",
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+    const handled = handleCoordinatorKeyEvent(event);
+
+    expect(handled).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
+    const searchWin = Object.values(useWindowStore.getState().session.windows).find(
+      (w) => w.appId === "search",
+    );
+    expect(searchWin).toBeDefined();
+    expect(searchWin?.ctx.profileId).toBe("prof-hub");
+    expect(searchWin?.ctx.projectId).toBe("proj-alpha");
+    expect(searchWin?.appState?.mode).toBe("content");
+    expect(searchWin?.appState?.searchMode).toBe("content");
+    expect(searchWin?.appState?.scope).toBe("project");
+
+    unregisterCtx();
+  });
+
+  it("opens Text Search in workspace scope when only Files is open in workspace mode", () => {
+    useSettingsStore.setState({
+      searchTextShortcut: "Ctrl+Shift+KeyF",
+    });
+    useWindowStore.getState().openWindow(
+      {
+        id: "files-1",
+        appId: "files",
+        title: "Files",
+        ctx: { profileId: "prof-files" },
+        mode: "tile",
+      },
+      "desktop-1",
+    );
+    const unregisterCtx = registerWindowActionContext("files-1", () => ({
+      kind: "running-window",
+      desktopId: "desktop-1",
+      windowId: "files-1",
+      windowContext: {
+        profileId: "prof-files",
+        target: { kind: "workspace", profileId: "prof-files" },
+      },
+      owner: { profileId: "prof-files", generation: 2 },
+      target: { kind: "workspace", profileId: "prof-files" },
+    }));
+
+    const event = new KeyboardEvent("keydown", {
+      key: "F",
+      code: "KeyF",
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+    const handled = handleCoordinatorKeyEvent(event);
+
+    expect(handled).toBe(true);
+    const searchWin = Object.values(useWindowStore.getState().session.windows).find(
+      (w) => w.appId === "search",
+    );
+    expect(searchWin).toBeDefined();
+    expect(searchWin?.ctx.profileId).toBe("prof-files");
+    expect(searchWin?.appState?.mode).toBe("content");
+    expect(searchWin?.appState?.scope).toBe("workspace");
+
+    unregisterCtx();
+  });
+
+  it("opens Terminals app with Ctrl+Shift+T default shortcut", () => {
+    useWindowStore.getState().openWindow(
+      {
+        id: "agent-hub-1",
+        appId: "agent-hub",
+        title: "Agent Hub",
+        ctx: { profileId: "" },
+        mode: "tile",
+      },
+      "desktop-1",
+    );
+    const unregisterCtx = registerWindowActionContext("agent-hub-1", () => ({
+      kind: "running-window",
+      desktopId: "desktop-1",
+      windowId: "agent-hub-1",
+      windowContext: {
+        profileId: "prof-1",
+        target: { kind: "workspace", profileId: "prof-1" },
+      },
+      owner: { profileId: "prof-1", generation: 1 },
+      target: { kind: "workspace", profileId: "prof-1" },
+    }));
+
+    const event = new KeyboardEvent("keydown", {
+      key: "T",
+      code: "KeyT",
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+    const handled = handleCoordinatorKeyEvent(event);
+
+    expect(handled).toBe(true);
+    const termWin = Object.values(useWindowStore.getState().session.windows).find(
+      (w) => w.appId === "terminals",
+    );
+    expect(termWin).toBeDefined();
+    expect(termWin?.ctx.profileId).toBe("prof-1");
+
+    unregisterCtx();
   });
 });

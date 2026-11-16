@@ -29,12 +29,12 @@ COPY server/assets ./assets
 RUN touch src/main.rs && cargo build --release --features vendored
 
 # Stage 2: Build web SPA
-FROM node:20-slim@sha256:3d0f05455dea2c82e2f76e7e2543964c30f6b7d673fc1a83286736d44fe4c41c AS web-builder
+FROM node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS web-builder
 
 WORKDIR /build
 
 # pnpm version kept in sync with .github/workflows — update both when upgrading
-RUN corepack enable && corepack prepare pnpm@10 --activate
+RUN npm install --global pnpm@10
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY patches ./patches

@@ -13,7 +13,7 @@ import { getTerminal, subscribeToRegistryChanges } from "@/lib/terminal-registry
 import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
 import { latestTerminalSessionIncarnation } from "@/lib/terminal-incarnation-state.js";
 import { useWindowStore } from "../window-store.js";
-import { toServerFsTarget, type FsTargetRef } from "@/api/ownership.js";
+import type { FsTargetRef } from "@/api/ownership.js";
 import { buildTerminalClaimKey } from "../terminal-claim-key.js";
 import {
   acquireTerminalPresentation,
@@ -25,6 +25,7 @@ import {
   buildTerminalLaunchIdentity,
   executeTerminalLaunch,
   reserveTrackedTerminalLaunch,
+  resolveTerminalCreateParams,
 } from "../terminal-launch-lifecycle.js";
 export interface TerminalsAppProps {
   window: OsWindow;
@@ -90,14 +91,13 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
     setLaunchError(null);
     updateAppState(window.id, { dispatched: true });
 
-    const isWorkspaceTarget = window.ctx.target?.kind === "workspace";
-    const rawCwd = (window.appState?.cwd as string | undefined) ?? undefined;
-    const wireTarget =
-      window.ctx.target
-        ? toServerFsTarget(window.ctx.target)
-        : undefined;
-    const projectParam = isWorkspaceTarget ? undefined : window.ctx.projectId;
-    const cwdParam = isWorkspaceTarget ? (rawCwd || ".") : rawCwd;
+    const { wireTarget, project: projectParam, cwd: cwdParam } =
+      resolveTerminalCreateParams({
+        target: window.ctx.target,
+        projectId: window.ctx.projectId,
+        cwd: window.appState?.cwd as string | undefined,
+        directoryKind: window.appState?.directoryKind as string | undefined,
+      });
 
     try {
       const outcome = await executeTerminalLaunch({
@@ -160,6 +160,7 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
     updateAppState,
     window.appState?.command,
     window.appState?.cwd,
+    window.appState?.directoryKind,
     window.ctx.projectId,
     window.ctx.target,
     window.id,

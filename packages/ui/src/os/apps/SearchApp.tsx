@@ -22,10 +22,18 @@ export function SearchApp({ window }: SearchAppProps) {
   const rawMode = (window.appState?.searchMode ?? window.appState?.mode) as string | undefined;
   const initialMode: "filename" | "content" = rawMode === "filename" ? "filename" : "content";
 
+  const requestedScope = window.appState?.scope as "workspace" | "project" | undefined;
+  const deliveryScopeKey = `${String(deliveryId ?? "")}:${requestedScope ?? ""}`;
+  const [prevDeliveryScopeKey, setPrevDeliveryScopeKey] = useState(deliveryScopeKey);
   const [searchScope, setSearchScope] = useState<"workspace" | "project">(
-    (window.appState?.scope as "workspace" | "project") ?? (project ? "project" : "workspace"),
+    requestedScope ?? (project ? "project" : "workspace"),
   );
-
+  if (deliveryScopeKey !== prevDeliveryScopeKey) {
+    setPrevDeliveryScopeKey(deliveryScopeKey);
+    if (requestedScope === "workspace" || requestedScope === "project") {
+      setSearchScope(requestedScope);
+    }
+  }
   const handleScopeChange = useCallback(
     (nextScope: "workspace" | "project") => {
       setSearchScope(nextScope);
@@ -152,9 +160,10 @@ export function SearchApp({ window }: SearchAppProps) {
             target={target}
             initialQuery={requestedQuery}
             onResultClick={handleResultClick}
-            autoFocus={false}
+            autoFocus={Boolean(deliveryId)}
             isolatedState={true}
             initialMode={initialMode}
+            initialScope={searchScope}
           />
         )}
       </div>

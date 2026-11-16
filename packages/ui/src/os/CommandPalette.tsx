@@ -1,4 +1,3 @@
-import type { ConnectionRef } from "@/api/ownership.js";
 import {
   useState,
   useMemo,
@@ -23,6 +22,7 @@ import { getConnectionSnapshot, getApi } from "@/api/connections.js";
 import { isCanonicalUuid } from "@/api/terminal-session-contract.js";
 import { listActionDescriptors, resolveActionBinding } from "./actions.js";
 import { canExecuteAction, executeAction } from "./action-executor.js";
+import { resolveActiveActionContext } from "./action-dispatch.js";
 import { APP_ICONS } from "./app-icons.js";
 import type { ActionContext, OsAppId } from "./types.js";
 export type PaletteMode =
@@ -133,29 +133,10 @@ export function CommandPalette({
   }, [query, activeMode]);
 
   // Built-in Commands Provider
-  const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: "default" };
-  let desktopOwner: ConnectionRef | null = null;
-  if (desktopCtx.profileId) {
-    try {
-      const snap = getConnectionSnapshot(desktopCtx.profileId);
-      if (snap && snap.status === "connected") {
-        desktopOwner = snap.owner;
-      }
-    } catch {
-      // Fall back gracefully
-    }
-  }
-
   const commandItems = useMemo<PaletteItem[]>(() => {
+    const actionContext = resolveActiveActionContext(null);
     const actionCommands: PaletteItem[] = listActionDescriptors().map((desc) => {
       const binding = resolveActionBinding(desc.id, useSettingsStore.getState());
-      const actionContext: ActionContext = {
-        kind: "desktop",
-        desktopId: activeDesktop?.id ?? "desktop-1",
-        windowContext: desktopCtx,
-        owner: desktopOwner,
-        target: desktopCtx.target,
-      };
       const check = canExecuteAction({ id: desc.id, context: actionContext });
       return {
         id: `cmd-action-${desc.id}`,
@@ -192,10 +173,13 @@ export function CommandPalette({
           "Add new desktop with approved 60/40 layout (Terminals + Files/Search + Git/Changes)",
         onSelect: () => {
           const newDesktopId = `desktop-${generateUUID().slice(0, 8)}`;
-          const desktopCtx =
-            activeDesktop?.defaultCtx ?? { profileId: "default" };
+          const targetProfileId = activeDesktop?.defaultCtx?.profileId || "default";
+          const desktopCtx = {
+            profileId: targetProfileId,
+            target: { kind: "workspace" as const, profileId: targetProfileId },
+          };
           const { desktop, windows } = createProjectDesktopTemplate(
-            `Project (${desktopCtx.projectId ?? "Workspace"})`,
+            "Workspace",
             desktopCtx,
             newDesktopId,
           );
@@ -306,7 +290,13 @@ export function CommandPalette({
               id: `terminals-omp-${generateUUID().slice(0, 8)}`,
               appId: "terminals",
               title: "OMP Terminal",
-              ctx: activeDesktop?.defaultCtx ?? { profileId: "default" },
+              ctx: {
+                profileId: activeDesktop?.defaultCtx?.profileId || "default",
+                target: {
+                  kind: "workspace",
+                  profileId: activeDesktop?.defaultCtx?.profileId || "default",
+                },
+              },
               mode: "tile",
             },
             session.activeDesktopId,
@@ -331,7 +321,13 @@ export function CommandPalette({
               id: `editor-${generateUUID().slice(0, 8)}`,
               appId: "editor",
               title: "Editor",
-              ctx: activeDesktop?.defaultCtx ?? { profileId: "default" },
+              ctx: {
+                profileId: activeDesktop?.defaultCtx?.profileId || "default",
+                target: {
+                  kind: "workspace",
+                  profileId: activeDesktop?.defaultCtx?.profileId || "default",
+                },
+              },
               mode: useSettingsStore.getState().defaultWindowPlacement ?? "float",
             },
             session.activeDesktopId,

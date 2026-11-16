@@ -3,6 +3,9 @@ import type { OsWindow } from "../types.js";
 import { useWindowOwner } from "../window-context.js";
 import { FileTree } from "@/components/organisms/FileTree.js";
 import { dispatchIntent, createIntent, registerIntentHandler } from "../intents.js";
+import { registerWindowActionContext } from "../action-dispatch.js";
+import { getAllConnectionSnapshots, getConnectionSnapshot } from "@/api/connections.js";
+import { getActiveProfile } from "@/api/server-config.js";
 import { normalizeProjectTarget } from "@/api/client.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
@@ -237,6 +240,69 @@ export function FilesApp({ window }: FilesAppProps) {
     });
     return unregister;
   }, [profileId, project, projectFilter, worktreeId, effectiveMode, window.id]);
+
+  useEffect(() => {
+    return registerWindowActionContext(window.id, () => {
+      let resolvedProfileId = profileId;
+      let snap = resolvedProfileId
+        ? getConnectionSnapshot(resolvedProfileId)
+        : undefined;
+      if ((!snap || snap.status !== "connected") && (!resolvedProfileId || resolvedProfileId === "default")) {
+        const activeProfile = getActiveProfile();
+        if (activeProfile?.id) {
+          const activeSnap = getConnectionSnapshot(activeProfile.id);
+          if (activeSnap?.status === "connected") {
+            resolvedProfileId = activeSnap.owner.profileId;
+            snap = activeSnap;
+          }
+        }
+        if (!snap || snap.status !== "connected") {
+          const connected = getAllConnectionSnapshots().find(
+            (s) => s.status === "connected",
+          );
+          if (connected) {
+            resolvedProfileId = connected.owner.profileId;
+            snap = connected;
+          }
+        }
+      }
+      const connOwner =
+        snap && snap.status === "connected"
+          ? snap.owner
+          : owner.isConnected
+            ? { profileId: owner.profileId, generation: owner.generation }
+            : null;
+      const activeProj =
+        effectiveMode === "projects"
+          ? (projectFilter !== "all" ? projectFilter : project)
+          : "";
+      const resolvedTarget: FsTargetRef = activeProj
+        ? {
+            kind: "project",
+            profileId: resolvedProfileId,
+            project: activeProj,
+            ...(worktreeId ? { worktreePath: worktreeId } : {}),
+          }
+        : {
+            kind: "workspace",
+            profileId: resolvedProfileId,
+          };
+
+      return {
+        kind: "running-window",
+        desktopId: window.desktopId,
+        windowId: window.id,
+        windowContext: {
+          profileId: resolvedProfileId,
+          ...(activeProj ? { projectId: activeProj } : {}),
+          ...(activeProj && worktreeId ? { worktreeId } : {}),
+          target: resolvedTarget,
+        },
+        owner: connOwner,
+        target: resolvedTarget,
+      };
+    });
+  }, [effectiveMode, owner.generation, owner.isConnected, profileId, project, projectFilter, window.desktopId, window.id, worktreeId]);
 
   return (
     <div

@@ -8,15 +8,33 @@ import {
 } from "./use-browser-debug.js";
 import type { TunnelInfo } from "@/api/client.js";
 
-const { listTunnels, eventListeners } = vi.hoisted(() => ({
+const {
+  listTunnels,
+  createArtifact,
+  uploadPng,
+  handoffArtifact,
+  deleteArtifact,
+  eventListeners,
+} = vi.hoisted(() => ({
   listTunnels: vi.fn(),
+  createArtifact: vi.fn(),
+  uploadPng: vi.fn(),
+  handoffArtifact: vi.fn(),
+  deleteArtifact: vi.fn(),
   eventListeners: new Map<string, () => void>(),
 }));
 
 vi.mock("@/api/client.js", () => ({
-  api: { tunnels: { list: listTunnels } },
+  api: {
+    tunnels: { list: listTunnels },
+    browserDebug: {
+      createArtifact,
+      uploadPng,
+      handoff: handoffArtifact,
+      deleteArtifact,
+    },
+  },
 }));
-
 vi.mock("@/api/transport.js", () => ({
   getTransportGeneration: () => 0,
   getTransport: () => ({
@@ -268,5 +286,65 @@ describe("useBrowserDebug tunnel lifecycle", () => {
     expect(target2).not.toBeNull();
     expect(target2?.revision).toBe(2);
     expect(latestRef.current?.bridgeStatus).toBe("loading");
+  });
+
+  it("prepares and hands off cooperative artifact with exact incarnation and target revision fence", async () => {
+    createArtifact.mockResolvedValueOnce({
+      artifactId: "art-coop-1",
+      terminalId: "term-coop-1",
+      terminalIncarnation: 7,
+      expiresAt: Date.now() + 60_000,
+      jsonPath: "/tmp/coop-1.json",
+      jsonSize: 120,
+      jsonSha256: "abc",
+    });
+    handoffArtifact.mockResolvedValueOnce({ inserted: true });
+
+    await act(async () => {
+      root.render(createElement(Harness));
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      latestRef.current?.navigateTo("http://localhost:8080/page");
+      latestRef.current?.setSelection({
+        version: 1,
+        tag: "button",
+        role: "button",
+        accessibleName: "Save",
+        text: "Save",
+        attributes: {},
+        locator: "button",
+        bounds: { x: 0, y: 0, width: 10, height: 10 },
+      });
+    });
+
+    const termTarget = {
+      sessionId: "term-coop-1",
+      profileId: "default",
+      incarnation: 7,
+      label: "Shell 1",
+      mounted: true,
+      registered: true,
+      alive: true,
+      current: true,
+    };
+
+    const prepared = await latestRef.current!.prepareTerminalArtifact(termTarget);
+    expect(prepared.reference).toContain("/tmp/coop-1.json");
+
+    // Replacement incarnation fails closed without calling handoff
+    await expect(
+      latestRef.current!.handoffTerminalArtifact(
+        { ...termTarget, incarnation: 8 },
+        prepared,
+      ),
+    ).rejects.toThrow(/incarnation mismatch/i);
+    expect(handoffArtifact).not.toHaveBeenCalled();
+
+    // Matching incarnation succeeds
+    const res = await latestRef.current!.handoffTerminalArtifact(termTarget, prepared);
+    expect(res.inserted).toBe(true);
+    expect(handoffArtifact).toHaveBeenCalledWith("art-coop-1");
   });
 });

@@ -347,6 +347,34 @@ describe("Fetchers and Query Option Factories", () => {
     );
   });
 
+  it("uses workspace FsTargetRef when fetching plan document for __workspace__", async () => {
+    const docText = "# Workspace Plan";
+    const base64 = btoa(docText);
+    const mockClient = {
+      fs: {
+        read: vi.fn(async () => ({
+          ok: true as const,
+          content: base64,
+          binary: false,
+        })),
+      },
+    } as unknown as ApiClient;
+
+    const content = await fetchPlanDocument(
+      mockOwner,
+      { project: "__workspace__" },
+      "plans/ws-plan/plan.md",
+      undefined,
+      mockClient,
+    );
+    expect(content).toBe(docText);
+    expect(mockClient.fs.read).toHaveBeenCalledWith(
+      { kind: "workspace", profileId: mockOwner.profileId },
+      "plans/ws-plan/plan.md",
+      { mode: "plan-document" },
+    );
+  });
+
   it("throws ApiRequestError when document read fails", async () => {
     const mockClient = {
       fs: {

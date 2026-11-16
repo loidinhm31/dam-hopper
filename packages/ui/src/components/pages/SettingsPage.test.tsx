@@ -99,6 +99,9 @@ vi.mock("@/components/organisms/DiagnosticsExportButton.js", () => ({
 vi.mock("@/components/organisms/SettingsIdleSuspendTimingSection.js", () => ({
   SettingsIdleSuspendTimingSection: () => <div>IdleSuspendSection</div>,
 }));
+vi.mock("@/components/organisms/SettingsHostBrowserSection.js", () => ({
+  SettingsHostBrowserSection: () => <div>HostBrowserSection</div>,
+}));
 vi.mock("@/components/pages/settings-page/SettingsMaintenancePanel.js", () => ({
   SettingsMaintenancePanel: () => <div>MaintenancePanel</div>,
 }));
@@ -371,6 +374,7 @@ describe("SettingsPage accordion collapse behavior", () => {
     "Keyboard Shortcuts",
     "Terminal Idle Suspend",
     "Session Changes",
+    "Host Browser",
     "Global Settings",
     "Workspace Config",
     "Maintenance",

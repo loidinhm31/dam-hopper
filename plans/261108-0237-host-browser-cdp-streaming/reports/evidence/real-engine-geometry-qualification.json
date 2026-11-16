@@ -1,0 +1,112 @@
+{
+  "timestamp": "2026-11-08T16:45:00Z",
+  "engine": {
+    "product": "Google Chrome",
+    "version": "157.0.8103.38",
+    "binary_path": "/usr/bin/google-chrome",
+    "binary_sha256": "aea09d69ce7f24d5901f6bfb15dd44d0c856e793e0a498f8d8393ec7d2c308ec",
+    "cdp_version": "1.3",
+    "host_os": "Linux 7.2.15-200.fc44.x86_64"
+  },
+  "verification_command": "env DAM_HOPPER_BROWSER_EXECUTABLE=/usr/bin/google-chrome DAM_HOPPER_REQUIRE_BROWSER=1 cargo test --manifest-path server/Cargo.toml --test browser_host_compatibility -- --nocapture",
+  "geometry_qualification": {
+    "status": "QUALIFIED_FOR_UNIT_AND_NONZERO_OFFSETS",
+    "native_zoom_status": "UNVERIFIED",
+    "aspect_fit_rejection_verified": true,
+    "formula_under_test": {
+      "u": "(clientX - drawX) / drawWidth",
+      "v": "(clientY - drawY) / drawHeight",
+      "x": "u * visualViewport.clientWidth",
+      "y": "v * visualViewport.clientHeight + offsetTop",
+      "note": "visualViewport.offsetX/offsetY are visual pan offsets; Chrome Input.dispatchMouseEvent operates in visual viewport space and applies visualViewport offsets internally."
+    },
+    "cases": [
+      {
+        "case": "Baseline 1.0 (DPR 1, PageScale 1.0, Scroll 0,0, Offset 0,0)",
+        "target": "marker-red",
+        "decoded_image_centroid": [129.5, 149.5],
+        "u_v": [0.1012, 0.1661],
+        "cdp_coords": [127.98, 147.01],
+        "dom_client_hit": [127.0, 147.0],
+        "expected_bounds": [100.0, 120.0, 160.0, 180.0],
+        "result": "PASS"
+      },
+      {
+        "case": "DPR 2.0 (Retina display device pixel scaling)",
+        "target": "marker-green",
+        "decoded_image_centroid": [429.5, 279.5],
+        "u_v": [0.3355, 0.3106],
+        "cdp_coords": [424.47, 274.84],
+        "dom_client_hit": [424.0, 274.0],
+        "dom_dpr": 2.0,
+        "expected_bounds": [400.0, 250.0, 460.0, 310.0],
+        "result": "PASS"
+      },
+      {
+        "case": "Document Scroll (Scroll 60, 50)",
+        "target": "marker-blue",
+        "decoded_image_centroid": [719.5, 159.5],
+        "u_v": [0.5621, 0.1772],
+        "cdp_coords": [711.07, 156.84],
+        "dom_client_hit": [711.0, 156.0],
+        "dom_page": [771.0, 206.0],
+        "expected_bounds": [690.0, 130.0, 750.0, 190.0],
+        "result": "PASS"
+      },
+      {
+        "case": "Pinch / PageScale 2.0",
+        "target": "marker-red",
+        "decoded_image_centroid": [259.5, 299.5],
+        "u_v": [0.2027, 0.3328],
+        "cdp_coords": [128.23, 147.25],
+        "dom_client_hit": [128.0, 147.0],
+        "visual_viewport_scale": 2.0,
+        "expected_bounds": [100.0, 120.0, 160.0, 180.0],
+        "result": "PASS"
+      },
+      {
+        "case": "Nonzero Visual Viewport Offsets (PageScale 2.0 + Visual Viewport Scroll)",
+        "target": "marker-red",
+        "visual_viewport_offset": [40.0, 40.0],
+        "decoded_image_centroid": [179.5, 219.5],
+        "u_v": [0.1402, 0.2439],
+        "cdp_coords": [89.75, 109.75],
+        "dom_client_hit": [129.0, 149.0],
+        "expected_bounds": [100.0, 120.0, 160.0, 180.0],
+        "result": "PASS"
+      }
+    ],
+    "native_zoom_investigation": {
+      "route_1_key_shortcuts": "Ctrl++ / Ctrl+- sequences dispatched; visualViewport.zoom remained Some(1.0)",
+      "route_2_ctrl_mousewheel": "Ctrl+mouseWheel dispatched; visualViewport.zoom remained Some(1.0)",
+      "route_3_force_device_scale_factor": "Alters devicePixelRatio (DPR); visualViewport.zoom remained Some(1.0)",
+      "route_4_cdp_protocol": "Page.setZoom and Browser.setZoom unsupported in standard CDP 1.3 protocol",
+      "conclusion": "Native browser zoom is UNREACHABLE via standard CDP/launch in headless Chrome 157. Marked UNVERIFIED; inputTrusted: false remains enforced for non-unit zoom geometry."
+    }
+  },
+  "behavior_qualification": {
+    "static_first_frame": {
+      "sof_dimensions": [780, 493],
+      "layout_match": true,
+      "result": "PASS"
+    },
+    "screencast_restart_and_old_ack": {
+      "old_run_ack_transport_error": false,
+      "stream_continuation_observed": true,
+      "result": "PASS"
+    },
+    "resize_recovery": {
+      "requested_override": [800, 600],
+      "frame_dimensions_received": [800, 600],
+      "result": "PASS"
+    },
+    "animation_to_final_static": {
+      "quiescence_observed_after_animation_ms": 300,
+      "single_recovery_screenshot_executed": true,
+      "decoded_pixel_centroid": [399.5, 99.5],
+      "expected_centroid_x": 400.0,
+      "periodic_polling_absent": true,
+      "result": "PASS"
+    }
+  }
+}

@@ -12,6 +12,16 @@ import { isAppId } from "./app-registry.js";
 import { createDefaultOsSession } from "./window-ops.js";
 import { collectTilePanes, isValidTileNode } from "@/lib/tile-tree.js";
 import type { TileNode } from "@/types/tile-tree.js";
+import type { BrowserOwnerScope } from "./browser/browser-tab-types.js";
+import { areBrowserOwnerScopesEqual } from "./browser/browser-owner-scope.js";
+import {
+  parseBrowserWindowDisk,
+  projectBrowserWindowState,
+} from "./browser/browser-persistence.js";
+import {
+  loadBrowserRecoveryDisk,
+  withBrowserRecoveryLock,
+} from "./browser/browser-recovery-store.js";
 export const OS_SESSION_STORAGE_KEY = "dam-hopper:os:v1:session";
 
 export interface PersistenceNotice {
@@ -38,6 +48,9 @@ export function resumeAutosave(): void {
 function sanitizeAppState(
   appId: string,
   rawState?: Record<string, unknown>,
+  mode: "local" | "portable" | "recipe" | "import" = "local",
+  suppressedScopes?: readonly BrowserOwnerScope[],
+  withholdAllBrowserUrls?: boolean,
 ): Record<string, unknown> | undefined {
   if (!rawState || typeof rawState !== "object") return undefined;
   if (appId === "terminals") {
@@ -54,9 +67,21 @@ function sanitizeAppState(
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
   if (appId === "browser") {
-    const projected: Record<string, unknown> = {};
-    if (typeof rawState.url === "string") projected.url = rawState.url;
-    return Object.keys(projected).length > 0 ? projected : undefined;
+    const parsed = parseBrowserWindowDisk(rawState, mode === "import" ? "import" : "local");
+    if (!parsed.valid || !parsed.state) return undefined;
+    let state = parsed.state;
+    const isSuppressed = Boolean(
+      withholdAllBrowserUrls ||
+      (state.ownerScope && suppressedScopes?.some((s) => areBrowserOwnerScopesEqual(s, state.ownerScope)))
+    );
+    if (isSuppressed) {
+      state = {
+        ...state,
+        tabs: state.tabs.map((t) => ({ ...t, committedUrl: undefined })),
+      };
+    }
+    const projectMode = mode === "import" ? "portable" : mode;
+    return projectBrowserWindowState(state, projectMode) as unknown as Record<string, unknown>;
   }
   if (appId === "files") {
     const projected: Record<string, unknown> = {};
@@ -103,12 +128,39 @@ function sanitizeAppState(
     const projected: Record<string, unknown> = {};
     if (typeof rawState.selectedItemId === "string")
       projected.selectedItemId = rawState.selectedItemId;
+    if (
+      rawState.selectedProject === null ||
+      typeof rawState.selectedProject === "string"
+    ) {
+      projected.selectedProject = rawState.selectedProject;
+    }
+    if (
+      rawState.selectedWorktreePath === null ||
+      typeof rawState.selectedWorktreePath === "string"
+    ) {
+      projected.selectedWorktreePath = rawState.selectedWorktreePath;
+    }
+    if (rawState.plansMode === "files" || rawState.plansMode === "manual") {
+      projected.plansMode = rawState.plansMode;
+    }
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
-  if (appId === "settings" || appId === "agent-store" || appId === "project-info") {
+  if (appId === "settings" || appId === "agent-store") {
     const projected: Record<string, unknown> = {};
     if (typeof rawState.activeTab === "string")
       projected.activeTab = rawState.activeTab;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
+  if (appId === "project-info") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.activeTab === "string")
+      projected.activeTab = rawState.activeTab;
+    if (
+      typeof rawState.selectedProject === "string" &&
+      rawState.selectedProject.length > 0
+    ) {
+      projected.selectedProject = rawState.selectedProject;
+    }
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
   if (appId === "system-monitor") {
@@ -190,6 +242,9 @@ function sanitizeAppState(
 
 export function sanitizeSessionForPersistence(
   session: OsSessionV1,
+  mode: "local" | "portable" | "recipe" | "import" = "local",
+  suppressedScopes?: readonly BrowserOwnerScope[],
+  withholdAllBrowserUrls?: boolean,
 ): OsSessionV1 {
   const sanitizedWindows: Record<string, OsWindow> = {};
   for (const [id, win] of Object.entries(session.windows)) {
@@ -240,7 +295,7 @@ export function sanitizeSessionForPersistence(
       minimized: Boolean(win.minimized),
       floatBounds,
       restorePlacement,
-      appState: sanitizeAppState(win.appId, win.appState),
+      appState: sanitizeAppState(win.appId, win.appState, mode, suppressedScopes, withholdAllBrowserUrls),
     };
   }
 
@@ -628,13 +683,13 @@ export function validateOsSession(candidate: unknown): {
   return { valid: true, session: candidate as OsSessionV1 };
 }
 
-export function loadOsSession(
+export async function loadOsSession(
   storageKey: string = OS_SESSION_STORAGE_KEY,
   onNotice?: (notice: PersistenceNotice) => void,
-): OsSessionV1 {
-  let raw: string | null = null;
+): Promise<OsSessionV1> {
+  let rawOs: string | null = null;
   try {
-    raw = localStorage.getItem(storageKey);
+    rawOs = localStorage.getItem(storageKey);
   } catch (err) {
     onNotice?.({
       kind: "storage-error",
@@ -643,48 +698,68 @@ export function loadOsSession(
     return createDefaultOsSession();
   }
 
-  if (!raw) {
+  if (!rawOs) {
     return createDefaultOsSession();
   }
 
+  let validatedSession: OsSessionV1;
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(rawOs);
     const validation = validateOsSession(parsed);
     if (!validation.valid || !validation.session) {
       autosaveSuspended = true;
-      preservedCorruptBytes = raw;
+      preservedCorruptBytes = rawOs;
       onNotice?.({
         kind: "invalid-schema",
         message: validation.error ?? "Invalid session structure",
       });
       return createDefaultOsSession();
     }
-    return sanitizeSessionForPersistence(validation.session);
+    validatedSession = validation.session;
   } catch (err) {
     autosaveSuspended = true;
-    preservedCorruptBytes = raw;
+    preservedCorruptBytes = rawOs;
     onNotice?.({
       kind: "corrupt-data",
       message: `Failed to parse session JSON: ${String(err)}`,
     });
     return createDefaultOsSession();
   }
+
+  try {
+    return await withBrowserRecoveryLock(() => {
+      const recoveryDisk = loadBrowserRecoveryDisk();
+      const suppressedScopes = recoveryDisk.addressSuppressedScopes;
+      return sanitizeSessionForPersistence(validatedSession, "local", suppressedScopes);
+    });
+  } catch (err) {
+    autosaveSuspended = true;
+    onNotice?.({
+      kind: "storage-error",
+      message: `Browser continuity recovery load failure: ${String(err)}`,
+    });
+    return sanitizeSessionForPersistence(validatedSession, "local", undefined, true);
+  }
 }
 
-export function saveOsSession(
+export async function saveOsSession(
   session: OsSessionV1,
   storageKey: string = OS_SESSION_STORAGE_KEY,
   onNotice?: (notice: PersistenceNotice) => void,
-): boolean {
+): Promise<boolean> {
   if (autosaveSuspended) {
     return false;
   }
 
   try {
-    const sanitized = sanitizeSessionForPersistence(session);
-    const raw = JSON.stringify(sanitized);
-    localStorage.setItem(storageKey, raw);
-    return true;
+    return await withBrowserRecoveryLock(async () => {
+      const recoveryDisk = loadBrowserRecoveryDisk();
+      const suppressedScopes = recoveryDisk.addressSuppressedScopes;
+      const sanitized = sanitizeSessionForPersistence(session, "local", suppressedScopes);
+      const raw = JSON.stringify(sanitized);
+      localStorage.setItem(storageKey, raw);
+      return true;
+    });
   } catch (err) {
     onNotice?.({
       kind: "storage-error",
@@ -693,9 +768,8 @@ export function saveOsSession(
     return false;
   }
 }
-
 export function exportOsSessionJson(session: OsSessionV1): string {
-  const sanitized = sanitizeSessionForPersistence(session);
+  const sanitized = sanitizeSessionForPersistence(session, "portable");
   return JSON.stringify(sanitized, null, 2);
 }
 
@@ -710,7 +784,7 @@ export function importOsSessionJson(raw: string): {
     if (!validation.valid || !validation.session) {
       return { success: false, error: validation.error };
     }
-    return { success: true, session: sanitizeSessionForPersistence(validation.session) };
+    return { success: true, session: sanitizeSessionForPersistence(validation.session, "import") };
   } catch (err) {
     return { success: false, error: `Invalid JSON syntax: ${String(err)}` };
   }
@@ -782,7 +856,7 @@ export interface OsExportEnvelopeV1 {
 }
 
 export function exportOsEnvelope(session: OsSessionV1): string {
-  const sanitized = sanitizeSessionForPersistence(session);
+  const sanitized = sanitizeSessionForPersistence(session, "portable");
   const dock = dockPinsSnapshotProvider ? [...dockPinsSnapshotProvider()] : loadDockPins();
   let shortcuts: Record<string, string> | undefined;
   try {
@@ -837,7 +911,7 @@ export function importOsEnvelope(raw: string): {
           error: val.error ?? "Invalid session in envelope",
         };
       }
-      projectedSession = sanitizeSessionForPersistence(val.session);
+      projectedSession = sanitizeSessionForPersistence(val.session, "import");
     }
 
     // 2. Dock projection

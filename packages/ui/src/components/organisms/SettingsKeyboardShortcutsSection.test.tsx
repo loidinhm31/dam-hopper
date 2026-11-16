@@ -73,6 +73,15 @@ describe("SettingsKeyboardShortcutsSection", () => {
     );
     expect(cognitoCaptureBtn?.getAttribute("aria-pressed")).toBe("false");
     expect(cognitoCaptureBtn?.hasAttribute("data-shortcut-capture")).toBe(false);
+
+    expect(
+      container?.querySelector('button[aria-label="Set shortcut for Terminal workspace"]'),
+    ).toBeNull();
+    const openTermBtn = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Set shortcut for Open Terminal"]',
+    );
+    expect(openTermBtn).not.toBeNull();
+    expect(openTermBtn?.textContent).toBe("Ctrl+Shift+T");
   });
 
   it("starts capture mode and sets capture marker and aria-pressed", async () => {

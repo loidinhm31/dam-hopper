@@ -3,6 +3,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::system::config::HostResourceMonitorConfig;
+pub use crate::browser_host::config::{
+    BrowserBudgetsConfig, BrowserCapabilitiesDto, BrowserConfigError, BrowserEffectiveLimitsDto,
+    BrowserHostConfig,
+};
 
 // ──────────────────────────────────────────────
 // Project type
@@ -597,6 +601,8 @@ pub struct ServerConfig {
     pub idle_suspend: IdleSuspendConfig,
     #[serde(default, alias = "session_changes_enabled")]
     pub session_changes_enabled: bool,
+    #[serde(default, alias = "browser")]
+    pub browser: BrowserHostConfig,
 }
 pub const fn default_workflow_event_retention_days() -> u32 {
     90
@@ -622,6 +628,9 @@ impl ServerConfig {
             return Err("server.workflow_stale_after_hours must be between 1 and 8760".into());
         }
         self.idle_suspend.validate()?;
+        self.browser
+            .validate()
+            .map_err(|e| format!("server.browser: {e}"))?;
         Ok(())
     }
 }
@@ -637,6 +646,7 @@ impl Default for ServerConfig {
             workflow_stale_after_hours: default_workflow_stale_after_hours(),
             idle_suspend: IdleSuspendConfig::default(),
             session_changes_enabled: false,
+            browser: BrowserHostConfig::default(),
         }
     }
 }
@@ -660,6 +670,8 @@ pub struct DamHopperConfigRaw {
     pub ui: Option<UiConfig>,
     pub semantic: Option<toml::Value>,
     pub workspaces: Option<Vec<KnownWorkspace>>,
+    #[serde(default)]
+    pub browser: Option<BrowserHostConfig>,
 }
 
 // ──────────────────────────────────────────────
@@ -751,8 +763,8 @@ fn default_search_text_shortcut() -> Option<String> {
 fn default_search_filename_shortcut() -> Option<String> {
     Some("DoubleShift".to_string())
 }
-fn default_terminal_workspace_shortcut() -> Option<String> {
-    Some("Mod+Shift+Backquote".to_string())
+fn default_open_terminal_shortcut() -> Option<String> {
+    Some("Ctrl+Shift+KeyT".to_string())
 }
 fn default_terminal_file_panel_shortcut() -> Option<String> {
     Some("Mod+Shift+KeyE".to_string())
@@ -1087,12 +1099,12 @@ pub struct UiConfig {
     )]
     pub search_filename_shortcut: Option<String>,
     #[serde(
-        default = "default_terminal_workspace_shortcut",
-        alias = "terminal_workspace_shortcut",
-        alias = "terminalWorkspaceShortcut",
+        default = "default_open_terminal_shortcut",
+        alias = "open_terminal_shortcut",
+        alias = "openTerminalShortcut",
         deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub terminal_workspace_shortcut: Option<String>,
+    pub open_terminal_shortcut: Option<String>,
     #[serde(
         default = "default_terminal_file_panel_shortcut",
         alias = "terminal_file_panel_shortcut",
@@ -1306,7 +1318,7 @@ impl Default for UiConfig {
             editor_zoom_wheel_enabled: default_editor_zoom_wheel_enabled(),
             search_text_shortcut: default_search_text_shortcut(),
             search_filename_shortcut: default_search_filename_shortcut(),
-            terminal_workspace_shortcut: default_terminal_workspace_shortcut(),
+            open_terminal_shortcut: default_open_terminal_shortcut(),
             terminal_file_panel_shortcut: default_terminal_file_panel_shortcut(),
             project_panel_shortcut: default_project_panel_shortcut(),
             reveal_active_file_shortcut: default_reveal_active_file_shortcut(),

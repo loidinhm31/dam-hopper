@@ -1,6 +1,6 @@
 use axum::{
     body::Bytes,
-    extract::{rejection::JsonRejection, Path, State},
+    extract::{rejection::JsonRejection, Extension, Path, State},
     http::{header::CONTENT_TYPE, HeaderMap, StatusCode},
     Json,
 };
@@ -8,14 +8,14 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
+    api::auth::AuthenticatedActor,
     browser_debug::{
-        terminal_reference, BrowserDebugArtifactResponse, BrowserDebugError,
+        ArtifactSource, BrowserDebugArtifactResponse, BrowserDebugError,
         BrowserDebugHandoffResponse, BrowserSelectionV1,
     },
     error::AppError,
     state::AppState,
 };
-
 use super::error::ApiError;
 
 #[derive(Deserialize)]
@@ -28,8 +28,10 @@ pub struct CreateBrowserDebugArtifactRequest {
 
 pub async fn create(
     State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
     payload: Result<Json<CreateBrowserDebugArtifactRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<BrowserDebugArtifactResponse>), ApiError> {
+    let Extension(actor) = actor.ok_or_else(unauthorized_error)?;
     let Json(body) = payload.map_err(json_rejection)?;
     let live_incarnation = state
         .pty_manager
@@ -44,7 +46,13 @@ pub async fn create(
     }
     let response = state
         .browser_debug_artifacts
-        .create(body.terminal_id, body.terminal_incarnation, body.selection)
+        .create(
+            actor.subject,
+            ArtifactSource::Cooperative,
+            body.terminal_id,
+            body.terminal_incarnation,
+            body.selection,
+        )
         .await
         .map_err(browser_debug_error)?;
     Ok((StatusCode::CREATED, Json(response)))
@@ -52,10 +60,12 @@ pub async fn create(
 
 pub async fn upload_png(
     State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
     Path(id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<BrowserDebugArtifactResponse>, ApiError> {
+    let Extension(actor) = actor.ok_or_else(unauthorized_error)?;
     let id = Uuid::parse_str(&id)
         .map_err(|_| ApiError::from_app(AppError::BrowserDebug(BrowserDebugError::NotFound)))?;
     let content_type = headers
@@ -71,7 +81,7 @@ pub async fn upload_png(
     }
     let response = state
         .browser_debug_artifacts
-        .upload_png(id, body)
+        .upload_png(id, &actor, body)
         .await
         .map_err(browser_debug_error)?;
     Ok(Json(response))
@@ -79,13 +89,15 @@ pub async fn upload_png(
 
 pub async fn delete(
     State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    let Extension(actor) = actor.ok_or_else(unauthorized_error)?;
     let id = Uuid::parse_str(&id)
         .map_err(|_| ApiError::from_app(AppError::BrowserDebug(BrowserDebugError::NotFound)))?;
     state
         .browser_debug_artifacts
-        .delete(id)
+        .delete(id, &actor)
         .await
         .map_err(browser_debug_error)?;
     Ok(StatusCode::NO_CONTENT)
@@ -93,31 +105,18 @@ pub async fn delete(
 
 pub async fn handoff(
     State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
     Path(id): Path<String>,
 ) -> Result<Json<BrowserDebugHandoffResponse>, ApiError> {
+    let Extension(actor) = actor.ok_or_else(unauthorized_error)?;
     let id = Uuid::parse_str(&id)
         .map_err(|_| ApiError::from_app(AppError::BrowserDebug(BrowserDebugError::NotFound)))?;
-    let artifact = state
+    let response = state
         .browser_debug_artifacts
-        .claim_handoff(id)
+        .execute_handoff(id, &actor, &state.pty_manager)
         .await
-        .map_err(browser_debug_error)?;
-    let reference = match terminal_reference(&artifact) {
-        Ok(reference) => reference,
-        Err(error) => {
-            state.browser_debug_artifacts.release_handoff(id).await;
-            return Err(browser_debug_error(error));
-        }
-    };
-    if let Err(error) = state.pty_manager.write_if_incarnation(
-        &artifact.terminal_id,
-        artifact.terminal_incarnation,
-        reference.as_bytes(),
-    ) {
-        state.browser_debug_artifacts.release_handoff(id).await;
-        return Err(ApiError::from_app(error));
-    }
-    Ok(Json(BrowserDebugHandoffResponse { inserted: true }))
+        .map_err(ApiError::from_app)?;
+    Ok(Json(response))
 }
 
 fn json_rejection(error: JsonRejection) -> ApiError {
@@ -131,4 +130,8 @@ fn json_rejection(error: JsonRejection) -> ApiError {
 
 fn browser_debug_error(error: BrowserDebugError) -> ApiError {
     ApiError::from_app(AppError::BrowserDebug(error))
+}
+
+fn unauthorized_error() -> ApiError {
+    ApiError::custom(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", "authentication required")
 }

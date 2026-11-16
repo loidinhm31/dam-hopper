@@ -960,6 +960,14 @@ pub async fn verify(
                 }
             };
 
+            // The superseded credential must not authorize a Browser handoff that already
+            // passed its async validation and is parked on the PTY lock: publish the same
+            // synchronous fence logout uses, now that the rotation is committed and before the
+            // replacement token is returned.
+            state
+                .browser_debug_artifacts
+                .publish_revocation(&user.username);
+
             // Re-read updated credential version & deadlines
             let new_credential_version = updated_session.credential_version;
             let expires_at = bson_to_chrono(updated_session.expires_at);

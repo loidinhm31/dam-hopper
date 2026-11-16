@@ -145,7 +145,7 @@ export function useHubTerminalLaunch(
                       worktreePath: selectedWorktree,
                     }
                   : { type: "project", project: targetGroup.projectName })
-              : { type: "workspace" },
+              : undefined,
           },
         });
 

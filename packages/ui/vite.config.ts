@@ -15,6 +15,8 @@ export default defineConfig({
     format: "es",
   },
   test: {
+    // Node 26's process-wide Web Storage must not shadow each jsdom window's storage.
+    execArgv: ["--no-webstorage"],
     exclude: [...configDefaults.exclude, "e2e/**", "browser-tests/**"],
   },
 });

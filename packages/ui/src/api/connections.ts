@@ -40,11 +40,27 @@ const normalizeServerUrl = (url: string) =>
   typeof serverConfig.normalizeServerUrl === "function"
     ? serverConfig.normalizeServerUrl(url)
     : url;
+const readKnownServerProfiles = (): serverConfig.KnownServerProfiles => {
+  if (typeof serverConfig.readServerProfiles === "function") {
+    const result = serverConfig.readServerProfiles();
+    if (result.status !== "available") return result;
+    if (result.profiles.length === 0) {
+      const fallback = getProfiles();
+      if (fallback.length > 0) {
+        return { status: "available", profiles: fallback };
+      }
+    }
+    return result;
+  }
+  return { status: "available", profiles: getProfiles() };
+};
 import {
   checkAuthStatus,
   requestMfaStepUpChallenge,
   verifyMfa,
   AuthClientError,
+  type AuthStatusResult,
+  type AuthStatusSuccess,
 } from "./auth-client.js";
 import {
   installTransportBridge,
@@ -88,6 +104,13 @@ export type ConnectionStatus =
   | "offline"
   | "unsupported";
 
+export type BrowserAuthNamespace = "prod" | "dev";
+
+export interface VerifiedBrowserIdentity {
+  readonly principal: string;
+  readonly namespace: BrowserAuthNamespace;
+}
+
 export interface ConnectionSnapshot {
   readonly owner: ConnectionRef;
   readonly status: ConnectionStatus;
@@ -97,6 +120,13 @@ export interface ConnectionSnapshot {
   readonly mfaDueAt?: string | null;
   readonly expiresAt?: string | null;
   readonly authCode?: string | null;
+  readonly verifiedBrowserIdentity?: VerifiedBrowserIdentity;
+}
+
+interface PendingAuthConfig {
+  endpoint: string;
+  authType: "basic" | "none";
+  token: string | null;
 }
 
 interface ConnectionEntry {
@@ -109,6 +139,8 @@ interface ConnectionEntry {
   mfaDueAt?: string | null;
   expiresAt?: string | null;
   authCode?: string | null;
+  verifiedBrowserIdentity?: VerifiedBrowserIdentity;
+  activeAuthConfig?: PendingAuthConfig;
   transport: Transport | null;
   api: ApiClient | null;
   unsubBridge?: (() => void) | null;
@@ -166,9 +198,35 @@ function notifyListeners(): void {
   }
 }
 
+function extractVerifiedBrowserIdentity(
+  statusResult: AuthStatusSuccess,
+): VerifiedBrowserIdentity | undefined {
+  if (!statusResult.authenticated || statusResult.workbenchProtocol !== 2) {
+    return undefined;
+  }
+  const rawPrincipal = statusResult.user;
+  if (typeof rawPrincipal !== "string" || rawPrincipal.trim().length === 0) {
+    return undefined;
+  }
+  const isDev = Boolean(statusResult.devMode ?? statusResult.dev_mode);
+  return Object.freeze({
+    principal: rawPrincipal,
+    namespace: isDev ? "dev" : "prod",
+  });
+}
+
 function freezeSnapshot(
   entry: Omit<ConnectionEntry, "snapshot">,
 ): ConnectionSnapshot {
+  const verifiedBrowserIdentity =
+    entry.status === "connected" &&
+    entry.verifiedBrowserIdentity &&
+    entry.verifiedBrowserIdentity.principal.trim().length > 0
+      ? Object.freeze({
+          principal: entry.verifiedBrowserIdentity.principal,
+          namespace: entry.verifiedBrowserIdentity.namespace,
+        })
+      : undefined;
   return Object.freeze({
     owner: Object.freeze({
       profileId: entry.profileId,
@@ -181,6 +239,7 @@ function freezeSnapshot(
     mfaDueAt: entry.mfaDueAt,
     expiresAt: entry.expiresAt,
     authCode: entry.authCode,
+    verifiedBrowserIdentity,
   });
 }
 
@@ -223,6 +282,7 @@ function updateSnapshot(
       | "mfaDueAt"
       | "expiresAt"
       | "authCode"
+      | "verifiedBrowserIdentity"
     >
   >,
 ): void {
@@ -236,6 +296,12 @@ function updateSnapshot(
   if (patch.mfaDueAt !== undefined) entry.mfaDueAt = patch.mfaDueAt;
   if (patch.expiresAt !== undefined) entry.expiresAt = patch.expiresAt;
   if (patch.authCode !== undefined) entry.authCode = patch.authCode;
+  if ("verifiedBrowserIdentity" in patch) {
+    entry.verifiedBrowserIdentity = patch.verifiedBrowserIdentity;
+  }
+  if (entry.status !== "connected") {
+    entry.verifiedBrowserIdentity = undefined;
+  }
 
   entry.snapshot = freezeSnapshot(entry);
   notifyListeners();
@@ -274,6 +340,21 @@ function scheduleReconnect(profileId: ProfileId): void {
   }, delay);
 }
 
+function isCapturedAuthCurrent(
+  profileId: ProfileId,
+  expected: PendingAuthConfig,
+): boolean {
+  if (getAuthToken(profileId) !== expected.token) return false;
+  const known = readKnownServerProfiles();
+  if (known.status !== "available") return false;
+  const current = known.profiles.find((candidate) => candidate.id === profileId);
+  if (!current) return false;
+  return (
+    normalizeServerUrl(current.url) === normalizeServerUrl(expected.endpoint) &&
+    current.authType === expected.authType
+  );
+}
+
 function handleDrop(
   profileId: ProfileId,
   generation: number,
@@ -284,6 +365,9 @@ function handleDrop(
     return;
   }
 
+  const captured = entry.activeAuthConfig;
+  const dropAuthCurrent = !captured || isCapturedAuthCurrent(profileId, captured);
+
   entry.settleConnect?.();
   entry.unsubBridge?.();
   invalidateEntry(entry);
@@ -292,6 +376,18 @@ function handleDrop(
   entry.transport?.destroy?.();
   entry.transport = null;
   entry.api = null;
+  entry.verifiedBrowserIdentity = undefined;
+  entry.activeAuthConfig = undefined;
+
+  if (!dropAuthCurrent) {
+    updateSnapshot(profileId, {
+      status: "disconnected",
+      intent: false,
+      error: null,
+      verifiedBrowserIdentity: undefined,
+    });
+    return;
+  }
 
   // Handle MFA required close (4403) or REST MFA_REQUIRED
   if (info?.code === 4403 || info?.authCode === "MFA_REQUIRED") {
@@ -306,7 +402,6 @@ function handleDrop(
     });
     return;
   }
-
   // Handle full auth required / expired close (4401)
   if (info?.code === 4401 || info?.authCode === "AUTH_REQUIRED") {
     clearAuthToken(profileId);
@@ -395,6 +490,7 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
     updateSnapshot(profileId, {
       status: "offline",
       error: `Profile ${profileId} not found`,
+      verifiedBrowserIdentity: undefined,
     });
     return;
   }
@@ -414,6 +510,7 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
       intent: false,
       serverUrl: profile.url,
       error: "Invalid server URL. Please provide a valid http or https URL.",
+      verifiedBrowserIdentity: undefined,
     });
     return;
   }
@@ -427,28 +524,75 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
   entry.transport?.destroy?.();
   entry.transport = null;
   entry.api = null;
+  entry.verifiedBrowserIdentity = undefined;
 
+  const capturedAuth: PendingAuthConfig = {
+    endpoint: cleanUrl,
+    authType: profile.authType,
+    token: getAuthToken(profileId),
+  };
   const nextGen = entry.generation + 1;
   entry.generation = nextGen;
+  entry.activeAuthConfig = capturedAuth;
   updateSnapshot(profileId, {
     status: "connecting",
     intent: true,
     serverUrl: cleanUrl,
     error: null,
+    verifiedBrowserIdentity: undefined,
   });
 
-  const token = getAuthToken(profileId);
+  const token = capturedAuth.token;
   if (profile.authType === "basic" && !token) {
+    entry.activeAuthConfig = undefined;
     updateSnapshot(profileId, {
       status: "login-required",
       error: "Login required for this profile",
+      verifiedBrowserIdentity: undefined,
     });
     return;
   }
 
-  try {
-    const statusResult = await checkAuthStatus(cleanUrl, token);
+  const isAttemptCurrent = (): boolean =>
+    !isStale(profileId, nextGen) && isCapturedAuthCurrent(profileId, capturedAuth);
+
+  const retireAttempt = (): void => {
     if (isStale(profileId, nextGen)) return;
+    const latestToken = getAuthToken(profileId);
+    const known = readKnownServerProfiles();
+    const current =
+      known.status === "available"
+        ? known.profiles.find((candidate) => candidate.id === profileId)
+        : undefined;
+    disconnectProfile(profileId);
+    if (current?.authType === "basic" && !latestToken) {
+      updateSnapshot(profileId, {
+        status: "login-required",
+        error: "Login required for this profile",
+        verifiedBrowserIdentity: undefined,
+      });
+    }
+  };
+
+  let verifiedIdentity: VerifiedBrowserIdentity | undefined;
+  let effectiveEndpoint = cleanUrl;
+  try {
+    let statusResult: AuthStatusResult;
+    try {
+      statusResult = await checkAuthStatus(cleanUrl, token);
+    } catch (authErr) {
+      if (/^https?:\/\/localhost(?::\d+)?\b/i.test(cleanUrl)) {
+        const v4Url = cleanUrl.replace(/^(https?:\/\/)localhost\b/i, "$1127.0.0.1");
+        statusResult = await checkAuthStatus(v4Url, token);
+        effectiveEndpoint = v4Url;
+      } else {
+        throw authErr;
+      }
+    }
+    if (!isAttemptCurrent()) {
+      retireAttempt();
+      return;
+    }
 
     if (!statusResult.authenticated) {
       if (statusResult.code === "MFA_REQUIRED") {
@@ -460,6 +604,7 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
           expiresAt:
             "expiresAt" in statusResult ? statusResult.expiresAt : undefined,
           authCode: "MFA_REQUIRED",
+          verifiedBrowserIdentity: undefined,
         });
         return;
       }
@@ -469,26 +614,35 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
       ) {
         clearAuthToken(profileId);
       }
+      entry.activeAuthConfig = undefined;
       updateSnapshot(profileId, {
         status: "login-required",
         error:
           statusResult.error || "Authentication failed. Please log in again.",
         authCode: statusResult.code,
+        verifiedBrowserIdentity: undefined,
       });
       return;
     }
 
     if (statusResult.workbenchProtocol !== 2) {
+      entry.activeAuthConfig = undefined;
       updateSnapshot(profileId, {
         status: "unsupported",
         intent: false,
         error:
           "Unsupported server protocol. DamHopper workbench protocol 2 is required; please update dam-hopper-server.",
+        verifiedBrowserIdentity: undefined,
       });
       return;
     }
+
+    verifiedIdentity = extractVerifiedBrowserIdentity(statusResult);
   } catch (fetchErr) {
-    if (isStale(profileId, nextGen)) return;
+    if (!isAttemptCurrent()) {
+      retireAttempt();
+      return;
+    }
     if (
       fetchErr instanceof AuthClientError &&
       (fetchErr.status === 401 ||
@@ -496,39 +650,48 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
         fetchErr.code === "MFA_REQUIRED")
     ) {
       if (fetchErr.code === "MFA_REQUIRED") {
+        entry.activeAuthConfig = undefined;
         updateSnapshot(profileId, {
           status: "mfa-required",
           error: fetchErr.message || "MFA verification required",
           authCode: "MFA_REQUIRED",
+          verifiedBrowserIdentity: undefined,
         });
         return;
       }
       clearAuthToken(profileId);
+      entry.activeAuthConfig = undefined;
       updateSnapshot(profileId, {
         status: "login-required",
         error:
           fetchErr.message || "Authentication failed. Please log in again.",
         authCode: fetchErr.code,
+        verifiedBrowserIdentity: undefined,
       });
       return;
     }
+    entry.activeAuthConfig = undefined;
     updateSnapshot(profileId, {
       status: "offline",
       error:
         fetchErr instanceof Error ? fetchErr.message : "Server unreachable",
+      verifiedBrowserIdentity: undefined,
     });
     scheduleReconnect(profileId);
     return;
   }
 
-  if (isStale(profileId, nextGen)) return;
-
+  if (!isAttemptCurrent()) {
+    retireAttempt();
+    return;
+  }
+  entry.verifiedBrowserIdentity = verifiedIdentity;
   const owner: ConnectionRef = Object.freeze({
     profileId,
     generation: nextGen,
   });
   const transport = new WsTransport({
-    baseUrl: cleanUrl,
+    baseUrl: effectiveEndpoint,
     profileId,
     authToken: token,
     generation: nextGen,
@@ -571,10 +734,15 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
   transport.onStatusChange((wsStatus) => {
     if (isStale(profileId, nextGen)) return;
     if (wsStatus === "connected") {
+      if (!isAttemptCurrent()) {
+        retireAttempt();
+        return;
+      }
       entry.backoffMs = INITIAL_BACKOFF_MS;
       updateSnapshot(profileId, {
         status: "connected",
         error: null,
+        verifiedBrowserIdentity: verifiedIdentity,
       });
       const activeId = getActiveProfileId();
       if (!activeId || activeId === profileId) {
@@ -587,10 +755,15 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
   });
 
   if (transport.getStatus() === "connected") {
+    if (!isAttemptCurrent()) {
+      retireAttempt();
+      return;
+    }
     entry.backoffMs = INITIAL_BACKOFF_MS;
     updateSnapshot(profileId, {
       status: "connected",
       error: null,
+      verifiedBrowserIdentity: verifiedIdentity,
     });
     const activeId = getActiveProfileId();
     if (!activeId || activeId === profileId) {
@@ -621,7 +794,8 @@ export function disconnectProfile(profileId: ProfileId): void {
   entry.transport = null;
   entry.api = null;
   entry.backoffMs = INITIAL_BACKOFF_MS;
-
+  entry.verifiedBrowserIdentity = undefined;
+  entry.activeAuthConfig = undefined;
   if (ownsAmbient) {
     reconfigureTransport(new IdleTransport());
   }
@@ -629,6 +803,7 @@ export function disconnectProfile(profileId: ProfileId): void {
     status: "disconnected",
     intent: false,
     error: null,
+    verifiedBrowserIdentity: undefined,
   });
 }
 
@@ -772,6 +947,8 @@ export function removeProfileConnection(profileId: ProfileId): void {
     entry.transport?.destroy?.();
     entry.transport = null;
     entry.api = null;
+    entry.verifiedBrowserIdentity = undefined;
+    entry.activeAuthConfig = undefined;
     entries.delete(profileId);
   }
   for (const [key] of mediaClientIdsByOwner) {
@@ -800,6 +977,8 @@ export function resetConnections(): void {
     entry.unsubBridge?.();
     entry.unsubBridge = null;
     entry.transport?.destroy?.();
+    entry.verifiedBrowserIdentity = undefined;
+    entry.activeAuthConfig = undefined;
   }
   for (const id of entries.keys()) {
     removeProfileListeners(id);
@@ -869,19 +1048,76 @@ if (typeof window !== "undefined") {
   try {
     const subscribe = serverConfig.subscribeToProfileChanges;
     if (typeof subscribe === "function") {
-      subscribe(() => {
-        const profiles = getProfiles();
+      subscribe((event) => {
+        if (event?.type === "deleted" && event.deletedProfileId) {
+          if (entries.has(event.deletedProfileId)) {
+            disconnectProfile(event.deletedProfileId);
+          }
+        }
+        const known = readKnownServerProfiles();
+        if (event?.type === "profileListChanged" && known.status === "available") {
+          const knownIds = new Set(known.profiles.map((p) => p.id));
+          for (const entryProfileId of Array.from(entries.keys())) {
+            if (!knownIds.has(entryProfileId)) {
+              disconnectProfile(entryProfileId);
+            }
+          }
+        }
+        const profiles = known.status === "available" ? known.profiles : getProfiles();
         for (const profile of profiles) {
           const entry = entries.get(profile.id);
           if (!entry) continue;
+          const normalizedProfileUrl = normalizeServerUrl(profile.url);
+          const expectedEndpoint = entry.activeAuthConfig?.endpoint ?? entry.serverUrl;
+          const normalizedEntryUrl = expectedEndpoint
+            ? normalizeServerUrl(expectedEndpoint)
+            : "";
+          const urlChanged = Boolean(
+            normalizedEntryUrl &&
+              normalizedProfileUrl &&
+              normalizedProfileUrl !== normalizedEntryUrl,
+          );
+          if (
+            urlChanged &&
+            entry.status !== "disconnected" &&
+            entry.status !== "unsupported"
+          ) {
+            disconnectProfile(profile.id);
+            continue;
+          }
+          const authTypeChanged = Boolean(
+            entry.activeAuthConfig && entry.activeAuthConfig.authType !== profile.authType,
+          );
+          if (
+            authTypeChanged &&
+            entry.status !== "disconnected" &&
+            entry.status !== "unsupported"
+          ) {
+            const wasIntent = entry.intent;
+            const currentStoredToken = getAuthToken(profile.id);
+            disconnectProfile(profile.id);
+            if (wasIntent && (profile.authType === "none" || currentStoredToken)) {
+              void connectProfile(profile.id);
+            } else if (profile.authType === "basic" && !currentStoredToken) {
+              updateSnapshot(profile.id, {
+                status: "login-required",
+                error: "Login required for this profile",
+                verifiedBrowserIdentity: undefined,
+              });
+            }
+            continue;
+          }
           const currentStoredToken = getAuthToken(profile.id);
-          const transportToken =
-            entry.transport instanceof WsTransport
-              ? entry.transport.getAuthToken()
-              : null;
+          const expectedToken =
+            entry.status === "connecting" && entry.activeAuthConfig
+              ? entry.activeAuthConfig.token
+              : entry.transport instanceof WsTransport
+                ? entry.transport.getAuthToken()
+                : null;
 
-          if (currentStoredToken !== transportToken) {
+          if (currentStoredToken !== expectedToken) {
             if (
+              entry.status === "connecting" ||
               entry.status === "mfa-required" ||
               entry.status === "login-required" ||
               entry.status === "connected" ||
@@ -898,7 +1134,10 @@ if (typeof window !== "undefined") {
                 updateSnapshot(profile.id, {
                   status: "login-required",
                   error: "Login required for this profile",
+                  verifiedBrowserIdentity: undefined,
                 });
+              } else {
+                disconnectProfile(profile.id);
               }
             }
           }
@@ -921,18 +1160,31 @@ export function __setConnectionSnapshotForTests(
     return;
   }
   const entry = getOrCreateEntry(profileId, snapshot.serverUrl ?? "");
+  if (snapshot.serverUrl !== undefined) {
+    entry.serverUrl = snapshot.serverUrl;
+  }
   if (snapshot.owner?.generation !== undefined) {
     entry.generation = snapshot.owner.generation;
   }
   if (snapshot.status !== undefined) {
     entry.status = snapshot.status;
   }
-  const effectiveTransport = transport !== undefined ? transport : snapshot.transport;
+  const effectiveTransport =
+    transport !== undefined ? transport : snapshot.transport;
   if (effectiveTransport !== undefined) {
     entry.transport = effectiveTransport;
   }
   if (snapshot.api !== undefined) {
     entry.api = snapshot.api;
+  }
+  if ("verifiedBrowserIdentity" in snapshot) {
+    entry.verifiedBrowserIdentity = snapshot.verifiedBrowserIdentity;
+  }
+  if (entry.status !== "connected") {
+    entry.verifiedBrowserIdentity = undefined;
+  }
+  if (entry.status !== "connected") {
+    entry.activeAuthConfig = undefined;
   }
   entry.snapshot = freezeSnapshot(entry);
   notifyListeners();

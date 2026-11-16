@@ -7,6 +7,7 @@ import type { SessionInfo } from "@/api/client.js";
 import type { WithOpenTerminalTitle } from "@/lib/terminal-title.js";
 import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import { parseTerminalKey, type TerminalRef } from "@/api/ownership.js";
+import type { TerminalTarget } from "@/api/terminal-session-contract.js";
 export interface TabEntry {
   sessionId: string;
   label: string;
@@ -19,6 +20,7 @@ export interface TabEntry {
   isSaveable?: boolean;
   profileId?: string;
   terminalRef?: TerminalRef;
+  terminalTarget?: TerminalTarget;
 }
 export type DisplayTabEntry = WithOpenTerminalTitle<TabEntry>;
 interface SavePromptState {
@@ -103,6 +105,7 @@ export function TerminalTabBar({
                 alive={tab.session?.alive}
                 profileId={tab.profileId}
                 terminalRef={tab.terminalRef}
+                terminalTarget={tab.terminalTarget}
               />
               <AgentStatusBadge
                 terminalRef={

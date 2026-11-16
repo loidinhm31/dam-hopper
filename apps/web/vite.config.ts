@@ -54,7 +54,7 @@ export default defineConfig(({ command, mode }) => {
     server: {
       allowedHosts: true,
       proxy: {
-        "/api": { target: backend, changeOrigin: true, secure: false },
+        "/api": { target: backend, changeOrigin: true, ws: true, secure: false },
         "/ws": { target: backend, changeOrigin: true, ws: true, secure: false },
       },
     },

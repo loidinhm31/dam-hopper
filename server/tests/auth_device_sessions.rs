@@ -231,3 +231,118 @@ async fn existing_auth_policy_denials_and_query_extractor_errors_remain_non_cach
         assert_eq!(json(response).await["code"], "SESSION_REVOKED");
     }
 }
+
+#[tokio::test]
+async fn targeted_device_session_revoke_closes_only_matching_browser_attachments_and_preserves_profile() {
+    use dam_hopper_server::auth::model::UserRole;
+    use dam_hopper_server::browser_host::attachments::{AttachmentPurpose, IssueTicketRequest};
+    use dam_hopper_server::browser_host::auth::BrowserAdmission;
+    use dam_hopper_server::browser_host::profile::ManagedProfile;
+
+    let fixture = AuthTestFixture::new_sqlite().await;
+    let admin_name = format!("admin-dev-{}", uuid::Uuid::new_v4().simple());
+    fixture.create_enrolled_user(&admin_name, "password", &[0x44; 20]).await;
+    fixture.operator_promote(&admin_name, UserRole::Admin).await;
+    let now = fixture.clock.now();
+    let (s1, _tok1) = fixture
+        .create_session(&admin_name, 1, now, now + Duration::days(30), now)
+        .await;
+    let (s2, tok2) = fixture
+        .create_session(&admin_name, 1, now, now + Duration::days(30), now)
+        .await;
+
+    // Populate managed profile credentials (must remain untouched by targeted session revoke)
+    let profile = ManagedProfile::new(fixture.state.browser_host.profile_root(), &admin_name, false).unwrap();
+    profile.load_or_init_metadata().unwrap();
+    profile.ensure_user_data_dir().unwrap();
+    let cookie_file = profile.user_data_dir().join("Cookies");
+    std::fs::write(&cookie_file, b"keep-me").unwrap();
+
+    let att_mgr = dam_hopper_server::api::browser_host::global_attachment_manager();
+    let adm1 = BrowserAdmission {
+        principal: admin_name.clone(),
+        is_dev: false,
+        session_id: Some(s1.id.clone()),
+        auth_version: Some(1),
+        credential_version: Some(1),
+        effective_deadline: None,
+    };
+    let adm2 = BrowserAdmission {
+        principal: admin_name.clone(),
+        is_dev: false,
+        session_id: Some(s2.id.clone()),
+        auth_version: Some(1),
+        credential_version: Some(1),
+        effective_deadline: None,
+    };
+
+    let issued1 = att_mgr
+        .issue_ticket(
+            &adm1,
+            &IssueTicketRequest {
+                purpose: AttachmentPurpose::AgentCdp,
+                browser_session_id: None,
+                viewer_id: None,
+                subscription_epoch: None,
+                browser_incarnation: "inc-1".into(),
+                profile_epoch: 1,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let unconsumed1 = att_mgr
+        .issue_ticket(
+            &adm1,
+            &IssueTicketRequest {
+                purpose: AttachmentPurpose::AgentCdp,
+                browser_session_id: None,
+                viewer_id: None,
+                subscription_epoch: None,
+                browser_incarnation: "inc-1".into(),
+                profile_epoch: 1,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let issued2 = att_mgr
+        .issue_ticket(
+            &adm2,
+            &IssueTicketRequest {
+                purpose: AttachmentPurpose::AgentCdp,
+                browser_session_id: None,
+                viewer_id: None,
+                subscription_epoch: None,
+                browser_incarnation: "inc-1".into(),
+                profile_epoch: 1,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let c1 = att_mgr
+        .consume_ticket(&issued1.ticket, AttachmentPurpose::AgentCdp, None)
+        .await
+        .unwrap();
+    let c2 = att_mgr
+        .consume_ticket(&issued2.ticket, AttachmentPurpose::AgentCdp, None)
+        .await
+        .unwrap();
+    let (_id1, cancel1) = att_mgr.register_connection(&c1).await.unwrap();
+    let (_id2, cancel2) = att_mgr.register_connection(&c2).await.unwrap();
+
+    let del_resp = request(&fixture, "DELETE", &format!("/api/auth/sessions/{}", s1.id), Some(&tok2)).await;
+    assert_eq!(del_resp.status(), StatusCode::NO_CONTENT);
+
+    // Matching Browser attachment & unconsumed ticket revoked; sibling & profile preserved
+    assert!(cancel1.is_cancelled());
+    assert!(att_mgr
+        .consume_ticket(&unconsumed1.ticket, AttachmentPurpose::AgentCdp, None)
+        .await
+        .is_err());
+    assert!(!cancel2.is_cancelled());
+    assert!(cookie_file.exists());
+    let _ = std::fs::remove_dir_all(profile.principal_dir());
+}

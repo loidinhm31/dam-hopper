@@ -303,15 +303,22 @@ export function DesktopCanvas({
         getContext={() => {
           const currentDesk =
             session.desktops.find((d) => d.id === desktop.id) ?? desktop;
-          const desktopCtx = currentDesk.defaultCtx ?? { profileId: "default" };
-          const snap = desktopCtx.profileId
-            ? getConnectionSnapshot(desktopCtx.profileId)
+          const targetProfileId = currentDesk.defaultCtx?.profileId || "default";
+          const globalTarget = {
+            kind: "workspace" as const,
+            profileId: targetProfileId,
+          };
+          const snap = targetProfileId
+            ? getConnectionSnapshot(targetProfileId)
             : null;
           return {
             desktopId: desktop.id,
             owner: snap?.owner ?? null,
-            target: desktopCtx.target,
-            windowContext: desktopCtx,
+            target: globalTarget,
+            windowContext: {
+              profileId: targetProfileId,
+              target: globalTarget,
+            },
             cwd: null,
             directoryKind: "profile-default",
           };
@@ -341,7 +348,13 @@ export function DesktopCanvas({
         className="absolute inset-0 pointer-events-none"
         style={{ zIndex: floatOnTop ? 60 : 20 }}
       >
-        {desktop.floatingWindowIds.map((winId) => {
+        {/*
+          Slots render in a stable (id-sorted) order. Stacking is expressed by the frame's z-index,
+          not DOM order: focusing a window reorders floatingWindowIds, and moving a slot node in the
+          DOM mid-click makes Chromium drop the click (first click on a background window's
+          header buttons, e.g. Close, would be swallowed).
+        */}
+        {[...desktop.floatingWindowIds].sort().map((winId) => {
           const win = session.windows[winId];
           if (!win || win.minimized || win.maximized) return null;
           return (

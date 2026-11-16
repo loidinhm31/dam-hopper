@@ -1926,10 +1926,20 @@ export interface WorkspaceConfig {
   root: string;
 }
 
+/** Host Browser settings (`[server.browser]`); camelCase wire shape. Unlisted keys (budgets, denied/asset/dev origins) are preserved verbatim. */
+export interface BrowserHostServerConfig {
+  enabled?: boolean;
+  executablePath?: string | null;
+  profileRoot?: string | null;
+  allowedTargetOrigins?: string[];
+  [key: string]: unknown;
+}
+
 export interface ServerConfig {
   sessionDbPath?: string;
   sessionBufferTtlHours?: number;
   sessionChangesEnabled?: boolean;
+  browser?: BrowserHostServerConfig;
   [key: string]: unknown;
 }
 
@@ -2059,7 +2069,7 @@ export interface UiConfig {
   editorZoomWheelEnabled: boolean;
   searchTextShortcut?: string | null;
   searchFilenameShortcut?: string | null;
-  terminalWorkspaceShortcut?: string | null;
+  openTerminalShortcut?: string | null;
   terminalFilePanelShortcut?: string | null;
   projectPanelShortcut?: string | null;
   revealActiveFileShortcut?: string | null;

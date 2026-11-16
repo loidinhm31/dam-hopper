@@ -5,9 +5,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TopBar } from "./TopBar.js";
+import { saveProfiles } from "@/api/server-config.js";
 import { useLockScreenStore } from "@/stores/lock-screen.js";
 import { useWindowStore } from "./window-store.js";
 import { createDefaultOsSession } from "./window-ops.js";
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("TopBar", () => {
   let container: HTMLDivElement | null = null;
@@ -83,5 +88,80 @@ describe("TopBar", () => {
 
     expect(onRequestSetupPin).not.toHaveBeenCalled();
     expect(useLockScreenStore.getState().isLocked).toBe(true);
+  });
+
+  it("targets global workspace profiles only without project selection", async () => {
+    saveProfiles([
+      {
+        id: "prof-1",
+        name: "Primary Server",
+        url: "http://127.0.0.1:4801",
+        authType: "none",
+        createdAt: 1,
+        autoConnect: true,
+      },
+      {
+        id: "prof-2",
+        name: "Remote Server",
+        url: "http://127.0.0.1:4802",
+        authType: "none",
+        createdAt: 2,
+        autoConnect: false,
+      },
+    ]);
+
+    const session = createDefaultOsSession();
+    session.desktops[0].defaultCtx = {
+      profileId: "prof-1",
+      projectId: "legacy-project",
+    };
+    useWindowStore.setState({ session });
+
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <TopBar />
+        </QueryClientProvider>,
+      );
+    });
+
+    const trigger = container?.querySelector(
+      '[data-os-nonmodal-trigger="target-selector"]',
+    ) as HTMLButtonElement | null;
+    expect(trigger).not.toBeNull();
+    expect(trigger?.textContent).not.toContain("/legacy-project");
+    expect(trigger?.textContent).toContain("Primary Server");
+
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const menu = container?.querySelector(
+      '[data-os-nonmodal-surface="target-selector"]',
+    );
+    expect(menu).not.toBeNull();
+    expect(menu?.textContent).toContain("Global Workspace Target");
+    expect(menu?.textContent).not.toContain("Active Project");
+
+    const remoteBtn = Array.from(
+      menu?.querySelectorAll('[role="menuitem"]') ?? [],
+    ).find((el) => el.textContent?.includes("Remote Server")) as
+      | HTMLButtonElement
+      | undefined;
+    expect(remoteBtn).toBeDefined();
+
+    await act(async () => {
+      remoteBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const updatedDefaultCtx =
+      useWindowStore.getState().session.desktops[0]?.defaultCtx;
+    expect(updatedDefaultCtx).toEqual({
+      profileId: "prof-2",
+      target: { kind: "workspace", profileId: "prof-2" },
+    });
+    expect(
+      container?.querySelector('[data-os-nonmodal-surface="target-selector"]'),
+    ).toBeNull();
   });
 });

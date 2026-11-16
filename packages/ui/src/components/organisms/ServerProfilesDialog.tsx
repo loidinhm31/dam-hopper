@@ -1,9 +1,7 @@
 import { ConfirmDialog, AlertDialog } from "@/components/ui/ConfirmDialog.js";
+import { Button } from "@/components/atoms/Button.js";
 import { useState, useEffect, useSyncExternalStore } from "react";
-import {
-  useShellInputContext,
-  type ShellInputContextValue,
-} from "@/os/shell-input-context.js";
+import { useShellInputContext } from "@/os/shell-input-context.js";
 import {
   X,
   Plus,
@@ -17,8 +15,14 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { revokeCurrentMediaSession } from "@/api/media-session.js";
-import type { ServerProfile } from "@/api/server-config.js";
+import { setPendingBrowserResetContext } from "@/api/browser-host-client.js";
+import { fenceThenDisconnectProfile } from "@/os/browser/browser-logout-fence.js";
 import {
+  AccountLogoutDialog,
+  type AccountLogoutTarget,
+} from "@/components/organisms/AccountLogoutDialog.js";
+import {
+  type ServerProfile,
   getProfiles,
   getAuthToken,
   clearAuthToken,
@@ -43,7 +47,6 @@ interface Props {
   onEditProfile: (profile: ServerProfile | null) => void;
   onLoginProfile?: (profile: ServerProfile) => void;
 }
-
 function StatusBadge({ snapshot }: { snapshot: ConnectionSnapshot | null }) {
   const status = snapshot?.status ?? "disconnected";
 
@@ -124,6 +127,9 @@ export function ServerProfilesDialog({
   const [profileToDelete, setProfileToDelete] = useState<ServerProfile | null>(
     null,
   );
+  const [logoutTarget, setLogoutTarget] = useState<AccountLogoutTarget | null>(
+    null,
+  );
   const [deleteAlertMessage, setDeleteAlertMessage] = useState<string | null>(
     null,
   );
@@ -135,9 +141,13 @@ export function ServerProfilesDialog({
     if (open) {
       return registerModalMount("server-profiles-dialog");
     }
+    setLogoutTarget(null);
   }, [open, registerModalMount]);
 
-  const isConfirmOpen = profileToDelete !== null || deleteAlertMessage !== null;
+  const isConfirmOpen =
+    profileToDelete !== null ||
+    deleteAlertMessage !== null ||
+    logoutTarget !== null;
   useEffect(() => {
     if (isConfirmOpen) {
       return registerModalMount("confirm-dialog");
@@ -148,7 +158,13 @@ export function ServerProfilesDialog({
     if (!open) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (profileToDelete !== null || deleteAlertMessage !== null) return;
+      if (
+        profileToDelete !== null ||
+        deleteAlertMessage !== null ||
+        logoutTarget !== null
+      ) {
+        return;
+      }
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
@@ -158,7 +174,7 @@ export function ServerProfilesDialog({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, profileToDelete, deleteAlertMessage, onClose]);
+  }, [open, profileToDelete, deleteAlertMessage, logoutTarget, onClose]);
   // Subscribe to profile list changes and cross-tab updates
   useSyncExternalStore(
     subscribeToProfileChanges,
@@ -182,21 +198,22 @@ export function ServerProfilesDialog({
 
   const handleRefresh = () => setRevision((v) => v + 1);
 
-  async function handleLogout(profile: ServerProfile) {
-    const token = getAuthToken(profile.id);
-    if (token) {
-      const mediaClientId = getMediaClientIdForProfile(profile.id);
-      await revokeCurrentMediaSession(profile.url, token, mediaClientId);
-    }
-    clearAuthToken(profile.id);
-    disconnectProfile(profile.id);
-    handleRefresh();
+  function handleOpenLogout(profile: ServerProfile) {
+    const snapshot = getConnectionSnapshot(profile.id);
+    setLogoutTarget({
+      profileId: profile.id,
+      generation: snapshot?.owner.generation ?? 0,
+      profileName: profile.name,
+      serverUrl: profile.url,
+      token: getAuthToken(profile.id),
+      mediaClientId: getMediaClientIdForProfile(profile.id),
+      sourceProfile: profile,
+    });
   }
 
   async function handleConfirmDelete() {
     if (!profileToDelete) return;
     const profile = profileToDelete;
-    setIsDeleting(true);
     try {
       const token = getAuthToken(profile.id);
       if (token) {
@@ -225,7 +242,8 @@ export function ServerProfilesDialog({
         if (
           e.target === e.currentTarget &&
           profileToDelete === null &&
-          deleteAlertMessage === null
+          deleteAlertMessage === null &&
+          logoutTarget === null
         ) {
           onClose();
         }
@@ -374,9 +392,9 @@ export function ServerProfilesDialog({
 
                       {token ? (
                         <button
-                          onClick={() => void handleLogout(profile)}
+                          onClick={() => handleOpenLogout(profile)}
                           className="flex items-center gap-1 px-2.5 py-1 rounded bg-[var(--color-surface)] hover:bg-[var(--color-surface-3)] text-[var(--color-text-muted)] hover:text-red-400 font-medium transition-colors"
-                          title="Logout and clear credentials"
+                          title="Log out of this server account"
                         >
                           <LogOut size={12} />
                           Logout
@@ -417,6 +435,61 @@ export function ServerProfilesDialog({
           </button>
         </div>
       </div>
+      <AccountLogoutDialog
+        target={logoutTarget}
+        onCancel={() => setLogoutTarget(null)}
+        onCompleteLogout={(captured, outcome) => {
+          const tokenMatches =
+            !captured.token ||
+            (Boolean(captured.profileId) &&
+              getAuthToken(captured.profileId) === captured.token);
+          const currentGen = captured.profileId
+            ? (getConnectionSnapshot(captured.profileId)?.owner.generation ?? 0)
+            : undefined;
+          const generationMatches =
+            captured.generation === undefined ||
+            currentGen === captured.generation;
+
+          if (!tokenMatches || !generationMatches) {
+            // A replacement login or newer connection generation took ownership while logout was in flight.
+            return true;
+          }
+
+          if (captured.token && captured.profileId) {
+            if (!clearAuthToken(captured.profileId)) {
+              return false;
+            }
+          }
+          if (captured.profileId) {
+            fenceThenDisconnectProfile(captured.profileId, captured.generation, outcome);
+          }
+          handleRefresh();
+          return true;
+        }}
+        onDone={() => {
+          setLogoutTarget(null);
+          handleRefresh();
+        }}
+        onReauthenticate={(captured, outcome) => {
+          const profile = captured.sourceProfile;
+          if (profile) {
+            setPendingBrowserResetContext(profile.id, {
+              operationId: outcome.operationId,
+              profileEpoch: outcome.profileEpoch,
+              browserResetState: outcome.browserResetState,
+              reason: outcome.reason,
+            });
+          }
+          setLogoutTarget(null);
+          if (profile) {
+            if (onLoginProfile) {
+              onLoginProfile(profile);
+            } else {
+              onEditProfile(profile);
+            }
+          }
+        }}
+      />
       <ConfirmDialog
         open={profileToDelete !== null}
         onClose={() => {
@@ -424,10 +497,28 @@ export function ServerProfilesDialog({
         }}
         onConfirm={handleConfirmDelete}
         title={`Remove server profile "${profileToDelete?.name}"?`}
-        description="Local cached resources will be detached. Remote server data is not deleted."
+        description="Removes only this local profile and browser token. Server sessions and server Browser credentials are retained (not logged out or wiped). Choose Log out first if you also want to revoke your server session or clear shared Browser data."
         confirmText="Remove profile"
         variant="danger"
         loading={isDeleting}
+        extraFooterActions={
+          profileToDelete && getAuthToken(profileToDelete.id) ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              data-testid="remove-profile-logout-first-btn"
+              disabled={isDeleting}
+              onClick={() => {
+                const target = profileToDelete;
+                setProfileToDelete(null);
+                handleOpenLogout(target);
+              }}
+            >
+              Log out first…
+            </Button>
+          ) : undefined
+        }
       />
       <AlertDialog
         open={deleteAlertMessage !== null}

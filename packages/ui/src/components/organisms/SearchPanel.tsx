@@ -39,6 +39,7 @@ interface SearchPanelProps {
   onQueryChange?: (query: string) => void;
   isolatedState?: boolean;
   initialMode?: "filename" | "content";
+  initialScope?: SearchScope;
 }
 
 export function SearchPanel({
@@ -55,6 +56,7 @@ export function SearchPanel({
   onQueryChange: controlledOnQueryChange,
   isolatedState = false,
   initialMode,
+  initialScope,
 }: SearchPanelProps) {
   const requestTarget = useMemo(() => {
     if (target && "kind" in target) {
@@ -72,7 +74,12 @@ export function SearchPanel({
   const localInputRef = useRef<HTMLInputElement>(null);
   const resolvedRef = inputRef ?? localInputRef;
   const globalStore = useSearchUiStore();
-  const [localScope, setLocalScope] = useState<SearchScope>("project");
+  const [localScope, setLocalScope] = useState<SearchScope>(
+    initialScope ??
+      (target && "kind" in target && target.kind === "workspace"
+        ? "workspace"
+        : "project"),
+  );
   const [localMode, setLocalMode] = useState<"filename" | "content">(initialMode ?? "content");
   const [localQueries, setLocalQueries] = useState<{
     filename: string;

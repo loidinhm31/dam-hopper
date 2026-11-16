@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   ArrowUpDown,
   ChevronDown,
@@ -6,15 +6,16 @@ import {
   ChevronsDown,
   ChevronsUp,
 } from "lucide-react";
-import { getTerminal } from "@/lib/terminal-registry.js";
+import { getTerminal, type TerminalEntry } from "@/lib/terminal-registry.js";
 import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
 
-interface TerminalScrollButtonsProps {
+export interface TerminalScrollButtonsProps {
   sessionId: string;
   className?: string;
   reserveAccessoryRail?: boolean;
   accessoryPanelOpen?: boolean;
+  resolveTerminal?: (sessionId: string) => TerminalEntry | undefined;
 }
 
 const controlClassName =
@@ -62,12 +63,14 @@ export function TerminalScrollButtons({
   className,
   reserveAccessoryRail = false,
   accessoryPanelOpen = false,
+  resolveTerminal,
 }: TerminalScrollButtonsProps) {
   const terminalScrollStep = useSettingsStore((s) => s.terminalScrollStep);
   const [isOpen, setIsOpen] = useState(false);
   const controlsRef = useRef<HTMLDivElement>(null);
-  const controlsId = `terminal-scroll-controls-${sessionId}`;
-
+  const reactId = useId();
+  const controlsId = `terminal-scroll-controls-${reactId}`;
+  const resolve = resolveTerminal ?? getTerminal;
   useEffect(() => {
     if (!isOpen) return;
 
@@ -161,7 +164,7 @@ export function TerminalScrollButtons({
             onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
-                getTerminal(sessionId)?.terminal.scrollToTop(),
+                resolve(sessionId)?.terminal.scrollToTop(),
               )
             }
             className={controlClassName}
@@ -176,8 +179,7 @@ export function TerminalScrollButtons({
             onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
-                getTerminal(sessionId)
-                  ?.terminal.scrollLines(-terminalScrollStep),
+                resolve(sessionId)?.terminal.scrollLines(-terminalScrollStep),
               )
             }
             className={controlClassName}
@@ -192,8 +194,7 @@ export function TerminalScrollButtons({
             onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
-                getTerminal(sessionId)
-                  ?.terminal.scrollLines(terminalScrollStep),
+                resolve(sessionId)?.terminal.scrollLines(terminalScrollStep),
               )
             }
             className={controlClassName}
@@ -208,7 +209,7 @@ export function TerminalScrollButtons({
             onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
-                getTerminal(sessionId)?.terminal.scrollToBottom(),
+                resolve(sessionId)?.terminal.scrollToBottom(),
               )
             }
             className={controlClassName}

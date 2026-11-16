@@ -16,7 +16,7 @@
     "build:extension": "pnpm --filter @dam-hopper/browser-extension build",
     "dev": "pnpm --filter @dam-hopper/web dev --host 0.0.0.0",
     "dev:server:no-auth": "cd server && cargo run --bin dam-hopper-server -- --host 0.0.0.0 --port 4803 --no-auth --cors-origins http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4803,http://localhost:4803",
-    "dev:server": "cd server && cargo run --bin dam-hopper-server -- --host 0.0.0.0 --port 4803 --cors-origins http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4803,http://localhost:4803",
+    "dev:server": "cd server && cargo run --bin dam-hopper-server -- --host 0.0.0.0 --port 4803",
     "dev:server:watch": "cd server && cargo watch -x \"run -- --host 127.0.0.1 --port 4801\"",
     "build:server": "cd server && cargo build --release",
     "serve": "cd server && cargo run --release",
@@ -47,7 +47,7 @@
     "check": "pnpm build && pnpm lint && cd server && cargo test"
   },
   "engines": {
-    "node": ">=22.13.0",
+    "node": ">=26.13.0",
     "pnpm": ">=10"
   },
   "devDependencies": {

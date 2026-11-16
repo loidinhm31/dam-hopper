@@ -96,20 +96,20 @@ describe("media session contract", () => {
     );
   });
 
-  it("revokes a media session over HTTP with bearer and cookies", async () => {
+  it("revokes a media session over loopback HTTP with bearer and omits bearer on non-loopback HTTP", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await revokeCurrentMediaSession(
-      "http://api.test",
+      "http://127.0.0.1:4801",
       "secret-token",
       "client-uuid-2",
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://api.test/api/fs/media-session",
+      "http://127.0.0.1:4801/api/fs/media-session",
       expect.objectContaining({
         method: "DELETE",
         credentials: "include",
@@ -120,6 +120,15 @@ describe("media session contract", () => {
         body: JSON.stringify({ mediaClientId: "client-uuid-2" }),
       }),
     );
+
+    fetchMock.mockClear();
+    await revokeCurrentMediaSession(
+      "http://api.test",
+      "secret-token",
+      "client-uuid-3",
+    );
+    const [, insecureInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new Headers(insecureInit.headers).get("Authorization")).toBeNull();
   });
 
   it("creates a bounded, idempotent RemoteCleanupHandle", async () => {

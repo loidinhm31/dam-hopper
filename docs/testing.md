@@ -73,6 +73,15 @@ pnpm --filter @dam-hopper/ui test:e2e:typecheck
 ./scripts/run-all-tests.sh
 ```
 
+**Browser-heavy runs (real Chromium)** — host-browser E2E and `browser_host_*` cargo tests each start Chromium trees. Run them through the wrapper so concurrent agents or terminals queue instead of stacking browsers (one run per host, low CPU/IO priority, nested calls reuse the lock):
+
+```bash
+scripts/run-browser-heavy.sh pnpm --filter @dam-hopper/ui test:e2e e2e/os-host-browser
+scripts/run-browser-heavy.sh cargo test --manifest-path server/Cargo.toml --test browser_host_media
+```
+
+Test servers started by the E2E fixtures are tracked per worker and killed on worker exit; if a run is hard-killed, `pgrep -fa dam-hopper-server` shows leftovers.
+
 ### Feature Scenarios and Qualification Recipes
 
 ```bash
@@ -119,6 +128,18 @@ pnpm --filter @dam-hopper/ui test
 pnpm --filter @dam-hopper/ui test:browser --run
 # 4. Root Cutover Application E2E Journey
 E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e os-cutover/os-cutover.spec.ts
+
+# Feature: Host Browser CDP Streaming Primitives (Phase 01 Qualification)
+# 1. Adapter and protocol unit tests (framing, geometry, command budget, actor routing)
+cargo test --manifest-path server/Cargo.toml --test browser_host_adapter
+# 2. Process containment unit tests (executable discovery, allowlist, death-pipe, DevToolsActivePort corroboration)
+cargo test --manifest-path server/Cargo.toml --test browser_host_process
+# 3. Real-engine compatibility and visual marker geometry tests (requires DAM_HOPPER_BROWSER_EXECUTABLE)
+cargo test --manifest-path server/Cargo.toml --test browser_host_compatibility
+# 4. Colocated backend unit tests (cdp, command_budget, process, protocol)
+cargo test --manifest-path server/Cargo.toml browser_host::
+# 5. Playwright E2E compatibility suite with qualification server prebuild
+pnpm --filter @dam-hopper/ui exec playwright test e2e/os-host-browser/compatibility.spec.ts
 ```
 
 ---
@@ -186,6 +207,15 @@ Application E2E journeys validate end-to-end user workflows across containerized
    - Validates terminal-first Agent Hub stage (`TraditionalTerminalProjectsDisplay`), collapsible right-sidebar file tree, presentation-based input suppression, and per-profile pin retention.
    - Colocated governance record `packages/ui/e2e/os-agent-hub-workspace/review.md` records `PENDING_HUMAN_REVIEW`.
 ---
+7. **Host Browser Lifecycle & Target Cap (`packages/ui/e2e/os-lifecycle/host-browser.spec.ts`):**
+   - Validates window placement continuity across Float, Tile, Maximize, and Minimize modes while preserving the underlying canvas DOM node and presentation state (`data-os-window-slot`).
+   - Verifies target capacity cap (max 2 targets, 429 `browserBusy`), target close isolation (session 1 closed while session 2 runs), session reconnect idempotency (`creationKey`), and Cognito mode canvas blackout.
+8. **Host Browser Same-Target Agent Coexistence (`packages/ui/e2e/os-host-browser/same-target.spec.ts`):**
+   - Exercises real authenticated full-SPA session while an external automation script interacts via `/api/browser/cdp`.
+   - Verifies contract: Agent `Page.disable` and `Page.stopScreencast` commands do not disrupt the production screencast stream.
+9. **Host Browser Performance & Tuning Grid (`packages/ui/e2e/os-host-browser/performance.spec.ts`):**
+   - Evaluates the 12 candidate configurations in the bounded tuning grid, enforcing `everyNthFrame = 1` for release eligibility (setting #7 q65 1280x900 proposed default).
+   - Verifies static zero-polling invariant: static pages emit 0 periodic `Page.captureScreenshot` calls.
 
 ## 6. Visual Evidence Authenticity & Governance
 
@@ -292,5 +322,6 @@ The following workflows represent documented gaps in full-application E2E covera
 | **P2** | **Media Sessions & Token Revocation** | Explorer image/video ticket fixtures, native ticket issuance | Media ticket expiration, cookie-based token rotation, client-initiated logout and revocation. |
 | **P2** | **Native Desktop Host & WebView2 (Retired)** | Historical Tauri Rust tests, SSH-forward E2E, native smoke scripts | Retired under Phase 02 (P0a); desktop Tauri host and desktop SSH forwarding removed. |
 | **P1** | **AI Dev OS Lifecycle Prototype** | Unit tests in `src/os/`, route tests in `dam-hopper-app.test.tsx`, component tests in `os-lifecycle.browser.tsx`, authored E2E spec in `os-lifecycle.spec.ts` | Live PTY stream continuity across reparenting, zero attach/replay counters, live Monaco undo/model preservation, and behavioral Cognito isolation under active daemon container (Task 4 carried to Phase 09). |
+| **P2** | **Host Browser Physical & Platform Qualification** | Integrated backend suites (`browser_host_{security,platform}.rs`), full E2E specs | multi-browser human visual review, continuous 60s soak workloads (`reports/performance-qualification.md`), and native Windows release host runner (`reports/platform-qualification.md`). |
 
 *Note: Historical manual qualifications and targeted component mounts must not be conflated with automated full-application Playwright journeys.*

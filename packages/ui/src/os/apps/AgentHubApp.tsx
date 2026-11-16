@@ -8,6 +8,9 @@ import {
 import { X } from "lucide-react";
 import type { OsWindow } from "../types.js";
 import { useWindowStore } from "../window-store.js";
+import { registerWindowActionContext } from "../action-dispatch.js";
+import { getAllConnectionSnapshots, getConnectionSnapshot } from "@/api/connections.js";
+import { getActiveProfile } from "@/api/server-config.js";
 import { dispatchIntent, createIntent, registerIntentHandler } from "../intents.js";
 import { TraditionalTerminalProjectsDisplay } from "@/components/organisms/TraditionalTerminalProjectsDisplay.js";
 import { useAgentHubWorkspaces } from "../agent-hub/use-agent-hub-workspaces.js";
@@ -207,6 +210,61 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
       };
     });
   }, [selectedGroup, selectedWorktree, window.id]);
+
+  useEffect(() => {
+    return registerWindowActionContext(window.id, () => {
+      let resolvedProfileId = selectedGroup?.profileId ?? "";
+      if (!resolvedProfileId) {
+        const activeProfile = getActiveProfile();
+        if (activeProfile?.id) {
+          const activeSnap = getConnectionSnapshot(activeProfile.id);
+          if (activeSnap?.status === "connected") {
+            resolvedProfileId = activeSnap.owner.profileId;
+          }
+        }
+        if (!resolvedProfileId) {
+          const connected = getAllConnectionSnapshots().find(
+            (snap) => snap.status === "connected",
+          );
+          if (connected) {
+            resolvedProfileId = connected.owner.profileId;
+          }
+        }
+      }
+
+      const snap = resolvedProfileId
+        ? getConnectionSnapshot(resolvedProfileId)
+        : undefined;
+      const owner = snap && snap.status === "connected" ? snap.owner : null;
+      const projectId = selectedGroup?.projectName || undefined;
+      const worktreeId = selectedWorktree ?? undefined;
+      const target =
+        resolvedProfileId && projectId
+          ? ({
+              kind: "project",
+              profileId: resolvedProfileId,
+              project: projectId,
+              ...(worktreeId ? { worktreePath: worktreeId } : {}),
+            } as const)
+          : resolvedProfileId
+            ? ({ kind: "workspace", profileId: resolvedProfileId } as const)
+            : undefined;
+
+      return {
+        kind: "running-window",
+        desktopId: window.desktopId,
+        windowId: window.id,
+        windowContext: {
+          profileId: resolvedProfileId,
+          ...(projectId ? { projectId } : {}),
+          ...(worktreeId ? { worktreeId } : {}),
+          ...(target ? { target } : {}),
+        },
+        owner,
+        target,
+      };
+    });
+  }, [selectedGroup, selectedWorktree, window.desktopId, window.id]);
 
 
   // Git float intent

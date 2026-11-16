@@ -75,6 +75,11 @@ pub struct AppState {
     pub no_auth: bool,
     /// Exact origins allowed for credentialed CORS and cross-origin media/WS.
     pub cors_origins: Arc<Vec<String>>,
+    /// Address the HTTP listener actually bound to. Set once by the process entry point after
+    /// `bind`; shared by every clone. Unset means Browser development admission fails closed.
+    pub bound_listener_addr: Arc<std::sync::OnceLock<std::net::SocketAddr>>,
+    /// Trusted public server origin used for raw CDP discovery and as an approved web origin.
+    pub public_server_origin: Option<Arc<crate::browser_host::config::PublicServerOrigin>>,
     /// Tunnel session manager — Arc-backed, Clone is cheap.
     pub tunnel_manager: TunnelSessionManager,
     /// Port forward manager — tracks PTY-detected ports. Arc-backed, Clone is cheap.
@@ -111,8 +116,7 @@ pub struct AppState {
     pub idle_suspend_coordinator:
         Arc<RwLock<Option<Arc<crate::idle_suspend::IdleSuspendCoordinator>>>>,
     /// Authoritative event writer for canonical server semantic events.
-    pub idle_suspend_event_writer:
-        Option<Arc<crate::idle_suspend::IdleSuspendEventWriter>>,
+    pub idle_suspend_event_writer: Option<Arc<crate::idle_suspend::IdleSuspendEventWriter>>,
     /// Monotonic timestamp for idle suspend fallback warning onset.
     pub fallback_warning_onset_ms: u64,
     /// Bounded in-memory registry for public WebSocket presence, liveness, and session binding.
@@ -127,6 +131,8 @@ pub struct AppState {
     pub git_blame_cache: Arc<crate::git::blame_cache::BlameBaselineCache>,
     /// Bounded in-memory session changes tracking service.
     pub session_changes: Arc<crate::session_changes::store::SessionChangesService>,
+    /// Browser host manager for supervising principal profiles and browser instances.
+    pub browser_host: Arc<crate::browser_host::manager::BrowserHostManager>,
 }
 
 impl AppState {
@@ -143,7 +149,6 @@ impl AppState {
         let cfg = self.config.read().await;
         cfg.config_path.clone()
     }
-
 
     /// Resolve a project name to its absolute filesystem path.
     /// Returns `Err(NotFound)` if the project doesn't exist in the current config.
@@ -272,9 +277,9 @@ impl AppState {
             event_sink.clone(),
             config.server.host_resources.clone(),
         );
-        let host_resource_events = Arc::new(
-            crate::api::resource_events::HostResourceEvents::new(host_resource_monitor.clone()),
-        );
+        let host_resource_events = Arc::new(crate::api::resource_events::HostResourceEvents::new(
+            host_resource_monitor.clone(),
+        ));
         let host_action_config_dir = config
             .config_path
             .parent()
@@ -352,21 +357,25 @@ impl AppState {
             .log_path()
             .parent()
             .map(|p| p.join("idle-suspend-events-v1.jsonl"))
-            .and_then(|path| match crate::idle_suspend::IdleSuspendEventWriter::new(path) {
-                Ok(writer) => Some(Arc::new(writer)),
-                Err(err) => {
-                    let mut fields = std::collections::BTreeMap::new();
-                    fields.insert("error".to_string(), err.to_string());
-                    diagnostics.record_event(crate::diagnostics::DiagnosticEvent {
-                        timestamp_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(),
-                        level: "WARN".to_string(),
-                        source: "idle_suspend::event_writer".to_string(),
-                        message: "Failed to initialize idle suspend canonical event writer".to_string(),
-                        fields,
-                    });
-                    None
-                }
-            });
+            .and_then(
+                |path| match crate::idle_suspend::IdleSuspendEventWriter::new(path) {
+                    Ok(writer) => Some(Arc::new(writer)),
+                    Err(err) => {
+                        let mut fields = std::collections::BTreeMap::new();
+                        fields.insert("error".to_string(), err.to_string());
+                        diagnostics.record_event(crate::diagnostics::DiagnosticEvent {
+                            timestamp_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(
+                            ),
+                            level: "WARN".to_string(),
+                            source: "idle_suspend::event_writer".to_string(),
+                            message: "Failed to initialize idle suspend canonical event writer"
+                                .to_string(),
+                            fields,
+                        });
+                        None
+                    }
+                },
+            );
         let mfa_key = if let Ok(key_path) = std::env::var("DAM_HOPPER_MFA_KEY_FILE") {
             let key = crate::auth::MfaEncryptionKey::from_file(&key_path)
                 .map_err(|e| anyhow::anyhow!("Failed to load MFA key from {key_path}: {e}"))?;
@@ -380,11 +389,23 @@ impl AppState {
         };
         // The selected store is the only authentication authority: without one the
         // service reports authentication unavailable rather than inventing an account.
-        let auth_service = Arc::new(crate::auth::AuthService::with_system_clock(auth_store, mfa_key));
+        let auth_service = Arc::new(crate::auth::AuthService::with_system_clock(
+            auth_store, mfa_key,
+        ));
         let session_changes = Arc::new(
             crate::session_changes::store::SessionChangesService::new()
                 .map_err(|e| anyhow::anyhow!("Session changes service unavailable: {e}"))?,
         );
+        let browser_host = Arc::new(crate::browser_host::manager::BrowserHostManager::new(
+            config.server.browser.clone(),
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        ));
+        browser_debug_artifacts.set_authority(Arc::new(AppStateBrowserAdmissionAuthority {
+            auth_service: auth_service.clone(),
+            browser_host: browser_host.clone(),
+            no_auth,
+        }));
         fs.reinit_workspace_sandbox(config.resolve_workspace_root().ok());
 
         Ok(Self {
@@ -428,6 +449,9 @@ impl AppState {
             git_blame_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
             git_blame_cache: Arc::new(crate::git::blame_cache::BlameBaselineCache::new()),
             session_changes,
+            browser_host,
+            bound_listener_addr: Arc::new(std::sync::OnceLock::new()),
+            public_server_origin: None,
         })
     }
     /// Returns the active workspace sandbox, or `Err(FsError::Unavailable)` if unconfigured.
@@ -483,9 +507,39 @@ impl AppState {
         }
     }
 
+    /// Records the address the HTTP listener actually bound to (the verified socket address, not
+    /// the requested host/port). Browser development admission requires this to be loopback.
+    /// Returns `Err(existing)` if an address was already recorded; the first record wins.
+    pub fn record_bound_listener(
+        &self,
+        addr: std::net::SocketAddr,
+    ) -> Result<(), std::net::SocketAddr> {
+        self.bound_listener_addr.set(addr).map_err(|_| addr)
+    }
+
+    /// Actual bound listener address, or `None` until [`Self::record_bound_listener`] ran.
+    pub fn bound_listener(&self) -> Option<std::net::SocketAddr> {
+        self.bound_listener_addr.get().copied()
+    }
+
+    /// Attach the operator-configured public server origin (already parsed and validated).
+    pub fn with_public_server_origin(
+        mut self,
+        origin: Option<crate::browser_host::config::PublicServerOrigin>,
+    ) -> Self {
+        self.public_server_origin = origin.map(Arc::new);
+        self
+    }
+
     /// Override the auth service handle (used for testing or custom clock injection).
     pub fn with_auth_service(mut self, auth_service: Arc<crate::auth::AuthService>) -> Self {
-        self.auth_service = auth_service;
+        self.auth_service = auth_service.clone();
+        self.browser_debug_artifacts
+            .set_authority(Arc::new(AppStateBrowserAdmissionAuthority {
+                auth_service,
+                browser_host: self.browser_host.clone(),
+                no_auth: self.no_auth,
+            }));
         self
     }
     /// Override the client presence registry handle (used for testing or custom capacity injection).
@@ -585,11 +639,221 @@ impl AppState {
     }
 }
 
-
 pub fn project_roots_from_config(config: &DamHopperConfig) -> Vec<(String, StdPathBuf)> {
     config
         .projects
         .iter()
         .map(|project| (project.name.clone(), StdPathBuf::from(&project.path)))
         .collect()
+}
+
+struct AppStateBrowserAdmissionAuthority {
+    auth_service: Arc<crate::auth::AuthService>,
+    browser_host: Arc<crate::browser_host::manager::BrowserHostManager>,
+    no_auth: bool,
+}
+
+impl crate::browser_debug::BrowserAdmissionAuthority for AppStateBrowserAdmissionAuthority {
+    fn check_managed_admission<'a>(
+        &'a self,
+        actor: &'a crate::api::auth::AuthenticatedActor,
+        principal: &'a str,
+        profile_epoch: u64,
+    ) -> crate::browser_debug::BoxFuture<'a, bool> {
+        Box::pin(async move {
+            if actor.subject != principal {
+                return false;
+            }
+
+            if self
+                .browser_host
+                .has_active_tombstone(principal, self.no_auth)
+                .await
+            {
+                return false;
+            }
+
+            if self.no_auth {
+                let caps = self.browser_host.capabilities(principal, true).await;
+                return caps.profile_epoch.parse::<u64>().ok() == Some(profile_epoch);
+            }
+
+            let now = self.auth_service.clock().now();
+            if let Some(deadline) = actor.effective_deadline {
+                if now >= deadline {
+                    return false;
+                }
+            }
+
+            if let Some(store) = self.auth_service.store() {
+                let Ok(Some(user)) = store.get_user(principal).await else {
+                    return false;
+                };
+                if !user.is_enabled || user.role != crate::auth::model::UserRole::Admin {
+                    return false;
+                }
+                if let Some(sid) = &actor.session_id {
+                    let Ok(Some(session)) = store.get_session(sid).await else {
+                        return false;
+                    };
+                    if session.revoked_at.is_some() || session.auth_version != user.auth_version {
+                        return false;
+                    }
+                    if let Some(req_av) = actor.auth_version {
+                        if session.auth_version != req_av {
+                            return false;
+                        }
+                    }
+                    if let Some(req_cv) = actor.credential_version {
+                        if session.credential_version != req_cv {
+                            return false;
+                        }
+                    }
+                }
+            } else if let Some(mock) = self.auth_service.mock_user() {
+                if mock.username != principal
+                    || !mock.is_enabled
+                    || mock.role != crate::auth::model::UserRole::Admin
+                {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+
+            let caps = self.browser_host.capabilities(principal, false).await;
+            caps.profile_epoch.parse::<u64>().ok() == Some(profile_epoch)
+        })
+    }
+
+    fn check_managed_selection_live<'a>(
+        &'a self,
+        principal: &'a str,
+        session_id: &'a str,
+        navigation_revision: u64,
+        selection_revision: u64,
+    ) -> crate::browser_debug::BoxFuture<'a, bool> {
+        Box::pin(async move {
+            let Ok(dto) = crate::api::browser_host::global_session_registry()
+                .get_session(session_id, principal)
+                .await
+            else {
+                return false;
+            };
+            if dto.status != "running" {
+                return false;
+            }
+            if dto.navigation_revision.parse::<u64>().ok() != Some(navigation_revision) {
+                return false;
+            }
+            crate::browser_host::selection::is_selection_live(
+                session_id,
+                principal,
+                navigation_revision,
+                selection_revision,
+            )
+            .await
+        })
+    }
+
+    fn acquire_managed_selection_fence<'a>(
+        &'a self,
+        principal: &'a str,
+        profile_epoch: u64,
+        session_id: &'a str,
+        navigation_revision: u64,
+        selection_revision: u64,
+        artifact_id: uuid::Uuid,
+    ) -> crate::browser_debug::BoxFuture<'a, Option<Box<dyn crate::browser_debug::HandoffFence>>>
+    {
+        Box::pin(async move {
+            if !self
+                .browser_host
+                .is_profile_epoch_live_sync(principal, self.no_auth, profile_epoch)
+            {
+                return None;
+            }
+            let guard = crate::browser_host::selection::acquire_managed_selection_fence(
+                session_id,
+                principal,
+                navigation_revision,
+                selection_revision,
+                artifact_id,
+            )
+            .await?;
+            if !self
+                .browser_host
+                .is_profile_epoch_live_sync(principal, self.no_auth, profile_epoch)
+            {
+                return None;
+            }
+            Some(Box::new(guard) as Box<dyn crate::browser_debug::HandoffFence>)
+        })
+    }
+
+    fn revalidate_managed_handoff<'a>(
+        &'a self,
+        actor: &'a crate::api::auth::AuthenticatedActor,
+        principal: &'a str,
+        profile_epoch: u64,
+        session_id: &'a str,
+        navigation_revision: u64,
+    ) -> crate::browser_debug::BoxFuture<'a, bool> {
+        Box::pin(async move {
+            // Live actor/admission first (store/DB awaits), then the session registry. The
+            // selection lock is already held by the fence, so it is never re-acquired here.
+            if !self
+                .check_managed_admission(actor, principal, profile_epoch)
+                .await
+            {
+                return false;
+            }
+            let Ok(dto) = crate::api::browser_host::global_session_registry()
+                .get_session(session_id, principal)
+                .await
+            else {
+                return false;
+            };
+            dto.status == "running"
+                && dto.navigation_revision.parse::<u64>().ok() == Some(navigation_revision)
+        })
+    }
+
+    fn final_handoff_sync_check(
+        &self,
+        actor: &crate::api::auth::AuthenticatedActor,
+        principal: &str,
+        profile_epoch: u64,
+        browser_incarnation: &str,
+    ) -> bool {
+        if actor.subject != principal {
+            return false;
+        }
+        if !self.no_auth {
+            if let Some(deadline) = actor.effective_deadline {
+                if self.auth_service.clock().now() >= deadline {
+                    return false;
+                }
+            }
+        }
+        // Profile epoch, reset fencing and the exact browser incarnation the artifact was
+        // created for: a crashed or stopped browser leaves `live_incarnations` synchronously,
+        // before its (possibly slow) selection cleanup arrives.
+        self.browser_host.is_instance_live_sync(
+            principal,
+            self.no_auth,
+            profile_epoch,
+            browser_incarnation,
+        )
+    }
+
+    fn artifact_retired<'a>(
+        &'a self,
+        session_id: &'a str,
+        artifact_id: uuid::Uuid,
+    ) -> crate::browser_debug::BoxFuture<'a, ()> {
+        Box::pin(async move {
+            crate::browser_host::selection::remove_pending_artifact(session_id, artifact_id).await;
+        })
+    }
 }

@@ -1,0 +1,2538 @@
+// @vitest-environment jsdom
+import { act, createElement, type ReactNode, type Ref } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OsWindow } from "./types.js";
+import type { BrowserAudioChunk, BrowserSessionDto, QualityPreference, ServerControlEvent, StreamQualityEvent } from "@/api/browser-host-types.js";
+import {
+  getStreamQuality,
+  setQualityPreference,
+  type StreamQualityTuple,
+} from "./browser/browser-stream-quality.js";
+import type * as BrowserHostClientModule from "@/api/browser-host-client.js";
+import type { ViewerAttachmentCredentials } from "@/api/browser-host-client.js";
+import type * as StreamControllerModule from "@/browser-host/stream-controller.js";
+import type { StreamControllerOptions } from "@/browser-host/stream-controller.js";
+import { BrowserHostClientError } from "@/api/browser-host-types.js";
+import type { CanvasViewProps } from "@/browser-host/canvas-view.js";
+import type { ConnectionSnapshot } from "@/api/connections.js";
+import { setDocumentVisibilityForTests } from "@/browser-host/visibility-demand.js";
+import { addClosingGate, clearClosingGatesForTesting } from "./browser/browser-closing-gates.js";
+import { clearPopupTabStateForTesting } from "./browser/browser-popup-tabs.js";
+import { createBrowserNativeTargetKey } from "./browser/browser-owner-scope.js";
+import { isOwnerAddressSuppressed, saveBrowserRecoveryDisk } from "./browser/browser-recovery-store.js";
+import {
+  browserTabSlotKey,
+  createBlankBrowserTab,
+  createInitialBrowserWindowState,
+  findBrowserTab,
+  patchBrowserTab,
+} from "./browser/browser-tab-state.js";
+import type { BrowserOwnerScope, BrowserWindowState } from "./browser/browser-tab-types.js";
+
+interface ControllerMockInstance {
+  options: StreamControllerOptions;
+  credentials: ViewerAttachmentCredentials | null;
+  status: string;
+  subscriptionEpoch: string;
+  visible: boolean;
+  privacy: boolean;
+  disposed: boolean;
+  setVisibilityCalls: boolean[];
+  resetAudioAuthority: (minDocEpoch?: string | number | bigint) => void;
+  qualityPreference?: string;
+  audioMuted?: boolean;
+  lastMuteBeforeAttach?: boolean | null;
+  mediaOpens: Array<{ subscriptionEpoch: string; audioMuted: boolean; qualityPreference: string }>;
+  simulateMediaOpen: () => { subscriptionEpoch: string; audioMuted: boolean; qualityPreference: string };
+  simulateSocketClose: () => void;
+  simulateCloseBeforeOpen: () => void;
+}
+
+const {
+  owner,
+  owner2,
+  scope1,
+  scope2,
+  snapshots,
+  store,
+  getSession,
+  createSession,
+  closeSession,
+  respondDialog,
+  mintTickets,
+  attach,
+  callOrder,
+  controllers,
+  streamState,
+  acquireControl,
+  releaseControl,
+  controlSocket,
+  getSelectedText,
+  pcmPlayerMocks,
+  storeListeners,
+  cognitoListeners,
+  lockListeners,
+  connListeners,
+} = vi.hoisted(() => {
+  const o1 = { profileId: "profile-1", generation: 1 };
+  const o2 = { profileId: "profile-2", generation: 1 };
+  const s1: BrowserOwnerScope = {
+    profileId: "profile-1",
+    endpoint: "https://host.example.test",
+    principal: "alice",
+    namespace: "prod",
+  };
+  const s2: BrowserOwnerScope = {
+    profileId: "profile-2",
+    endpoint: "https://host.example.test",
+    principal: "alice",
+    namespace: "prod",
+  };
+  return {
+    owner: o1,
+    owner2: o2,
+    scope1: s1,
+    scope2: s2,
+    snapshots: new Map<string, ConnectionSnapshot>(),
+    store: {
+      session: { windows: {} as Record<string, OsWindow> },
+      updateAppState: vi.fn(),
+    },
+    getSession: vi.fn(),
+    createSession: vi.fn(),
+    closeSession: vi.fn(),
+    respondDialog: vi.fn(),
+    mintTickets: vi.fn(),
+    attach: vi.fn(),
+    callOrder: [] as string[],
+    controllers: [] as ControllerMockInstance[],
+    streamState: {
+      status: "connected",
+      subscriptionEpoch: "subscription-1",
+      suppressed: false,
+      locked: false,
+      onControlEvent: undefined as StreamControllerOptions["onControlEvent"],
+      onAudioChunk: undefined as StreamControllerOptions["onAudioChunk"],
+      onAudioReset: undefined as StreamControllerOptions["onAudioReset"],
+      resetAudioAuthority: vi.fn(),
+      credentials: null as ViewerAttachmentCredentials | null,
+      onStreamQuality: undefined as StreamControllerOptions["onStreamQuality"],
+      onStreamQualityReset: undefined as StreamControllerOptions["onStreamQualityReset"],
+      onStatusChange: undefined as StreamControllerOptions["onStatusChange"],
+      setQualityPreference: vi.fn(),
+      setAudioMuted: vi.fn(),
+      /** When true the host gets the REAL BrowserStreamController (driven through fake sockets). */
+      useRealController: false,
+      realResetCalls: 0,
+    },
+    acquireControl: vi.fn(),
+    releaseControl: vi.fn(),
+    getSelectedText: vi.fn(),
+    controlSocket: {
+      readyState: 1,
+      bufferedAmount: 0,
+      send: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    },
+    pcmPlayerMocks: {
+      prime: vi.fn(),
+      enqueue: vi.fn(),
+      flush: vi.fn(),
+      dispose: vi.fn(),
+    },
+    storeListeners: new Set<() => void>(),
+    cognitoListeners: new Set<() => void>(),
+    lockListeners: new Set<() => void>(),
+    connListeners: new Set<() => void>(),
+  };
+});
+
+vi.mock("@/api/connections.js", () => ({
+  isCurrentConnection: (captured: { profileId: string; generation: number }) => {
+    const snap = snapshots.get(captured.profileId);
+    return Boolean(
+      snap &&
+        snap.status === "connected" &&
+        snap.owner.profileId === captured.profileId &&
+        snap.owner.generation === captured.generation,
+    );
+  },
+  getConnectionSnapshot: (profileId: string) => snapshots.get(profileId),
+  useConnectionSnapshot: (profileId: string) => snapshots.get(profileId),
+  subscribeConnections: (fn: () => void) => {
+    connListeners.add(fn);
+    return () => connListeners.delete(fn);
+  },
+}));
+vi.mock("./window-store.js", () => ({
+  useWindowStore: Object.assign(
+    (selector: (state: typeof store) => unknown) => selector(store),
+    {
+      getState: () => store,
+      subscribe: (fn: () => void) => {
+        storeListeners.add(fn);
+        return () => storeListeners.delete(fn);
+      },
+    },
+  ),
+}));
+vi.mock("@/stores/cognito-mode.js", () => ({
+  useCognitoModeStore: Object.assign(() => streamState.suppressed, {
+    getState: () => ({ active: streamState.suppressed }),
+    subscribe: (fn: () => void) => {
+      cognitoListeners.add(fn);
+      return () => cognitoListeners.delete(fn);
+    },
+  }),
+}));
+vi.mock("@/stores/lock-screen.js", () => ({
+  useLockScreenStore: Object.assign(() => streamState.locked, {
+    getState: () => ({ isLocked: streamState.locked }),
+    subscribe: (fn: () => void) => {
+      lockListeners.add(fn);
+      return () => lockListeners.delete(fn);
+    },
+  }),
+}));
+vi.mock("../api/browser-host-client.js", async (original) => ({
+  ...(await original<typeof BrowserHostClientModule>()),
+  getBrowserSession: getSession,
+  createBrowserSession: createSession,
+  closeBrowserSession: closeSession,
+  respondBrowserDialog: respondDialog,
+  mintViewerAttachmentTickets: mintTickets,
+  acquireBrowserControl: acquireControl,
+  releaseBrowserControl: releaseControl,
+  getBrowserSelectedText: getSelectedText,
+}));
+vi.mock("@/api/browser-host-client.js", async (original) => ({
+  ...(await original<typeof BrowserHostClientModule>()),
+  getBrowserSession: getSession,
+  createBrowserSession: createSession,
+  closeBrowserSession: closeSession,
+  respondBrowserDialog: respondDialog,
+  mintViewerAttachmentTickets: mintTickets,
+  acquireBrowserControl: acquireControl,
+  releaseBrowserControl: releaseControl,
+  getBrowserSelectedText: getSelectedText,
+}));
+vi.mock("../browser-host/canvas-view.js", () => ({
+  CanvasView: ({
+    ref,
+    children,
+    ...props
+  }: CanvasViewProps & { ref: Ref<HTMLCanvasElement>; children?: ReactNode }) =>
+    createElement(
+      "div",
+      null,
+      createElement("canvas", {
+        ref,
+        width: props.isParked ? 1 : 800,
+        height: props.isParked ? 1 : 600,
+        "data-parked": props.isParked ? "true" : "false",
+        onPointerDown: props.onCanvasPointerDown,
+        onPointerUp: props.onCanvasPointerUp,
+        onPointerMove: props.onCanvasPointerMove,
+        onPointerCancel: props.onCanvasPointerCancel,
+        onLostPointerCapture: props.onCanvasLostPointerCapture,
+      }),
+      children,
+    ),
+}));
+vi.mock("../browser-host/pcm-player.js", () => ({
+  PcmPlayer: class {
+    prime(allowBeforeLive?: boolean) {
+      pcmPlayerMocks.prime(allowBeforeLive);
+    }
+    enqueue(data: string) {
+      pcmPlayerMocks.enqueue(data);
+    }
+    flush() {
+      pcmPlayerMocks.flush();
+    }
+    dispose() {
+      pcmPlayerMocks.dispose();
+    }
+  },
+}));
+vi.mock("../browser-host/stream-controller.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof StreamControllerModule>();
+  return {
+  BrowserStreamController: class {
+    instance: ControllerMockInstance;
+    constructor(options: StreamControllerOptions) {
+      if (streamState.useRealController) {
+        return new actual.BrowserStreamController({
+          ...options,
+          onStreamQualityReset: () => {
+            streamState.realResetCalls += 1;
+            options.onStreamQualityReset?.();
+          },
+        }) as never;
+      }
+      this.instance = {
+        options,
+        credentials: null,
+        status: streamState.status,
+        subscriptionEpoch: streamState.subscriptionEpoch,
+        visible: false,
+        privacy: false,
+        disposed: false,
+        setVisibilityCalls: [],
+        resetAudioAuthority: streamState.resetAudioAuthority,
+        lastMuteBeforeAttach: null,
+        mediaOpens: [],
+        simulateMediaOpen: () => this.simulateMediaOpen(),
+        simulateSocketClose: () => this.simulateSocketClose(),
+        simulateCloseBeforeOpen: () => this.simulateCloseBeforeOpen(),
+      };
+      controllers.push(this.instance);
+      streamState.onControlEvent = options.onControlEvent;
+      streamState.onAudioChunk = options.onAudioChunk;
+      streamState.onAudioReset = options.onAudioReset;
+      streamState.onStreamQuality = options.onStreamQuality;
+      streamState.onStreamQualityReset = options.onStreamQualityReset;
+      streamState.onStatusChange = options.onStatusChange;
+    }
+    attach(credentials: ViewerAttachmentCredentials) {
+      this.instance.credentials = credentials;
+      this.instance.subscriptionEpoch = credentials.subscriptionEpoch;
+      this.instance.lastMuteBeforeAttach = this.instance.audioMuted ?? null;
+      streamState.credentials = credentials;
+      streamState.onControlEvent = this.instance.options.onControlEvent;
+      streamState.onAudioChunk = this.instance.options.onAudioChunk;
+      streamState.onAudioReset = this.instance.options.onAudioReset;
+      streamState.onStreamQuality = this.instance.options.onStreamQuality;
+      streamState.onStreamQualityReset = this.instance.options.onStreamQualityReset;
+      streamState.onStatusChange = this.instance.options.onStatusChange;
+      callOrder.push(`attach:${credentials.browserSessionId}`);
+      attach(credentials);
+    }
+    simulateMediaOpen() {
+      const payload = {
+        subscriptionEpoch: this.instance.credentials?.subscriptionEpoch ?? this.instance.subscriptionEpoch,
+        audioMuted: this.instance.audioMuted ?? false,
+        qualityPreference: this.instance.qualityPreference ?? "auto",
+      };
+      this.instance.mediaOpens.push(payload);
+      this.instance.status = "streaming";
+      this.instance.options.onStatusChange?.("streaming");
+      return payload;
+    }
+    simulateSocketClose() {
+      this.instance.credentials = null;
+      this.instance.options.onStreamQualityReset?.();
+      if (this.instance.status === "streaming") {
+        this.instance.status = "disconnected";
+        this.instance.options.onStatusChange?.("disconnected");
+      }
+    }
+    simulateCloseBeforeOpen() {
+      this.instance.credentials = null;
+      this.instance.status = "disconnected";
+      this.instance.options.onStreamQualityReset?.();
+      this.instance.options.onStatusChange?.("disconnected");
+    }
+    setPrivacyMode(active: boolean) {
+      this.instance.privacy = active;
+    }
+    setVisibility(visible: boolean) {
+      if (this.instance.visible && !visible && this.instance.credentials) {
+        callOrder.push(`close-sockets:${this.instance.credentials.browserSessionId}`);
+        this.instance.credentials = null;
+      }
+      this.instance.visible = visible;
+      this.instance.setVisibilityCalls.push(visible);
+    }
+    dispose() {
+      this.instance.disposed = true;
+    }
+    setQualityPreference(pref: QualityPreference) {
+      this.instance.qualityPreference = pref;
+      streamState.setQualityPreference(pref);
+    }
+    setAudioMuted(muted: boolean) {
+      this.instance.audioMuted = muted;
+      streamState.setAudioMuted(muted);
+    }
+    resetAudioAuthority(minDocEpoch?: string | number | bigint) {
+      this.instance.resetAudioAuthority(minDocEpoch);
+    }
+    getStatus() {
+      return streamState.status;
+    }
+    getCurrentSubscriptionEpoch() {
+      return this.instance.credentials?.subscriptionEpoch ?? null;
+    }
+    getControlSocket() {
+      return controlSocket;
+    }
+    getDrawnRect() {
+      return {
+        drawX: 0,
+        drawY: 0,
+        drawWidth: 800,
+        drawHeight: 600,
+        imageWidth: 800,
+        imageHeight: 600,
+        geometry: snapshot.geometry,
+        viewportEpoch: "2",
+        inputTrusted: true,
+      };
+    }
+  },
+  };
+});
+
+import {
+  BrowserStreamKeepAliveHost,
+  fenceBrowserViewsForProfile,
+  clearBrowserViewFenceForProfile,
+  registerBrowserStreamSlot,
+  requestBrowserAudioUnlock,
+  requestBrowserProxyFocus,
+  updateBrowserStreamSlot,
+} from "./BrowserStreamKeepAliveHost.js";
+import { writeTextToClipboard } from "@/browser-host/text-input-proxy.js";
+import { countRetainedNativeReferences } from "./browser/browser-native-reference-census.js";
+import { clearBrowserControlGateForTesting, runSerializedBrowserControlAcquire } from "./browser/browser-control-gate.js";
+
+const snapshot: BrowserSessionDto = {
+  browserSessionId: "session-1",
+  browserIncarnation: "live-runtime",
+  profileEpoch: "2",
+  navigationRevision: "4",
+  viewportEpoch: "2",
+  url: "https://example.test/initial",
+  title: "Initial",
+  status: "running",
+  inputAvailable: true,
+  geometry: {
+    cssWidth: 800,
+    cssHeight: 600,
+    dpr: 1,
+    offsetTop: 0,
+    scrollX: 0,
+    scrollY: 0,
+    pageScale: 1,
+    visualOffsetX: 0,
+    visualOffsetY: 0,
+  },
+};
+
+function readAppState(windowId = "window-1"): BrowserWindowState {
+  return store.session.windows[windowId]!.appState as unknown as BrowserWindowState;
+}
+
+function readTab(tabId = "tab-1", windowId = "window-1") {
+  return findBrowserTab(readAppState(windowId), tabId)!;
+}
+
+function patchTabInTest(
+  tabId: string,
+  patch: Record<string, unknown>,
+  windowId = "window-1",
+) {
+  const next = patchBrowserTab(readAppState(windowId), tabId, patch);
+  store.updateAppState(windowId, next as unknown as Record<string, unknown>);
+}
+
+let root: Root;
+let container: HTMLDivElement;
+let slot: HTMLDivElement;
+let unregister: () => void;
+
+const render = async () => {
+  await act(async () => root.render(createElement(BrowserStreamKeepAliveHost)));
+};
+const tick = async (ms = 500) => {
+  await act(async () => vi.advanceTimersByTimeAsync(ms));
+};
+const push = async (
+  event: ServerControlEvent,
+  credentials = streamState.credentials!,
+) => {
+  await act(async () => streamState.onControlEvent?.(event, credentials));
+};
+const pushQuality = async (
+  event: StreamQualityEvent,
+  credentials = streamState.credentials!,
+) => {
+  await act(async () => streamState.onStreamQuality?.(event, credentials));
+};
+beforeEach(async () => {
+  vi.useFakeTimers();
+  vi.clearAllMocks();
+  let mockStorageData: Record<string, string> = {};
+  const storageMock = {
+    getItem: (k: string) => mockStorageData[k] ?? null,
+    setItem: (k: string, v: string) => { mockStorageData[k] = String(v); },
+    removeItem: (k: string) => { delete mockStorageData[k]; },
+    clear: () => { mockStorageData = {}; },
+    get length() { return Object.keys(mockStorageData).length; },
+    key: (i: number) => Object.keys(mockStorageData)[i] ?? null,
+  };
+  Object.defineProperty(globalThis, "localStorage", {
+    value: storageMock,
+    configurable: true,
+    writable: true,
+  });
+  localStorage.clear();
+  clearClosingGatesForTesting();
+  clearPopupTabStateForTesting();
+  clearBrowserControlGateForTesting();
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: {
+      request: async (_name: string, _opts: unknown, callback: () => Promise<unknown>) =>
+        callback(),
+    },
+  });
+  controllers.length = 0;
+  owner.generation = 1;
+  owner2.generation = 1;
+  streamState.status = "connected";
+  streamState.subscriptionEpoch = "subscription-1";
+  streamState.suppressed = false;
+  streamState.locked = false;
+  streamState.useRealController = false;
+  streamState.realResetCalls = 0;
+  snapshots.clear();
+  snapshots.set("profile-1", {
+    owner,
+    status: "connected",
+    serverUrl: scope1.endpoint,
+    verifiedBrowserIdentity: { principal: scope1.principal, namespace: scope1.namespace },
+  } as ConnectionSnapshot);
+  snapshots.set("profile-2", {
+    owner: owner2,
+    status: "connected",
+    serverUrl: scope2.endpoint,
+    verifiedBrowserIdentity: { principal: scope2.principal, namespace: scope2.namespace },
+  } as ConnectionSnapshot);
+
+  clearBrowserViewFenceForProfile(owner.profileId, owner.generation);
+  controlSocket.readyState = WebSocket.OPEN;
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 0, 800, 600),
+  );
+  acquireControl.mockReset();
+  releaseControl.mockReset().mockResolvedValue(undefined);
+  createSession.mockReset();
+  closeSession.mockReset().mockResolvedValue(undefined);
+  respondDialog.mockReset().mockResolvedValue(undefined);
+  getSession.mockReset().mockResolvedValue(snapshot);
+  mintTickets.mockReset().mockImplementation(
+    async (capturedOwner, browserSessionId, browserIncarnation, profileEpoch) => {
+      callOrder.push(`mint:${capturedOwner.profileId}:${browserSessionId}`);
+      return {
+        owner: { ...capturedOwner },
+        browserSessionId,
+        browserIncarnation,
+        profileEpoch,
+        viewerId: `viewer-${capturedOwner.profileId}-${browserSessionId}`,
+        subscriptionEpoch: "subscription-1",
+      };
+    },
+  );
+
+  const tab1 = {
+    ...createBlankBrowserTab({ tabId: "tab-1", draftValue: snapshot.url, dirty: false }),
+    committedUrl: snapshot.url,
+    sessionId: "session-1",
+    phase: "connecting" as const,
+    snapshot: { ...snapshot, browserIncarnation: "persisted-runtime", profileEpoch: "1" },
+  };
+  store.session.windows = {
+    "window-1": {
+      id: "window-1",
+      appId: "browser",
+      title: "Browser",
+      ctx: { profileId: owner.profileId },
+      mode: "tile",
+      desktopId: "desktop-1",
+      maximized: false,
+      minimized: false,
+      appState: createInitialBrowserWindowState({
+        ownerScope: scope1,
+        tabs: [tab1],
+        activeTabId: "tab-1",
+      }) as unknown as Record<string, unknown>,
+    },
+  };
+  store.updateAppState.mockImplementation((id: string, update: Record<string, unknown>) => {
+    const win = store.session.windows[id];
+    if (!win) return;
+    store.session.windows = {
+      ...store.session.windows,
+      [id]: { ...win, appState: { ...win.appState, ...update } },
+    };
+    storeListeners.forEach((fn) => fn());
+  });
+
+  container = document.createElement("div");
+  slot = document.createElement("div");
+  document.body.append(container, slot);
+  unregister = registerBrowserStreamSlot("window-1", "tab-1", slot, true);
+  root = createRoot(container);
+  await render();
+  await render();
+});
+
+afterEach(async () => {
+  await act(async () => root.unmount());
+  unregister();
+  container.remove();
+  slot.remove();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+describe("browser keepalive pushed session state & tab-scoped resources", () => {
+  it("consumes the new stream's initial snapshot idempotently without resetting suppression", async () => {
+    saveBrowserRecoveryDisk({
+      version: 1,
+      groups: [],
+      addressSuppressedScopes: [scope1],
+      operations: [],
+    });
+    store.updateAppState.mockClear();
+    await push({ kind: "sessionUpdated", session: snapshot });
+    await push({ kind: "sessionUpdated", session: snapshot });
+    expect(store.updateAppState).not.toHaveBeenCalled();
+    expect(getSession).toHaveBeenCalledTimes(1);
+    expect(isOwnerAddressSuppressed(scope1)).toBe(true);
+  });
+
+  it("hydrates before tickets, applies native URL/title/geometry/u64 revisions, and preserves lease without polling", async () => {
+    expect(mintTickets).toHaveBeenCalledExactlyOnceWith(
+      owner,
+      "session-1",
+      "live-runtime",
+      "2",
+      expect.any(AbortSignal),
+    );
+    patchTabInTest("tab-1", { isController: true, leaseToken: "human-lease" });
+    const next: BrowserSessionDto = {
+      ...snapshot,
+      navigationRevision: "9007199254740999",
+      viewportEpoch: "3",
+      url: "https://example.test/link",
+      title: "Native link",
+      geometry: { ...snapshot.geometry, cssWidth: 1024 },
+    };
+    await push({ kind: "sessionUpdated", session: next });
+    await render();
+    await tick(30_000);
+    const t1 = readTab("tab-1");
+    expect(t1.committedUrl).toBe(next.url);
+    expect(t1.title).toBe(next.title);
+    expect(t1.snapshot?.geometry).toEqual(next.geometry);
+    expect(t1.snapshot?.navigationRevision).toBe("9007199254740999");
+    expect(t1.snapshot?.viewportEpoch).toBe("3");
+    expect(t1.isController).toBe(true);
+    expect(t1.leaseToken).toBe("human-lease");
+    expect(getSession).toHaveBeenCalledTimes(1);
+    expect(mintTickets).toHaveBeenCalledTimes(1);
+    expect(attach).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["closing", "lost", "closed"] as const)(
+    "retains the session and terminal %s reason on the tab, synchronously retires sockets, and never polls",
+    async (status) => {
+      expect(controllers[0]?.visible).toBe(true);
+      expect(controllers[0]?.credentials).not.toBeNull();
+      await push({ kind: "sessionUpdated", session: { ...snapshot, status } });
+      expect(controllers[0]?.visible).toBe(false);
+      expect(controllers[0]?.credentials).toBeNull();
+      await render();
+      await tick(30_000);
+      const t1 = readTab("tab-1");
+      expect(t1).toMatchObject({
+        sessionId: "session-1",
+        phase: "unavailable",
+        unsupportedReason: `Browser session is ${status}`,
+        isController: false,
+      });
+      expect(t1.leaseToken).toBeUndefined();
+      expect(getSession).toHaveBeenCalledTimes(1);
+      expect(mintTickets).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps missing bootstrap session visible and never auto-creates URL-only or blank tabs", async () => {
+    const blankTab = createBlankBrowserTab({ tabId: "tab-blank" });
+    const deferredTab = {
+      ...createBlankBrowserTab({ tabId: "tab-deferred", draftValue: "https://example.test/deferred" }),
+      committedUrl: "https://example.test/deferred",
+      phase: "deferred" as const,
+    };
+    const app = readAppState();
+    store.updateAppState("window-1", {
+      ...app,
+      tabs: [...app.tabs, blankTab, deferredTab],
+    } as unknown as Record<string, unknown>);
+
+    getSession.mockRejectedValueOnce(
+      new BrowserHostClientError("missing", "sessionNotFound", 404),
+    );
+    owner.generation = 2;
+    snapshots.set("profile-1", {
+      ...snapshots.get("profile-1")!,
+      owner: { profileId: "profile-1", generation: 2 },
+    });
+    await render();
+    await tick(30_000);
+    expect(readTab("tab-1")).toMatchObject({
+      sessionId: "session-1",
+      phase: "unavailable",
+      unsupportedReason: "Browser session no longer exists on this host",
+    });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(getSession).toHaveBeenCalledTimes(2);
+    expect(mintTickets).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains stable canvas/controller refs across placement and tab switches, closing outgoing sockets before incoming tickets", async () => {
+    const snap2: BrowserSessionDto = {
+      ...snapshot,
+      browserSessionId: "session-2",
+      url: snapshot.url, // Same URL, distinct target!
+      title: "Second Target Same URL",
+    };
+    getSession.mockImplementation(async (_owner, id: string) =>
+      id === "session-2" ? snap2 : snapshot,
+    );
+
+    const tab2 = {
+      ...createBlankBrowserTab({ tabId: "tab-2", draftValue: snap2.url, dirty: false }),
+      committedUrl: snap2.url,
+      sessionId: "session-2",
+      phase: "connecting" as const,
+      snapshot: snap2,
+    };
+    const app = readAppState();
+    store.updateAppState("window-1", {
+      ...app,
+      tabs: [...app.tabs, tab2],
+      activeTabId: "tab-1",
+    } as unknown as Record<string, unknown>);
+    const slot2 = document.createElement("div");
+    document.body.append(slot2);
+    const unreg2 = registerBrowserStreamSlot("window-1", "tab-2", slot2, true);
+    await render();
+
+    // Inactive tab-2 has zero getSession/mintTickets calls while tab-1 is active
+    expect(getSession).toHaveBeenCalledTimes(1);
+    expect(mintTickets).toHaveBeenCalledTimes(1);
+    const canvas1 = slot.querySelector("canvas");
+    const proxy1 = slot.querySelector("textarea");
+    const ctrl1 = controllers[0]!;
+    const ctrl2 = controllers[1]!;
+    expect(canvas1).toBeInstanceOf(HTMLCanvasElement);
+    expect(proxy1).toBeInstanceOf(HTMLTextAreaElement);
+    expect(controllers).toHaveLength(2);
+
+    // Placement transitions (tile -> float -> maximize) preserve exact canvas, proxy, and controller refs
+    store.session.windows = {
+      ...store.session.windows,
+      "window-1": {
+        ...store.session.windows["window-1"]!,
+        mode: "float",
+        maximized: true,
+      },
+    };
+    await render();
+    expect(slot.querySelector("canvas")).toBe(canvas1);
+    expect(slot.querySelector("textarea")).toBe(proxy1);
+    expect(controllers[0]).toBe(ctrl1);
+
+    // Switch active tab from tab-1 to tab-2 while tab-1 holds a lease
+    patchTabInTest("tab-1", { isController: true, leaseToken: "lease-tab-1" });
+    callOrder.length = 0;
+    await act(async () => {
+      const cur = readAppState();
+      store.updateAppState("window-1", {
+        ...cur,
+        activeTabId: "tab-2",
+      } as unknown as Record<string, unknown>);
+      await render();
+    });
+    await render();
+
+    // Outgoing tab-1 sockets closed synchronously BEFORE incoming tab-2 tickets minted!
+    expect(callOrder).toEqual([
+      "close-sockets:session-1",
+      "mint:profile-1:session-2",
+      "attach:session-2",
+    ]);
+    expect(releaseControl).toHaveBeenCalledWith(owner, "session-1", {
+      leaseToken: "lease-tab-1",
+    });
+    expect(readTab("tab-1").isController).toBe(false);
+    expect(slot2.querySelector("canvas")).toBeInstanceOf(HTMLCanvasElement);
+
+    // Switch back to tab-1: reuses exact same canvas and controller instances without native reload/create
+    await act(async () => {
+      const cur = readAppState();
+      store.updateAppState("window-1", {
+        ...cur,
+        activeTabId: "tab-1",
+      } as unknown as Record<string, unknown>);
+      await render();
+    });
+    await render();
+    expect(slot.querySelector("canvas")).toBe(canvas1);
+    expect(slot.querySelector("textarea")).toBe(proxy1);
+    expect(controllers[0]).toBe(ctrl1);
+    expect(controllers[1]).toBe(ctrl2);
+    expect(createSession).not.toHaveBeenCalled();
+
+    unreg2();
+    slot2.remove();
+  });
+
+  it("shares native target across two profile IDs with independent credentials and blocks attachment when closing gate is active", async () => {
+    const sharedTabP2 = {
+      ...createBlankBrowserTab({ tabId: "tab-p2-active", draftValue: snapshot.url }),
+      committedUrl: snapshot.url,
+      sessionId: "session-1",
+      phase: "connecting" as const,
+      snapshot,
+    };
+    const hiddenTabP2 = {
+      ...createBlankBrowserTab({ tabId: "tab-p2-hidden", draftValue: snapshot.url }),
+      committedUrl: snapshot.url,
+      sessionId: "session-1",
+      phase: "live" as const,
+      snapshot,
+    };
+    store.session.windows = {
+      ...store.session.windows,
+      "window-2": {
+        id: "window-2",
+        appId: "browser",
+        title: "Browser P2",
+        ctx: { profileId: "profile-2" },
+        mode: "float",
+        desktopId: "desktop-1",
+        maximized: false,
+        minimized: false,
+        appState: createInitialBrowserWindowState({
+          ownerScope: scope2,
+          tabs: [sharedTabP2, hiddenTabP2],
+          activeTabId: "tab-p2-active",
+        }) as unknown as Record<string, unknown>,
+      },
+    };
+    const slotP2 = document.createElement("div");
+    document.body.append(slotP2);
+    const unregP2 = registerBrowserStreamSlot("window-2", "tab-p2-active", slotP2, true);
+    await render();
+    await render();
+
+    // Profile 2 mints tickets with owner2 (never borrowing owner1's credentials); hidden view stays unattached
+    expect(mintTickets).toHaveBeenCalledTimes(2);
+    expect(mintTickets).toHaveBeenLastCalledWith(
+      owner2,
+      "session-1",
+      "live-runtime",
+      "2",
+      expect.any(AbortSignal),
+    );
+    // All 3 references (window-1/tab-1, window-2/tab-p2-active, window-2/tab-p2-hidden) counted across profiles
+    const nativeKey = createBrowserNativeTargetKey(scope1, "session-1")!;
+    expect(countRetainedNativeReferences(nativeKey)).toBe(3);
+
+    // Activate closing gate via profile-1: blocks new ticket attachment on profile-2
+    addClosingGate(nativeKey);
+    mintTickets.mockClear();
+    owner2.generation = 2;
+    snapshots.set("profile-2", {
+      ...snapshots.get("profile-2")!,
+      owner: { profileId: "profile-2", generation: 2 },
+    });
+    await render();
+    expect(mintTickets).not.toHaveBeenCalled();
+
+    // Owner principal mismatch on profile-1 denies I/O
+    clearClosingGatesForTesting();
+    owner.generation = 2;
+    snapshots.set("profile-1", {
+      owner: { profileId: "profile-1", generation: 2 },
+      status: "connected",
+      serverUrl: scope1.endpoint,
+      verifiedBrowserIdentity: { principal: "mallory", namespace: "prod" },
+    } as ConnectionSnapshot);
+    await render();
+    expect(mintTickets).not.toHaveBeenCalled();
+
+    unregP2();
+    slotP2.remove();
+  });
+
+  it("exposes explicit viewer retry on 429 browserBusy without creating a new native target", async () => {
+    mintTickets.mockRejectedValueOnce(
+      new BrowserHostClientError("Viewer slots full", "browserBusy", 429),
+    );
+    owner.generation = 2;
+    snapshots.set("profile-1", {
+      ...snapshots.get("profile-1")!,
+      owner: { profileId: "profile-1", generation: 2 },
+    });
+    await render();
+    await render();
+
+    expect(readTab("tab-1").phase).toBe("live");
+    expect(readTab("tab-1").sessionId).toBe("session-1");
+    expect(createSession).not.toHaveBeenCalled();
+    const retryBtn = slot.querySelector(
+      '[data-testid="browser-viewer-retry-btn-window-1-tab-1"]',
+    ) as HTMLButtonElement;
+    expect(retryBtn).toBeInstanceOf(HTMLButtonElement);
+
+    await act(async () => retryBtn.click());
+    await render();
+    expect(attach).toHaveBeenCalledTimes(2);
+    expect(
+      slot.querySelector('[data-testid="browser-viewer-retry-btn-window-1-tab-1"]'),
+    ).toBeNull();
+  });
+
+  it("prevents late ticket completion for a hidden/switched tab from reattaching", async () => {
+    const delayedTickets = Promise.withResolvers<ViewerAttachmentCredentials>();
+    mintTickets.mockReturnValueOnce(delayedTickets.promise);
+    owner.generation = 2;
+    snapshots.set("profile-1", {
+      ...snapshots.get("profile-1")!,
+      owner: { profileId: "profile-1", generation: 2 },
+    });
+    await render();
+    await render();
+
+    // Switch active tab away from tab-1 while tab-1's ticket minting is still in flight
+    const tab2 = createBlankBrowserTab({ tabId: "tab-2" });
+    const cur = readAppState();
+    store.updateAppState("window-1", {
+      ...cur,
+      tabs: [...cur.tabs, tab2],
+      activeTabId: "tab-2",
+    } as unknown as Record<string, unknown>);
+    await render();
+
+    attach.mockClear();
+    await act(async () =>
+      delayedTickets.resolve({
+        owner: { profileId: "profile-1", generation: 2 },
+        browserSessionId: "session-1",
+        browserIncarnation: "live-runtime",
+        profileEpoch: "2",
+        viewerId: "late-viewer",
+        subscriptionEpoch: "late-sub",
+        mediaTicket: "m",
+        controlTicket: "c",
+        mediaWsUrl: "ws://localhost/m",
+        controlWsUrl: "ws://localhost/c",
+        mediaSubprotocols: [],
+        controlSubprotocols: [],
+      }),
+    );
+    expect(attach).not.toHaveBeenCalled();
+    expect(readTab("tab-1").viewerId).not.toBe("late-viewer");
+  });
+
+  it("never replays an unresolved create POST across reconnect and cleans up late completion after tab removal", async () => {
+    const deferredPost = Promise.withResolvers<BrowserSessionDto>();
+    createSession.mockReturnValueOnce(deferredPost.promise);
+    const creatingTab = {
+      ...createBlankBrowserTab({ tabId: "tab-create", draftValue: "https://example.test/new" }),
+      committedUrl: "https://example.test/new",
+      phase: "creating" as const,
+      actionSequence: 1,
+    };
+    const cur = readAppState();
+    store.updateAppState("window-1", {
+      ...cur,
+      tabs: [...cur.tabs, creatingTab],
+    } as unknown as Record<string, unknown>);
+    await render();
+    await tick(10);
+    expect(createSession).toHaveBeenCalledTimes(1);
+
+    // Reconnect advances generation while POST is still pending: transitions to create-unknown without replay
+    owner.generation = 2;
+    snapshots.set("profile-1", {
+      ...snapshots.get("profile-1")!,
+      owner: { profileId: "profile-1", generation: 2 },
+    });
+    await render();
+    await tick(10);
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(readTab("tab-create").phase).toBe("create-unknown");
+
+    // Remove tab-create, then resolve the original POST: late cleanup deletes the orphan session
+    const afterUnknown = readAppState();
+    store.updateAppState("window-1", {
+      ...afterUnknown,
+      tabs: afterUnknown.tabs.filter((t) => t.tabId !== "tab-create"),
+    } as unknown as Record<string, unknown>);
+    await render();
+
+    const lateCreated: BrowserSessionDto = {
+      ...snapshot,
+      browserSessionId: "session-late-orphan",
+      url: "https://example.test/new",
+    };
+    getSession.mockImplementation(async (_o, id: string) =>
+      id === "session-late-orphan" ? lateCreated : snapshot,
+    );
+    await act(async () => deferredPost.resolve(lateCreated));
+    await tick(20);
+    expect(closeSession).toHaveBeenCalledWith(
+      { profileId: "profile-1", generation: 2 },
+      "session-late-orphan",
+      undefined,
+    );
+  });
+
+  it("keeps keyboard input functional on preserved controller after reconnect and restores server dialog state on tab return", async () => {
+    // Advance generation (reconnect) and verify keyboard input works on the preserved input controller
+    owner.generation = 2;
+    snapshots.set("profile-1", {
+      ...snapshots.get("profile-1")!,
+      owner: { profileId: "profile-1", generation: 2 },
+    });
+    await render();
+    await render();
+
+    acquireControl.mockResolvedValueOnce({
+      leaseToken: "gen2-lease",
+      expiresAtUnixMs: Date.now() + 30_000,
+    });
+    controlSocket.send.mockClear();
+    await act(async () => {
+      clickCanvas();
+      typeText("post-reconnect");
+    });
+    await act(async () => vi.runAllTimersAsync());
+    expect(sentInput().map((m) => m.event)).toContainEqual({
+      kind: "insertText",
+      text: "post-reconnect",
+    });
+
+    // Open dialog, switch away from tab-1 (clearing dialog UI), then return to tab-1 with server dialog active
+    await push({
+      kind: "dialogOpened",
+      dialogId: "dlg-1",
+      dialogType: "confirm",
+      message: "Proceed?",
+    });
+    expect(slot.querySelector('[data-testid="browser-dialog-overlay"]')).not.toBeNull();
+
+    const tab2 = createBlankBrowserTab({ tabId: "tab-2" });
+    store.updateAppState("window-1", {
+      ...readAppState(),
+      tabs: [...readAppState().tabs, tab2],
+      activeTabId: "tab-2",
+    } as unknown as Record<string, unknown>);
+    await render();
+    expect(slot.querySelector('[data-testid="browser-dialog-overlay"]')).toBeNull();
+
+    // Return to tab-1 with dialog still present in server snapshot
+    getSession.mockResolvedValueOnce({
+      ...snapshot,
+      dialog: { dialogId: "dlg-1", dialogType: "confirm", message: "Proceed?" },
+    });
+    store.updateAppState("window-1", {
+      ...readAppState(),
+      activeTabId: "tab-1",
+    } as unknown as Record<string, unknown>);
+    await render();
+    await render();
+    patchTabInTest("tab-1", { isController: true, leaseToken: "gen2-lease" });
+    await render();
+
+    const okBtn = slot.querySelector(
+      '[data-testid="browser-dialog-ok-btn"]',
+    ) as HTMLButtonElement;
+    expect(okBtn).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => okBtn.click());
+    expect(respondDialog).toHaveBeenCalledWith(
+      { profileId: "profile-1", generation: 2 },
+      "session-1",
+      {
+        leaseToken: "gen2-lease",
+        dialogId: "dlg-1",
+        accept: true,
+        promptText: "",
+      },
+    );
+  });
+
+  it("synchronously detaches sockets, clears lease/dialog, and marks tab unavailable on pushed replacement runtime", async () => {
+    patchTabInTest("tab-1", { isController: true, leaseToken: "active-lease" });
+    await push({
+      kind: "dialogOpened",
+      dialogId: "dlg-replace",
+      dialogType: "alert",
+      message: "About to replace runtime",
+    });
+    expect(slot.querySelector('[data-testid="browser-dialog-overlay"]')).not.toBeNull();
+    expect(controllers[0]?.visible).toBe(true);
+
+    // Push sessionUpdated with replacement browserIncarnation: rejected by expectedRuntime -> detached
+    const replacementSnap: BrowserSessionDto = {
+      ...snapshot,
+      browserIncarnation: "different-runtime-replacement",
+      profileEpoch: "5",
+      status: "running",
+    };
+    await push({ kind: "sessionUpdated", session: replacementSnap });
+    await render();
+
+    // Sockets detached, dialog cleared, lease cleared, tab marked unavailable
+    expect(controllers[0]?.visible).toBe(false);
+    expect(controllers[0]?.credentials).toBeNull();
+    expect(slot.querySelector('[data-testid="browser-dialog-overlay"]')).toBeNull();
+    const t1 = readTab("tab-1");
+    expect(t1.phase).toBe("unavailable");
+    expect(t1.unsupportedReason).toBe("Browser runtime changed on host");
+    expect(t1.isController).toBe(false);
+    expect(t1.leaseToken).toBeUndefined();
+    expect(releaseControl).toHaveBeenCalledWith(owner, "session-1", {
+      leaseToken: "active-lease",
+    });
+  });
+});
+
+const clickCanvas = () => {
+  const canvas = slot.querySelector("canvas")!;
+  canvas.dispatchEvent(
+    new MouseEvent("pointerdown", { clientX: 400, clientY: 300, button: 0, bubbles: true }),
+  );
+  canvas.dispatchEvent(
+    new MouseEvent("pointerup", { clientX: 400, clientY: 300, button: 0, bubbles: true }),
+  );
+};
+
+const typeText = (text: string) => {
+  const proxy = slot.querySelector("textarea")!;
+  proxy.value = text;
+  proxy.dispatchEvent(
+    new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }),
+  );
+};
+
+const sentInput = () =>
+  controlSocket.send.mock.calls.map(([message]) => JSON.parse(message));
+
+describe("browser first pointer gesture control handoff & popup tabs", () => {
+  it("retains immediate text and editing keys behind the deferred focusing click", async () => {
+    const lease = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease.promise);
+    await act(async () => {
+      clickCanvas();
+      expect(document.activeElement).toBe(slot.querySelector("textarea"));
+      typeText("surviving");
+      const proxy = slot.querySelector("textarea")!;
+      proxy.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Backspace",
+          code: "Backspace",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      proxy.dispatchEvent(
+        new KeyboardEvent("keyup", { key: "Backspace", code: "Backspace", bubbles: true }),
+      );
+      typeText("-target");
+    });
+    expect(controlSocket.send).not.toHaveBeenCalled();
+    await act(async () =>
+      lease.resolve({ leaseToken: "human-lease", expiresAtUnixMs: Date.now() + 30_000 }),
+    );
+    await act(async () => vi.runAllTimersAsync());
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "insertText", text: "surviving" },
+      { kind: "keyDown", key: "Backspace", code: "Backspace", modifiers: 0 },
+      { kind: "keyUp", key: "Backspace", code: "Backspace", modifiers: 0 },
+      { kind: "insertText", text: "-target" },
+    ]);
+  });
+
+  it.each([
+    "blur",
+    "window-blur",
+    "privacy",
+    "lock",
+    "fence",
+    "navigation",
+    "runtime",
+    "subscription",
+    "socket",
+    "cancel",
+    "failed",
+    "dispose",
+    "tab-switch",
+  ] as const)(
+    "does not leak typeahead after %s cancels the acquisition",
+    async (change) => {
+      const lease = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+      acquireControl.mockReturnValueOnce(lease.promise);
+      await act(async () => {
+        clickCanvas();
+        typeText("private-before-cancel");
+      });
+      await act(async () => {
+        if (change === "blur") slot.querySelector("textarea")!.blur();
+        if (change === "window-blur") window.dispatchEvent(new Event("blur"));
+        if (change === "privacy") {
+          streamState.suppressed = true;
+          cognitoListeners.forEach((fn) => fn());
+        }
+        if (change === "lock") {
+          streamState.locked = true;
+          lockListeners.forEach((fn) => fn());
+        }
+        if (change === "fence")
+          fenceBrowserViewsForProfile(owner.profileId, "same-turn fence", owner.generation);
+        if (change === "navigation" || change === "runtime") {
+          const t1 = readTab("tab-1");
+          patchTabInTest("tab-1", {
+            snapshot: {
+              ...t1.snapshot!,
+              ...(change === "navigation"
+                ? { navigationRevision: "5" }
+                : { browserIncarnation: "replacement-runtime" }),
+            },
+          });
+          await render();
+        }
+        if (change === "subscription") {
+          controllers[0]!.credentials = {
+            ...controllers[0]!.credentials!,
+            subscriptionEpoch: "replacement-subscription",
+          };
+        }
+        if (change === "socket")
+          controlSocket.addEventListener.mock.calls[0][1](new Event("close"));
+        if (change === "cancel")
+          slot
+            .querySelector("canvas")!
+            .dispatchEvent(new MouseEvent("pointercancel", { bubbles: true }));
+        if (change === "dispose") {
+          store.session.windows = {};
+          await render();
+        }
+        if (change === "tab-switch") {
+          const other = createBlankBrowserTab({ tabId: "tab-other" });
+          const cur = readAppState();
+          store.updateAppState("window-1", {
+            ...cur,
+            tabs: [...cur.tabs, other],
+            activeTabId: "tab-other",
+          } as unknown as Record<string, unknown>);
+        }
+        if (change === "failed")
+          lease.reject(new BrowserHostClientError("held", "leaseConflict", 409));
+        else
+          lease.resolve({
+            leaseToken: "unused-lease",
+            expiresAtUnixMs: Date.now() + 30_000,
+          });
+      });
+      expect(controlSocket.send).not.toHaveBeenCalled();
+      if (change === "failed")
+        expect(slot.textContent).toContain("Browser control is held by another viewer");
+      else
+        expect(releaseControl).toHaveBeenCalledExactlyOnceWith(owner, "session-1", {
+          leaseToken: "unused-lease",
+        });
+    },
+  );
+
+  it("focuses TextInputProxy on tuple-keyed toolbar control request unless an input or another OS window is focused", async () => {
+    patchTabInTest("tab-1", { isController: true, leaseToken: "toolbar-lease" });
+    const proxy = slot.querySelector("textarea") as HTMLTextAreaElement;
+    proxy.blur();
+
+    await act(async () => {
+      requestBrowserProxyFocus("window-1", "tab-1", owner, "session-1", "toolbar-lease");
+    });
+    expect(document.activeElement).toBe(proxy);
+
+    proxy.blur();
+    (store.session as unknown as Record<string, unknown>).activeDesktopId = "desktop-1";
+    (store.session as unknown as Record<string, unknown>).desktops = [
+      { id: "desktop-1", focusedWindowId: "other-window" },
+    ];
+    await act(async () => {
+      requestBrowserProxyFocus("window-1", "tab-1", owner, "session-1", "toolbar-lease");
+    });
+    expect(document.activeElement).not.toBe(proxy);
+    delete (store.session as unknown as Record<string, unknown>).activeDesktopId;
+    delete (store.session as unknown as Record<string, unknown>).desktops;
+  });
+
+  it("admits OAuth popup as a distinct adjacent tab without replacing opener resource and removes it on completion", async () => {
+    const popupSnapshot: BrowserSessionDto = {
+      ...snapshot,
+      browserSessionId: "popup-oauth-1",
+      navigationRevision: "1",
+      viewportEpoch: "1",
+      url: "https://accounts.google.com/o/oauth2/v2/auth",
+      title: "Sign in - Google Accounts",
+      parentSessionId: "session-1",
+    };
+    getSession.mockImplementation(async (_owner, id: string) =>
+      id === "popup-oauth-1" ? popupSnapshot : snapshot,
+    );
+
+    await push({
+      kind: "sessionUpdated",
+      session: { ...snapshot, activePopupSessionId: "popup-oauth-1" },
+    });
+    await tick(10);
+    const stateWithPopup = readAppState();
+    expect(stateWithPopup.tabs).toHaveLength(2);
+    expect(stateWithPopup.tabs[0]?.sessionId).toBe("session-1");
+    expect(stateWithPopup.tabs[1]).toMatchObject({
+      kind: "popup",
+      sessionId: "popup-oauth-1",
+      parentTabId: "tab-1",
+    });
+    const popupTabId = stateWithPopup.tabs[1]!.tabId;
+    expect(stateWithPopup.activeTabId).toBe(popupTabId);
+
+    const popupSlot = document.createElement("div");
+    document.body.append(popupSlot);
+    const unregPopup = registerBrowserStreamSlot("window-1", popupTabId, popupSlot, true);
+    await render();
+    await render();
+
+    // Simulate OAuth popup closing after login completes
+    await push({
+      kind: "sessionUpdated",
+      session: { ...popupSnapshot, status: "closed", inputAvailable: false },
+    });
+    await tick(10);
+    const afterClose = readAppState();
+    expect(afterClose.tabs).toHaveLength(1);
+    expect(afterClose.activeTabId).toBe("tab-1");
+    expect(afterClose.tabs[0]?.sessionId).toBe("session-1");
+    expect(afterClose.tabs[0]?.dismissedPopupSessionId).toBe("popup-oauth-1");
+
+    unregPopup();
+    popupSlot.remove();
+  });
+
+  it("enqueues live audio when active/unmuted and synchronously flushes BEFORE React commit on mute, hide, tab switch, privacy, lock, fence, or navigation", async () => {
+    const chunk: BrowserAudioChunk = {
+      kind: "audioChunk",
+      browserSessionId: "session-1",
+      browserIncarnation: "live-runtime",
+      profileEpoch: "2",
+      audioRun: "11111111-2222-4333-8444-555555555555",
+      subscriptionEpoch: "subscription-1",
+      docEpoch: "1",
+      audioSeq: "1",
+      sampleRate: 24000,
+      channels: 1,
+      encoding: "pcm16le",
+      data: "AAAA",
+    };
+    pcmPlayerMocks.enqueue.mockClear();
+    pcmPlayerMocks.flush.mockClear();
+    pcmPlayerMocks.prime.mockClear();
+    streamState.resetAudioAuthority.mockClear();
+
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).toHaveBeenCalledTimes(1);
+
+    streamState.onAudioChunk?.(chunk, streamState.credentials!);
+    expect(pcmPlayerMocks.enqueue).toHaveBeenCalledExactlyOnceWith("AAAA");
+
+    // Muting slot synchronously flushes BEFORE React render
+    pcmPlayerMocks.flush.mockClear();
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, true);
+    expect(pcmPlayerMocks.flush).toHaveBeenCalled();
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+
+    // Tab switch synchronously flushes PCM and detaches sockets BEFORE React render
+    pcmPlayerMocks.flush.mockClear();
+    const t2 = createBlankBrowserTab({ tabId: "tab-2" });
+    const app = readAppState();
+    store.updateAppState("window-1", {
+      ...app,
+      tabs: [...app.tabs, t2],
+      activeTabId: "tab-2",
+    } as unknown as Record<string, unknown>);
+    expect(pcmPlayerMocks.flush).toHaveBeenCalled();
+    expect(controllers[0]?.visible).toBe(false);
+
+    // Restore tab-1 and verify media-before-control docEpoch ordering
+    store.updateAppState("window-1", {
+      ...readAppState(),
+      activeTabId: "tab-1",
+    } as unknown as Record<string, unknown>);
+    await render();
+    await render();
+    await tick(10);
+
+    streamState.onAudioChunk?.(
+      { ...chunk, docEpoch: "6", audioSeq: "5", data: "CCCC" },
+      streamState.credentials!,
+    );
+    expect(pcmPlayerMocks.enqueue).toHaveBeenLastCalledWith("CCCC");
+    pcmPlayerMocks.flush.mockClear();
+    streamState.resetAudioAuthority.mockClear();
+    patchTabInTest("tab-1", {
+      snapshot: { ...readTab("tab-1").snapshot!, navigationRevision: "6" },
+    });
+    expect(pcmPlayerMocks.flush).not.toHaveBeenCalled();
+    expect(streamState.resetAudioAuthority).toHaveBeenCalledExactlyOnceWith("6");
+
+    // Profile reset fence flushes synchronously BEFORE render
+    pcmPlayerMocks.flush.mockClear();
+    fenceBrowserViewsForProfile(owner.profileId, "Reset", owner.generation);
+    expect(pcmPlayerMocks.flush).toHaveBeenCalled();
+    expect(browserTabSlotKey("window-1", "tab-1")).toBe('["window-1","tab-1"]');
+  });
+
+  it("serializes pointerdown behind an in-flight toolbar acquisition and reuses toolbar lease without double-acquiring", async () => {
+    const toolbarGate = Promise.withResolvers<void>();
+    const viewerId = "viewer-profile-1-session-1";
+    const toolbarTask = runSerializedBrowserControlAcquire(owner, "session-1", viewerId, async () => {
+      await toolbarGate.promise;
+      patchTabInTest("tab-1", { isController: true, leaseToken: "lease-toolbar" });
+    });
+
+    await act(async () => {
+      clickCanvas();
+      typeText("after-toolbar");
+    });
+    expect(acquireControl).not.toHaveBeenCalled();
+
+    await act(async () => {
+      toolbarGate.resolve();
+      await toolbarTask;
+    });
+    await act(async () => vi.runAllTimersAsync());
+    expect(acquireControl).not.toHaveBeenCalled();
+    expect(readTab("tab-1").leaseToken).toBe("lease-toolbar");
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "insertText", text: "after-toolbar" },
+    ]);
+  });
+
+  it("gates stream demand and flushes audio on document visibilitychange while ignoring window blur as demand loss, and shrinks parking host to 1x1", async () => {
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    const parkingHostEl = document.querySelector<HTMLElement>(
+      '[data-testid="browser-keep-alive-host"]',
+    );
+    expect(parkingHostEl?.style.width).toBe("1px");
+    expect(parkingHostEl?.style.height).toBe("1px");
+
+    // Window blur releases held input / pending gesture but does NOT drop stream visibility
+    expect(controllers[0]?.visible).toBe(true);
+    await act(async () => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    expect(controllers[0]?.visible).toBe(true);
+
+    // Document hidden synchronously drops stream visibility and flushes PCM audio
+    pcmPlayerMocks.flush.mockClear();
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    expect(pcmPlayerMocks.flush).toHaveBeenCalled();
+    expect(controllers[0]?.visible).toBe(false);
+
+    // Document visible again re-enables demand
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    expect(controllers[0]?.visible).toBe(true);
+    setDocumentVisibilityForTests(null);
+  });
+
+  const makePointerEvent = (
+    type: string,
+    opts: { clientX?: number; clientY?: number; button?: number; pointerId: number },
+  ) => {
+    const evt = new MouseEvent(type, {
+      clientX: opts.clientX ?? 400,
+      clientY: opts.clientY ?? 300,
+      button: opts.button ?? 0,
+      bubbles: true,
+    });
+    Object.defineProperty(evt, "pointerId", { configurable: true, value: opts.pointerId });
+    return evt;
+  };
+
+  const makeLostCaptureEvent = (pointerId: number) => {
+    const evt = new Event("lostpointercapture", { bubbles: true });
+    Object.defineProperty(evt, "pointerId", { configurable: true, value: pointerId });
+    return evt;
+  };
+
+  const mockCanvasRectAndCapture = (canvas: HTMLCanvasElement) => {
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}),
+    });
+    let captured: number | null = null;
+    const setCapture = vi.fn((id: number) => {
+      captured = id;
+    });
+    const releaseCapture = vi.fn((id: number) => {
+      if (captured === id) captured = null;
+    });
+    const hasCapture = vi.fn((id: number) => captured === id);
+    Object.defineProperty(canvas, "setPointerCapture", { configurable: true, value: setCapture });
+    Object.defineProperty(canvas, "releasePointerCapture", { configurable: true, value: releaseCapture });
+    Object.defineProperty(canvas, "hasPointerCapture", { configurable: true, value: hasCapture });
+    return { setCapture, releaseCapture, hasCapture, getCaptured: () => captured };
+  };
+
+  it("surfaces content-free visible error on oversize paste and mid-paste interruption", async () => {
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-p06-paste" });
+    await render();
+    const proxy = slot.querySelector("textarea")!;
+    const secretText = "PRIVATE_PASTE_" + "x".repeat(16 * 1024);
+    const pasteEvt = new Event("paste", { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: { getData: (t: string) => string };
+    };
+    Object.defineProperty(pasteEvt, "clipboardData", {
+      configurable: true,
+      value: { getData: (t: string) => (t === "text/plain" ? secretText : "") },
+    });
+    await act(async () => {
+      proxy.dispatchEvent(pasteEvt);
+    });
+    const alertEl = slot.querySelector('[data-testid="browser-control-error-window-1-tab-1"]');
+    expect(alertEl?.textContent).toContain("16 KiB");
+    expect(alertEl?.textContent).not.toContain("PRIVATE_PASTE");
+    expect(sentInput()).toEqual([]);
+
+    // Accepted small paste clears previous control error
+    const okPaste = new Event("paste", { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: { getData: (t: string) => string };
+    };
+    Object.defineProperty(okPaste, "clipboardData", {
+      configurable: true,
+      value: { getData: (t: string) => (t === "text/plain" ? "clean" : "") },
+    });
+    await act(async () => {
+      proxy.dispatchEvent(okPaste);
+    });
+    expect(slot.querySelector('[data-testid="browser-control-error-window-1-tab-1"]')).toBeNull();
+    expect(sentInput().map((m) => m.event)).toEqual([{ kind: "insertText", text: "clean" }]);
+
+    // Mid-paste interruption during click-to-acquire handoff displays visible warning
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease.promise);
+    const canvas = slot.querySelector("canvas")!;
+    mockCanvasRectAndCapture(canvas);
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 1 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { pointerId: 1 }));
+    });
+    const midPaste = new Event("paste", { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: { getData: (t: string) => string };
+    };
+    Object.defineProperty(midPaste, "clipboardData", {
+      configurable: true,
+      value: { getData: (t: string) => (t === "text/plain" ? "a".repeat(8000) : "") },
+    });
+    await act(async () => {
+      proxy.dispatchEvent(midPaste);
+    });
+    controlSocket.send.mockClear();
+    await act(async () => {
+      lease.resolve({ leaseToken: "lease-mid-paste", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    // First chunk already drained synchronously upon handoff completion; close socket before second chunk at 25ms
+    controlSocket.readyState = 3;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    controlSocket.readyState = 1;
+    const interruptAlert = slot.querySelector('[data-testid="browser-control-error-window-1-tab-1"]');
+    expect(interruptAlert?.textContent).toContain("Paste interrupted");
+
+    // Hiding/minimizing window preserves an interruption warning raised during hide rather than erasing it
+    controlSocket.readyState = 1;
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease2 = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease2.promise);
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 2 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { pointerId: 2 }));
+    });
+    const hidePaste = new Event("paste", { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: { getData: (t: string) => string };
+    };
+    Object.defineProperty(hidePaste, "clipboardData", {
+      configurable: true,
+      value: { getData: (t: string) => (t === "text/plain" ? "b".repeat(8000) : "") },
+    });
+    await act(async () => {
+      proxy.dispatchEvent(hidePaste);
+    });
+    await act(async () => {
+      lease2.resolve({ leaseToken: "lease-hide-paste", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    const hideAlert = slot.querySelector('[data-testid="browser-control-error-window-1-tab-1"]');
+    expect(hideAlert?.textContent).toContain("Paste interrupted");
+  });
+
+  it("captures accepted pointerdown, completes outside-canvas drag cleanly, and never captures rejected/modal downs", async () => {
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-p06-cap" });
+    await render();
+    const canvas = slot.querySelector("canvas")!;
+    const cap = mockCanvasRectAndCapture(canvas);
+
+    // Rejected non-inputAvailable down never captures
+    patchTabInTest("tab-1", { snapshot: { ...readTab("tab-1").snapshot!, inputAvailable: false } });
+    await render();
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 1 }));
+    });
+    expect(cap.setCapture).not.toHaveBeenCalled();
+
+    // Active modal dialog never captures
+    patchTabInTest("tab-1", { snapshot: { ...readTab("tab-1").snapshot!, inputAvailable: true } });
+    await render();
+    await push({ kind: "dialogOpened", dialogId: "dlg-1", dialogType: "alert", message: "wait" });
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 1 }));
+    });
+    expect(cap.setCapture).not.toHaveBeenCalled();
+    await push({ kind: "dialogClosed", dialogId: "dlg-1" });
+
+    // Accepted down captures, drags outside canvas, releases normally, and resulting lostpointercapture does not double-cancel
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 7 }));
+    });
+    expect(cap.setCapture).toHaveBeenCalledWith(7);
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointermove", { clientX: 1200, clientY: 900, pointerId: 7 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 1200, clientY: 900, pointerId: 7 }));
+      canvas.dispatchEvent(makeLostCaptureEvent(7));
+    });
+    expect(cap.releaseCapture).toHaveBeenCalledWith(7);
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerMove", u: 1, v: 1, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 1, v: 1, modifiers: 0 },
+    ]);
+  });
+
+  it("cancels safely on capture failure, unexpected lostpointercapture, privacy, and late capture loss cannot cancel successor gesture", async () => {
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-p06-fail" });
+    await render();
+    const canvas = slot.querySelector("canvas")!;
+    const cap = mockCanvasRectAndCapture(canvas);
+
+    // 1. Capture failure cancels active lease gesture cleanly
+    cap.setCapture.mockImplementationOnce(() => {
+      throw new Error("capture denied");
+    });
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 2 }));
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerCancel" },
+    ]);
+
+    // 2. Unexpected lostpointercapture cancels active drag
+    controlSocket.send.mockClear();
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 3 }));
+    });
+    await act(async () => {
+      cap.releaseCapture(3);
+      canvas.dispatchEvent(makeLostCaptureEvent(3));
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerCancel" },
+    ]);
+
+    // 3. Pending click-to-acquire retains outside pointerup, and late lostpointercapture does not cancel successor gesture
+    controlSocket.send.mockClear();
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease.promise);
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 4 }));
+      canvas.dispatchEvent(makePointerEvent("pointermove", { clientX: 950, clientY: 700, pointerId: 4 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 950, clientY: 700, pointerId: 4 }));
+    });
+    expect(cap.setCapture).toHaveBeenCalledWith(4);
+    expect(cap.releaseCapture).toHaveBeenCalledWith(4);
+    expect(sentInput()).toEqual([]); // no premature dispatch before lease
+    await act(async () => {
+      lease.resolve({ leaseToken: "lease-pending-up", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    await act(async () => vi.runAllTimersAsync());
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerMove", u: 1, v: 1, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 1, v: 1, modifiers: 0 },
+    ]);
+
+    // Start successor gesture on pointerId 4 while a stale lostpointercapture fires; hasPointerCapture(4) === true prevents cancel
+    controlSocket.send.mockClear();
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { pointerId: 4 }));
+      canvas.dispatchEvent(makeLostCaptureEvent(4));
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+    ]);
+
+    // Privacy activation cancels and releases original capture
+    await act(async () => {
+      streamState.suppressed = true;
+      cognitoListeners.forEach((fn) => fn());
+    });
+    expect(cap.releaseCapture).toHaveBeenCalledWith(4);
+    expect(sentInput().map((m) => m.event.kind)).toContain("pointerCancel");
+  });
+});
+
+describe("BrowserStreamKeepAliveHost quality & live mute lifecycle regressions", () => {
+  const sampleEvent: StreamQualityEvent = {
+    kind: "streamQuality",
+    subscriptionEpoch: "subscription-1",
+    preference: "auto",
+    producerRun: "run-1",
+    captureVersion: "100",
+    sharedTier: "high",
+    viewerTier: "high",
+    fps: 30,
+    jpegQuality: 85,
+    scale: 1,
+    imageWidth: 1920,
+    imageHeight: 1080,
+    audioSuppressed: false,
+    audioReason: null,
+    status: "effective",
+  };
+
+  it("(a) drops events from stale generation and publishes current generation into active tuple", async () => {
+    const tupleGen1: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+    const tupleGen2: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 2,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    await pushQuality(sampleEvent);
+    expect(getStreamQuality(tupleGen1).status).toEqual(sampleEvent);
+
+    owner.generation = 2;
+    snapshots.set("profile-1", {
+      ...snapshots.get("profile-1")!,
+      owner: { profileId: "profile-1", generation: 2 },
+    });
+    connListeners.forEach((fn) => fn());
+    await render();
+
+    const staleGen1Creds: ViewerAttachmentCredentials = {
+      ...streamState.credentials!,
+      owner: { profileId: "profile-1", generation: 1 },
+    };
+    await pushQuality({ ...sampleEvent, fps: 24 }, staleGen1Creds);
+    expect(getStreamQuality(tupleGen2).status).toBeNull();
+
+    const gen2Creds: ViewerAttachmentCredentials = {
+      ...streamState.credentials!,
+      owner: { profileId: "profile-1", generation: 2 },
+    };
+    await pushQuality({ ...sampleEvent, fps: 24 }, gen2Creds);
+    expect(getStreamQuality(tupleGen2).status?.fps).toBe(24);
+  });
+
+  it("(b) controller masked/parked at init publishes after reveal", async () => {
+    const tuple: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+
+    await pushQuality(sampleEvent);
+    expect(getStreamQuality(tuple).status).toBeNull();
+
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+
+    await pushQuality(sampleEvent);
+    expect(getStreamQuality(tuple).status).toEqual(sampleEvent);
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("(c) re-sends quality preference on reconnect but NOT on status-only notifications", async () => {
+    const tuple: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    setQualityPreference(tuple, "high");
+    expect(streamState.setQualityPreference).toHaveBeenCalledWith("high");
+    streamState.setQualityPreference.mockClear();
+
+    await pushQuality({ ...sampleEvent, preference: "high", fps: 15 });
+    expect(streamState.setQualityPreference).not.toHaveBeenCalled();
+    // Reconnect / re-demand via document visibility reconnects and re-sends preference
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+    expect(streamState.setQualityPreference).toHaveBeenCalledWith("high");
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("C2-W1: derives pre-attach mute as false for visible/unmuted/live tab with null subscription before attach", async () => {
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+
+    expect(controllers[0]?.credentials).toBeNull();
+
+    const freshEpoch = "unique-fresh-epoch-c2w1";
+    mintTickets.mockResolvedValueOnce({
+      owner,
+      browserSessionId: "session-1",
+      browserIncarnation: readTab("tab-1").snapshot?.browserIncarnation ?? "live-runtime",
+      profileEpoch: String(readTab("tab-1").snapshot?.profileEpoch ?? "2"),
+      viewerId: "viewer-c2w1",
+      subscriptionEpoch: freshEpoch,
+    });
+
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "live" });
+    streamState.setAudioMuted.mockClear();
+
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    expect(streamState.setAudioMuted).toHaveBeenLastCalledWith(false);
+    expect(controllers[0]?.lastMuteBeforeAttach).toBe(false);
+    const firstOpen = controllers[0]?.simulateMediaOpen();
+    expect(firstOpen?.audioMuted).toBe(false);
+    expect(controllers[0]?.audioMuted).toBe(false);
+    expect(controllers[0]?.credentials?.subscriptionEpoch).toBe(freshEpoch);
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("C2-W5: media-only subscription reset with live tab clears effective diagnostics and switching pending, and re-sends preference on reconnect", async () => {
+    const tuple: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    setQualityPreference(tuple, "high");
+    await pushQuality({ ...sampleEvent, preference: "high", status: "effective" });
+    expect(getStreamQuality(tuple).status?.status).toBe("effective");
+    expect(getStreamQuality(tuple).pending).toBe(false);
+
+    await act(async () => {
+      controllers[0]?.simulateSocketClose();
+    });
+
+    expect(getStreamQuality(tuple).status).toBeNull();
+    expect(getStreamQuality(tuple).pending).toBe(false);
+    expect(getStreamQuality(tuple).preference).toBe("high");
+
+    setQualityPreference(tuple, "medium");
+    expect(getStreamQuality(tuple).pending).toBe(true);
+
+    await act(async () => {
+      controllers[0]?.simulateSocketClose();
+    });
+    expect(getStreamQuality(tuple).pending).toBe(false);
+    expect(getStreamQuality(tuple).preference).toBe("medium");
+
+    streamState.setQualityPreference.mockClear();
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    expect(streamState.setQualityPreference).toHaveBeenCalledWith("medium");
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("C2-W6: ticket-race proves second mint started and mute changed during mint, asserting final controller mute", async () => {
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    await render();
+
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+
+    const { promise, resolve } = Promise.withResolvers<ViewerAttachmentCredentials>();
+    mintTickets.mockImplementationOnce(() => promise);
+
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+
+    expect(mintTickets).toHaveBeenCalled();
+
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, true);
+
+    const freshCreds: ViewerAttachmentCredentials = {
+      owner,
+      browserSessionId: "session-1",
+      browserIncarnation: readTab("tab-1").snapshot?.browserIncarnation ?? "live-runtime",
+      profileEpoch: String(readTab("tab-1").snapshot?.profileEpoch ?? "2"),
+      viewerId: "viewer-mint-race",
+      subscriptionEpoch: "sub-mint-race",
+    };
+    await act(async () => {
+      resolve(freshCreds);
+    });
+    await render();
+
+    expect(attach).toHaveBeenCalledWith(freshCreds);
+    expect(controllers[0]?.lastMuteBeforeAttach).toBe(true);
+    const firstOpen = controllers[0]?.simulateMediaOpen();
+    expect(firstOpen?.audioMuted).toBe(true);
+    expect(controllers[0]?.audioMuted).toBe(true);
+    expect(streamState.setAudioMuted).toHaveBeenLastCalledWith(true);
+    setDocumentVisibilityForTests(null);
+  });
+  it("C3-W5: close-before-open triggers onStreamQualityReset with pending preference and unchanged live tab: status/ack/pending cleared, preference retained and re-sent after reconnect", async () => {
+    const tuple: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    await render();
+
+    // Tab is live and unchanged
+    expect(readTab("tab-1").phase).toBe("live");
+    expect(controllers[0]).toBeDefined();
+
+    // Set pending preference before open
+    setQualityPreference(tuple, "high");
+    expect(getStreamQuality(tuple).preference).toBe("high");
+    expect(getStreamQuality(tuple).pending).toBe(true);
+    expect(getStreamQuality(tuple).ackedPreference).toBeNull();
+    expect(getStreamQuality(tuple).status).toBeNull();
+
+    // Controller double triggers onStreamQualityReset before open (simulating close-before-open)
+    await act(async () => {
+      controllers[0]?.simulateCloseBeforeOpen();
+    });
+
+    // Unchanged live tab: tuple status/ack/pending cleared, preference retained
+    expect(readTab("tab-1").phase).toBe("live");
+    expect(getStreamQuality(tuple).status).toBeNull();
+    expect(getStreamQuality(tuple).ackedPreference).toBeNull();
+    expect(getStreamQuality(tuple).pending).toBe(false);
+    expect(getStreamQuality(tuple).preference).toBe("high");
+
+    // After reconnect: preference retained and re-sent
+    streamState.setQualityPreference.mockClear();
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    expect(streamState.setQualityPreference).toHaveBeenCalledWith("high");
+    expect(getStreamQuality(tuple).preference).toBe("high");
+    setDocumentVisibilityForTests(null);
+  });
+  it("(e) final close releases quality tuple", async () => {
+    const tuple: StreamQualityTuple = {
+      profileId: "profile-1",
+      generation: 1,
+      windowId: "window-1",
+      tabId: "tab-1",
+    };
+
+    setQualityPreference(tuple, "medium");
+    await pushQuality({ ...sampleEvent, preference: "medium" });
+    expect(getStreamQuality(tuple).preference).toBe("medium");
+    expect(getStreamQuality(tuple).status).not.toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+
+    expect(getStreamQuality(tuple).preference).toBe("auto");
+    expect(getStreamQuality(tuple).status).toBeNull();
+  });
+
+  it("unmutes stream controller when tab.phase transitions connecting -> live, primes on pre-live unlock, pointerup, and TextInputProxy keydown", async () => {
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "connecting" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    expect(streamState.setAudioMuted).toHaveBeenLastCalledWith(true);
+
+    pcmPlayerMocks.prime.mockClear();
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).toHaveBeenCalledWith(true);
+
+    streamState.setAudioMuted.mockClear();
+    patchTabInTest("tab-1", { phase: "live" });
+    await render();
+    expect(streamState.setAudioMuted).toHaveBeenLastCalledWith(false);
+
+    pcmPlayerMocks.prime.mockClear();
+    const canvas = slot.querySelector("canvas")!;
+    await act(async () => {
+      canvas.dispatchEvent(new MouseEvent("pointerup", { clientX: 400, clientY: 300, button: 0, bubbles: true }));
+    });
+    expect(pcmPlayerMocks.prime).toHaveBeenCalledTimes(1);
+
+    pcmPlayerMocks.prime.mockClear();
+    const proxy = slot.querySelector("textarea")!;
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    });
+    expect(pcmPlayerMocks.prime).toHaveBeenCalledTimes(1);
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("copies selected text via Ctrl+C on TextInputProxy with clipboard API and execCommand fallback", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-ctrl-c" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    getSelectedText.mockResolvedValueOnce({ text: "copied from chromium" });
+    const proxy = slot.querySelector("textarea")!;
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await tick(10);
+    expect(getSelectedText).toHaveBeenCalledWith(owner, "session-1", "lease-ctrl-c");
+    expect(writeText).toHaveBeenCalledWith("copied from chromium");
+
+    // Fallback to execCommand("copy") when navigator.clipboard.writeText rejects
+    writeText.mockRejectedValueOnce(new Error("Clipboard restricted"));
+    const execCopy = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCopy });
+    getSelectedText.mockResolvedValueOnce({ text: "fallback text" });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await tick(10);
+    expect(execCopy).toHaveBeenCalledWith("copy");
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("W1 & W2: clears cached selection on empty live result, rejects late navRev copy, and skips execCommand fallback when masked", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const execCopy = vi.fn().mockReturnValue(true);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCopy });
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-w1" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    const proxy = slot.querySelector("textarea")!;
+    // 1. Populate cache via Ctrl+C
+    getSelectedText.mockResolvedValueOnce({ text: "old selected text" });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await tick(10);
+    expect(writeText).toHaveBeenCalledWith("old selected text");
+
+    // 2. Empty live response clears cache so subsequent native copy event does NOT write stale text
+    getSelectedText.mockResolvedValueOnce({ text: "" });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await tick(10);
+
+    const setData = vi.fn();
+    const copyEvent = new Event("copy", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
+    Object.defineProperty(copyEvent, "clipboardData", { value: { setData } });
+    await act(async () => {
+      proxy.dispatchEvent(copyEvent);
+    });
+    expect(setData).not.toHaveBeenCalled();
+
+    // 3. Late async getBrowserSelectedText response after navigationRevision bump is ignored
+    writeText.mockClear();
+    const deferredCopy = Promise.withResolvers<{ text: string }>();
+    getSelectedText.mockReturnValueOnce(deferredCopy.promise);
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    patchTabInTest("tab-1", {
+      snapshot: { ...readTab("tab-1").snapshot!, navigationRevision: "999" },
+    });
+    await render();
+    await act(async () => {
+      deferredCopy.resolve({ text: "stale nav text" });
+    });
+    expect(writeText).not.toHaveBeenCalled();
+    const copyAfterNav = new Event("copy", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
+    Object.defineProperty(copyAfterNav, "clipboardData", { value: { setData } });
+    await act(async () => {
+      proxy.dispatchEvent(copyAfterNav);
+    });
+    expect(setData).not.toHaveBeenCalled();
+
+    // 4. W2: writeText rejects after Cognito mask activates -> execCommand fallback NOT executed
+    const deferredWrite = Promise.withResolvers<void>();
+    writeText.mockReturnValueOnce(deferredWrite.promise);
+    getSelectedText.mockResolvedValueOnce({ text: "secret page text" });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await act(async () => {
+      streamState.suppressed = true;
+      cognitoListeners.forEach((fn) => fn());
+    });
+    await render();
+    await act(async () => {
+      deferredWrite.reject(new Error("Denied"));
+    });
+    expect(execCopy).not.toHaveBeenCalled();
+    streamState.suppressed = false;
+    cognitoListeners.forEach((fn) => fn());
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("denies pre-live prime(true) when muted, masked, minimized, inactive desktop, or owner-mismatched", async () => {
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "connecting" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).toHaveBeenCalledWith(true);
+    // 1. Muted
+    pcmPlayerMocks.prime.mockClear();
+    pcmPlayerMocks.flush.mockClear();
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, true);
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).not.toHaveBeenCalled();
+    expect(pcmPlayerMocks.flush).toHaveBeenCalled();
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+
+    // 2. Cognito masked
+    pcmPlayerMocks.prime.mockClear();
+    streamState.suppressed = true;
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).not.toHaveBeenCalled();
+    streamState.suppressed = false;
+
+    // 3. Minimized or inactive desktop
+    pcmPlayerMocks.prime.mockClear();
+    store.session.windows["window-1"].minimized = true;
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).not.toHaveBeenCalled();
+    store.session.windows["window-1"].minimized = false;
+
+    (store.session as unknown as Record<string, unknown>).activeDesktopId = "desktop-other";
+    store.session.windows["window-1"].desktopId = "desktop-1";
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).not.toHaveBeenCalled();
+    delete (store.session as unknown as Record<string, unknown>).activeDesktopId;
+
+    // 4. Owner mismatch
+    const curApp = readAppState();
+    store.updateAppState("window-1", { ...curApp, ownerScope: scope2 } as unknown as Record<string, unknown>);
+    requestBrowserAudioUnlock("window-1", "tab-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).not.toHaveBeenCalled();
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("W-C2-1: selectionCacheGenRef rejects deferred copy response after input invalidation and rejects older non-empty after newer empty", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "live", isController: true, leaseToken: "lease-wc21" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+
+    const proxy = slot.querySelector("textarea")!;
+    const setData = vi.fn();
+
+    // 1. Deferred response after non-copy input invalidation
+    const deferredInputRace = Promise.withResolvers<{ text: string }>();
+    getSelectedText.mockReturnValueOnce(deferredInputRace.promise);
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    });
+    await act(async () => {
+      deferredInputRace.resolve({ text: "stale after input" });
+    });
+    expect(writeText).not.toHaveBeenCalled();
+    const copyAfterInput = new Event("copy", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
+    Object.defineProperty(copyAfterInput, "clipboardData", { value: { setData } });
+    await act(async () => {
+      proxy.dispatchEvent(copyAfterInput);
+    });
+    expect(setData).not.toHaveBeenCalled();
+
+    // 2. Older non-empty response resolving AFTER newer empty response must NOT repopulate cache or write clipboard
+    const olderNonEmpty = Promise.withResolvers<{ text: string }>();
+    const newerEmpty = Promise.withResolvers<{ text: string }>();
+    getSelectedText.mockReturnValueOnce(olderNonEmpty.promise).mockReturnValueOnce(newerEmpty.promise);
+
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await act(async () => {
+      proxy.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    });
+    await act(async () => {
+      newerEmpty.resolve({ text: "" });
+    });
+    await act(async () => {
+      olderNonEmpty.resolve({ text: "older non-empty text" });
+    });
+    expect(writeText).not.toHaveBeenCalled();
+    const copyAfterOrder = new Event("copy", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
+    Object.defineProperty(copyAfterOrder, "clipboardData", { value: { setData } });
+    await act(async () => {
+      proxy.dispatchEvent(copyAfterOrder);
+    });
+    expect(setData).not.toHaveBeenCalled();
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("W-C2-3: writeTextToClipboard skips execCommand when focusin listener revokes authority during fallback focus", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("Denied")) },
+    });
+    const execCopy = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCopy });
+
+    let authorized = true;
+    const onFocusIn = () => {
+      authorized = false;
+    };
+    document.addEventListener("focusin", onFocusIn);
+    try {
+      const ok = await writeTextToClipboard("secret", () => authorized);
+      expect(ok).toBe(false);
+      expect(execCopy).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("focusin", onFocusIn);
+    }
+  });
+});
+
+/**
+ * C3-W6: the same host wired to the REAL BrowserStreamController over fake sockets, so the first
+ * media-open payload and socket-close retirement are observed on the wire / through the real
+ * controller, not through a hand-written double.
+ */
+class FakeSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  static instances: FakeSocket[] = [];
+  readyState = 0;
+  binaryType = "blob";
+  sent: string[] = [];
+  onopen: (() => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: ((err: unknown) => void) | null = null;
+  constructor(
+    readonly url: string,
+    readonly protocols?: string | string[],
+  ) {
+    FakeSocket.instances.push(this);
+  }
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  /** Local close(): the controller retires its reference first, so late callbacks are fenced. */
+  close(): void {
+    this.serverClose();
+  }
+  serverOpen(): void {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+  serverClose(): void {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    this.onclose?.();
+  }
+}
+
+describe("BrowserStreamKeepAliveHost with the real stream controller (C3-W6)", () => {
+  const tuple: StreamQualityTuple = {
+    profileId: "profile-1",
+    generation: 1,
+    windowId: "window-1",
+    tabId: "tab-1",
+  };
+
+  const credentialsFor = (subscriptionEpoch: string): ViewerAttachmentCredentials => ({
+    owner,
+    browserSessionId: readTab("tab-1").sessionId ?? "session-1",
+    browserIncarnation: readTab("tab-1").snapshot?.browserIncarnation ?? "live-runtime",
+    profileEpoch: String(readTab("tab-1").snapshot?.profileEpoch ?? "2"),
+    viewerId: `viewer-${subscriptionEpoch}`,
+    subscriptionEpoch,
+    mediaTicket: "media-ticket",
+    controlTicket: "control-ticket",
+    mediaWsUrl: "ws://127.0.0.1:4801/api/browser/media",
+    controlWsUrl: "ws://127.0.0.1:4801/api/browser/control",
+    mediaSubprotocols: ["damhopper.browser.media.v1", "damhopper.ticket.media-ticket"],
+    controlSubprotocols: ["damhopper.browser.control.v1", "damhopper.ticket.control-ticket"],
+  });
+
+  /** A server streamQuality text message delivered through the real controller's media socket. */
+  const deliverEffectiveQuality = async (media: FakeSocket, subscriptionEpoch: string) => {
+    const event: StreamQualityEvent = {
+      kind: "streamQuality",
+      subscriptionEpoch,
+      preference: "auto",
+      producerRun: "11111111-1111-4111-8111-111111111111",
+      captureVersion: "5",
+      sharedTier: "medium",
+      viewerTier: "medium",
+      fps: 10,
+      jpegQuality: 65,
+      scale: 1,
+      imageWidth: 800,
+      imageHeight: 600,
+      audioSuppressed: false,
+      audioReason: null,
+      status: "effective",
+    };
+    await act(async () => media.onmessage?.({ data: JSON.stringify(event) } as MessageEvent));
+  };
+
+  /** Remounts the host so its controller is the real one, then attaches a fresh subscription. */
+  const attachRealController = async (subscriptionEpoch: string, preference?: QualityPreference) => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    FakeSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeSocket);
+    await act(async () => root.unmount());
+    streamState.useRealController = true;
+    root = createRoot(container);
+    await render();
+    if (preference) setQualityPreference(tuple, preference);
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+    mintTickets.mockResolvedValueOnce(credentialsFor(subscriptionEpoch));
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "live" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+    const media = FakeSocket.instances.find((s) => s.url.endsWith("/media"));
+    const control = FakeSocket.instances.find((s) => s.url.endsWith("/control"));
+    expect(media, "real controller opened its media socket").toBeDefined();
+    expect(control, "real controller opened its control socket").toBeDefined();
+    streamState.realResetCalls = 0; // only retirements of THIS acquisition are counted
+    return { media: media!, control: control! };
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("first media-open payload carries the stored preference and the host's pre-attach mute", async () => {
+    const { media } = await attachRealController("sub-real-first-open", "high");
+    expect(media.sent, "nothing is sent before the media socket opens").toEqual([]);
+
+    await act(async () => media.serverOpen());
+
+    const payload = media.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    expect(payload[0]).toMatchObject({
+      kind: "qualityPreference",
+      subscriptionEpoch: "sub-real-first-open",
+      preference: "high",
+    });
+    // Visible, live, not locally muted: the host derived unmuted BEFORE attach.
+    expect(payload[1]).toMatchObject({
+      kind: "muteState",
+      subscriptionEpoch: "sub-real-first-open",
+      muted: false,
+    });
+    expect(payload).toHaveLength(2);
+  });
+
+  it("a real media socket closing before it ever opened clears diagnostics exactly once and keeps the preference", async () => {
+    const { media, control } = await attachRealController("sub-real-close-before-open");
+    setQualityPreference(tuple, "high");
+    expect(getStreamQuality(tuple).pending).toBe(true);
+    expect(streamState.realResetCalls).toBe(0);
+
+    await act(async () => media.serverClose());
+
+    expect(streamState.realResetCalls).toBe(1);
+    expect(readTab("tab-1").phase).toBe("live");
+    expect(getStreamQuality(tuple).status).toBeNull();
+    expect(getStreamQuality(tuple).ackedPreference).toBeNull();
+    expect(getStreamQuality(tuple).pending).toBe(false);
+    expect(getStreamQuality(tuple).preference).toBe("high");
+
+    // The mate socket retiring afterwards is the same acquisition: no second clear.
+    await act(async () => control.serverClose());
+    expect(streamState.realResetCalls).toBe(1);
+  });
+
+  it("an opened real media socket error then close clears once; a control-only close clears once", async () => {
+    const first = await attachRealController("sub-real-open-close");
+    await act(async () => first.media.serverOpen());
+    await deliverEffectiveQuality(first.media, "sub-real-open-close");
+    expect(getStreamQuality(tuple).status?.status).toBe("effective");
+
+    await act(async () => {
+      first.media.onerror?.(new Event("error"));
+      first.media.serverClose();
+    });
+    expect(streamState.realResetCalls).toBe(1);
+    expect(getStreamQuality(tuple).status).toBeNull();
+
+    // New acquisition whose CONTROL socket closes first retires diagnostics once as well.
+    const second = await attachRealController("sub-real-control-close");
+    await act(async () => second.media.serverOpen());
+    await deliverEffectiveQuality(second.media, "sub-real-control-close");
+    expect(getStreamQuality(tuple).status?.status).toBe("effective");
+    await act(async () => second.control.serverClose());
+    expect(streamState.realResetCalls).toBe(1);
+    expect(getStreamQuality(tuple).status).toBeNull();
+    await act(async () => second.media.serverClose());
+    expect(streamState.realResetCalls).toBe(1);
+  });
+
+  it("delivers docEpoch 1 audio chunks on first attach without retiring docEpoch 1 when viewerId updates", async () => {
+    const uuidSess = "12345678-1234-4234-8234-123456789abc";
+    const uuidInc = "abcdef01-2345-4678-8901-234567890abc";
+    const uuidSnap: BrowserSessionDto = {
+      ...snapshot,
+      browserSessionId: uuidSess,
+      browserIncarnation: uuidInc,
+      navigationRevision: "1",
+    };
+    getSession.mockResolvedValue(uuidSnap);
+    patchTabInTest("tab-1", {
+      sessionId: uuidSess,
+      snapshot: uuidSnap,
+    });
+    const { media } = await attachRealController("sub-real-first-audio");
+    pcmPlayerMocks.enqueue.mockClear();
+    await act(async () => media.serverOpen());
+
+    const chunk: BrowserAudioChunk = {
+      kind: "audioChunk",
+      browserSessionId: uuidSess,
+      browserIncarnation: uuidInc,
+      profileEpoch: String(uuidSnap.profileEpoch),
+      audioRun: "11111111-2222-4333-8444-555555555555",
+      subscriptionEpoch: "sub-real-first-audio",
+      docEpoch: "1",
+      audioSeq: "1",
+      sampleRate: 24000,
+      channels: 1,
+      encoding: "pcm16le",
+      data: "AAAAAA==",
+    };
+    await act(async () => media.onmessage?.({ data: JSON.stringify(chunk) } as MessageEvent));
+    expect(pcmPlayerMocks.enqueue).toHaveBeenCalledExactlyOnceWith("AAAAAA==");
+  });
+});

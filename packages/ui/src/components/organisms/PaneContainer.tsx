@@ -455,11 +455,7 @@ export const PaneContainer = memo(function PaneContainer({
 
     observer.observe(container);
     return () => observer.disconnect();
-  }, [
-    node.activeSessionId,
-    attachGate?.revision,
-    resolveTerminal,
-  ]);
+  }, [node.activeSessionId, attachGate?.revision, resolveTerminal]);
 
   // ── derive tab entries for this pane ────────────────────────────────────
   const paneTabs = node.sessionIds
@@ -532,6 +528,7 @@ export const PaneContainer = memo(function PaneContainer({
         <div className="w-full shrink-0">
           <TerminalScrollButtons
             sessionId={node.activeSessionId}
+            resolveTerminal={resolveTerminal}
             reserveAccessoryRail={false}
             accessoryPanelOpen={false}
           />

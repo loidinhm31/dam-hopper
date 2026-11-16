@@ -2,18 +2,27 @@ import { useCallback, useEffect, useState } from "react";
 import { X, Layers, FolderGit2, ListTodo, AlertCircle } from "lucide-react";
 import type { ConnectionRef } from "@/api/ownership.js";
 import type { ProjectTargetRef } from "@/api/client.js";
-import type {
-  ItemDto,
-  ItemKind,
-  ItemOverviewNodeDto,
-  ItemStatus,
-  LinkDto,
-  NoteDto,
-  ProjectDto,
-  ResourceLinkType,
-  SessionDto,
+import {
+  formatWorkflowTargetLabel,
+  GLOBAL_WORKSPACE_PROJECT,
+  type ItemDto,
+  type ItemKind,
+  type ItemOverviewNodeDto,
+  type ItemStatus,
+  type LinkDto,
+  type NoteDto,
+  type ProjectDto,
+  type ResourceLinkType,
+  type SessionDto,
 } from "@/api/workflow-dto-types.js";
 import { Button } from "@/components/atoms/Button.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/Select.js";
 import { WorkflowExecutionList } from "@/components/molecules/WorkflowExecutionList.js";
 import { WorkflowItemList } from "@/components/molecules/WorkflowItemList.js";
 import { WorkflowProjectList } from "@/components/molecules/WorkflowProjectList.js";
@@ -29,6 +38,11 @@ export interface WorkflowContextDeckProps {
   onCloseAutoFocus?: () => void;
   target?: ProjectTargetRef | null;
   projects: ProjectDto[];
+  configuredProjects?: Array<{ name: string }>;
+  variant?: "deck" | "window";
+  mutationTarget?: ProjectTargetRef;
+  quickCaptureTarget?: ProjectTargetRef;
+  targetOptions?: ProjectTargetRef[];
   plans: ItemOverviewNodeDto[];
   standaloneTasks: ItemOverviewNodeDto[];
   sessions: SessionDto[];
@@ -91,6 +105,11 @@ export function WorkflowContextDeck({
   onCloseAutoFocus,
   target,
   projects,
+  configuredProjects = [],
+  variant = "deck",
+  mutationTarget,
+  quickCaptureTarget,
+  targetOptions,
   plans,
   standaloneTasks,
   sessions,
@@ -138,7 +157,7 @@ export function WorkflowContextDeck({
   }, [onClose, onCloseAutoFocus]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || variant === "window") return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -147,40 +166,75 @@ export function WorkflowContextDeck({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, handleClose]);
+  }, [isOpen, variant, handleClose]);
 
   if (!isOpen) return null;
 
-  const effectiveTarget = selectedTarget ?? target ?? { project: "default" };
-  const rawRealTarget = selectedTarget ?? target ?? null;
+  const displayTarget =
+    selectedTarget !== undefined ? selectedTarget : (target ?? null);
+  const effectiveTarget =
+    mutationTarget ??
+    (displayTarget && displayTarget.project !== "default"
+      ? displayTarget
+      : { project: "default" });
   const realTarget =
-    rawRealTarget &&
-    rawRealTarget.project &&
-    rawRealTarget.project !== "default"
-      ? rawRealTarget
+    displayTarget &&
+    displayTarget.project &&
+    displayTarget.project !== "default"
+      ? displayTarget
       : null;
+  const effectiveFileTarget =
+    realTarget ??
+    (variant === "window"
+      ? {
+          ...(owner?.profileId ? { profileId: owner.profileId } : {}),
+          project: GLOBAL_WORKSPACE_PROJECT,
+        }
+      : null);
 
-  const dashboardKey = realTarget
-    ? `${owner?.profileId ?? "none"}:${owner?.generation ?? 0}:${realTarget.project}:${realTarget.worktreePath ?? ""}`
+  const dashboardKey = effectiveFileTarget
+    ? `${owner?.profileId ?? "none"}:${owner?.generation ?? 0}:${effectiveFileTarget.project}:${effectiveFileTarget.worktreePath ?? ""}`
     : "no-target";
+
+  const showSpaceSidebarInFiles =
+    variant === "window" || configuredProjects.length > 0;
+
+  const compactSpaceSelectValue =
+    displayTarget === null
+      ? "__all__"
+      : displayTarget.project;
+
+  const compactProjectNames = Array.from(
+    new Set([
+      ...configuredProjects.map((c) => c.name),
+      ...projects
+        .map((p) => p.project)
+        .filter((name) => name !== GLOBAL_WORKSPACE_PROJECT),
+    ]),
+  );
 
   return (
     <section
       id="workflow-context-deck"
       role="region"
       aria-label="Workflow Context Deck"
-      className="relative z-10 flex h-[min(70dvh,720px)] min-h-[320px] max-h-[720px] w-full flex-col border-b border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
+      className={cn(
+        "relative z-10 flex w-full flex-col bg-[var(--color-surface)]",
+        variant === "window"
+          ? "h-full"
+          : "h-[min(70dvh,720px)] min-h-[320px] max-h-[720px] border-b border-[var(--color-border)] shadow-lg",
+      )}
     >
       <div className="flex h-9 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3 text-xs">
-        <div className="flex items-center gap-3 font-medium text-[var(--color-text)]">
-          <div className="flex items-center gap-2">
-            <Layers className="h-3.5 w-3.5 text-[var(--color-primary)]" />
-            <span>Workflow Deck</span>
-            {effectiveTarget && (
-              <span className="rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)]">
-                {effectiveTarget.project}
-              </span>
-            )}
+        <div className="flex items-center gap-3 font-medium text-[var(--color-text)] min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]" />
+            <span className="truncate">
+              {variant === "window" ? "Workflow & Plans" : "Workflow Deck"}
+            </span>
+            <span className="rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)] truncate max-w-[140px]">
+              {formatWorkflowTargetLabel(displayTarget)}
+            </span>
           </div>
 
           <div
@@ -220,50 +274,106 @@ export function WorkflowContextDeck({
             </button>
           </div>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={handleClose}
-          aria-label="Close workflow deck"
-          className="h-6 w-6 p-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
+        {variant !== "window" && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={handleClose}
+            aria-label="Close workflow deck"
+            className="h-6 w-6 p-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        )}
       </div>
+
+      {/* Compact space switcher for narrow / floating windows (< lg) */}
+      {(variant === "window" || configuredProjects.length > 0) && (
+        <div className="flex lg:hidden shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 py-1.5 bg-[var(--color-surface-2)]/30 text-xs">
+          <span className="text-[11px] font-medium text-[var(--color-text-muted)] shrink-0">
+            Space:
+          </span>
+          <Select
+            value={
+              activeMode === "files" && compactSpaceSelectValue === "__all__"
+                ? GLOBAL_WORKSPACE_PROJECT
+                : compactSpaceSelectValue
+            }
+            onValueChange={(val) => {
+              if (val === "__all__") {
+                onSelectTarget(null);
+              } else {
+                onSelectTarget({ project: val });
+              }
+            }}
+          >
+            <SelectTrigger className="h-7 text-xs flex-1 max-w-[260px]" aria-label="Select workflow space">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {activeMode === "manual" && (
+                <SelectItem value="__all__">All Projects</SelectItem>
+              )}
+              <SelectItem value={GLOBAL_WORKSPACE_PROJECT}>
+                General (Global Workspace)
+              </SelectItem>
+              {compactProjectNames.map((name) => (
+                <SelectItem key={name} value={name}>
+                  {name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       {/* File plans view (kept mounted to preserve state) */}
       <div
         className={cn(
           "flex-1 min-h-0 overflow-hidden",
+          showSpaceSidebarInFiles && "flex gap-3 p-3",
           activeMode !== "files" && "hidden",
         )}
       >
-        {realTarget ? (
-          <ProjectPlansDashboard
-            key={dashboardKey}
-            owner={owner}
-            target={realTarget}
-            enabled={isOpen && activeMode === "files"}
-          />
-        ) : (
-          <div
-            role="status"
-            className="flex flex-col items-center justify-center h-full p-6 text-center gap-2 text-xs text-[var(--color-text-muted)]"
-          >
-            <FolderGit2 className="h-7 w-7 opacity-60" />
-            <span className="font-medium text-[var(--color-text)]">
-              No configured project selected
-            </span>
-            <p className="max-w-sm">
-              Select a configured project or worktree to browse its{" "}
-              <code className="bg-[var(--color-surface-2)] px-1 rounded">
-                plans/
-              </code>{" "}
-              folder.
-            </p>
+        {showSpaceSidebarInFiles && (
+          <div className="hidden lg:block w-[220px] shrink-0 h-full overflow-hidden border-r border-[var(--color-border)]/60 pr-3">
+            <WorkflowProjectList
+              projects={projects}
+              configuredProjects={configuredProjects}
+              selectedTarget={effectiveFileTarget}
+              onSelectTarget={onSelectTarget}
+              showAllOption={false}
+            />
           </div>
         )}
+        <div className="flex-1 min-w-0 h-full overflow-hidden">
+          {effectiveFileTarget ? (
+            <ProjectPlansDashboard
+              key={dashboardKey}
+              owner={owner}
+              target={effectiveFileTarget}
+              enabled={isOpen && activeMode === "files"}
+            />
+          ) : (
+            <div
+              role="status"
+              className="flex flex-col items-center justify-center h-full p-6 text-center gap-2 text-xs text-[var(--color-text-muted)]"
+            >
+              <FolderGit2 className="h-7 w-7 opacity-60" />
+              <span className="font-medium text-[var(--color-text)]">
+                No configured project selected
+              </span>
+              <p className="max-w-sm">
+                Select a configured project or worktree to browse its{" "}
+                <code className="bg-[var(--color-surface-2)] px-1 rounded">
+                  plans/
+                </code>{" "}
+                folder.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Manual tracking view (kept mounted to preserve drafts) */}
@@ -317,7 +427,8 @@ export function WorkflowContextDeck({
               <div className="hidden h-full overflow-hidden border-r border-[var(--color-border)]/60 pr-3 lg:block">
                 <WorkflowProjectList
                   projects={projects}
-                  selectedTarget={selectedTarget}
+                  configuredProjects={configuredProjects}
+                  selectedTarget={displayTarget}
                   onSelectTarget={onSelectTarget}
                 />
               </div>
@@ -325,7 +436,8 @@ export function WorkflowContextDeck({
               <div className="h-full overflow-hidden border-r border-[var(--color-border)]/60 pr-3">
                 {isQuickCaptureOpen && onCreateItem ? (
                   <WorkflowQuickCapture
-                    target={effectiveTarget}
+                    target={quickCaptureTarget ?? effectiveTarget}
+                    targetOptions={quickCaptureParentId ? undefined : targetOptions}
                     initialKind={quickCaptureKind}
                     initialParentId={quickCaptureParentId}
                     onSubmit={async (item) => {

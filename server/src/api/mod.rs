@@ -6,6 +6,7 @@ pub mod auth;
 pub mod auth_mfa;
 pub mod auth_sessions;
 pub mod browser_debug;
+pub mod browser_host;
 pub mod commands;
 pub mod config;
 pub mod diagnostics;

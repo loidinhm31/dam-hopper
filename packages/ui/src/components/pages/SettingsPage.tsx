@@ -18,6 +18,7 @@ import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppear
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
 import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
 import { SettingsIdleSuspendTimingSection } from "@/components/organisms/SettingsIdleSuspendTimingSection.js";
+import { SettingsHostBrowserSection } from "@/components/organisms/SettingsHostBrowserSection.js";
 import { SettingsSectionAccordion } from "@/components/pages/settings-page/SettingsSectionAccordion.js";
 import { SettingsMaintenancePanel } from "@/components/pages/settings-page/SettingsMaintenancePanel.js";
 import { SettingsImportExportPanel } from "@/components/pages/settings-page/SettingsImportExportPanel.js";
@@ -527,6 +528,24 @@ export function SettingsPage({
               </div>
             )}
           </div>
+        </SettingsSectionAccordion>
+        <SettingsSectionAccordion
+          title="Host Browser"
+          description="Run a server-side Chromium for the Browser app. Any change, including a new executable or profile on a running host, needs a server restart."
+        >
+          <SettingsHostBrowserSection
+            config={config}
+            isLoading={isLoading}
+            owner={targetOwner}
+            targetReady={isTargetReady}
+            updateConfig={updateConfig}
+            isSaving={isPending}
+            targetLabel={
+              targetProfile
+                ? `${targetProfile.name} (${targetSnapshot?.serverUrl || targetProfile.url})`
+                : undefined
+            }
+          />
         </SettingsSectionAccordion>
 
 

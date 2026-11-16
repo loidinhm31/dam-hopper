@@ -1,4 +1,8 @@
-import { getConnectionSnapshot } from "@/api/connections.js";
+import {
+  getAllConnectionSnapshots,
+  getConnectionSnapshot,
+} from "@/api/connections.js";
+import { getActiveProfile } from "@/api/server-config.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import type { FsTargetRef } from "@/api/ownership.js";
 import { getBrowserShortcutSuppression } from "@/lib/browser-shortcut-guard.js";
@@ -75,6 +79,24 @@ export function getEditorContextForWindow(windowId: string): ActionContext | und
   };
 }
 
+const windowActionContextProviders = new Map<string, () => ActionContext | undefined>();
+
+export function registerWindowActionContext(
+  windowId: string,
+  provider: () => ActionContext | undefined,
+): () => void {
+  windowActionContextProviders.set(windowId, provider);
+  return () => {
+    if (windowActionContextProviders.get(windowId) === provider) {
+      windowActionContextProviders.delete(windowId);
+    }
+  };
+}
+
+export function getWindowActionContext(windowId: string): ActionContext | undefined {
+  return windowActionContextProviders.get(windowId)?.();
+}
+
 // ============================================================================
 // Shell Delegate Registration (Architecture Contract C5)
 // ============================================================================
@@ -124,7 +146,45 @@ export function setCognitoPhysicalPolicy(handler: CognitoPhysicalPolicyHandler |
 
 const doubleShiftDetector = new DoubleShiftDetector();
 
-function resolveActiveActionContext(
+function resolveConnectedOwner(preferredProfileId?: string | null): {
+  profileId: string;
+  owner: ConnectionRef | null;
+} {
+  if (preferredProfileId) {
+    try {
+      const snap = getConnectionSnapshot(preferredProfileId);
+      if (snap && snap.status === "connected") {
+        return { profileId: preferredProfileId, owner: snap.owner };
+      }
+    } catch {
+      // Fall back gracefully
+    }
+  }
+
+  if (!preferredProfileId || preferredProfileId === "default") {
+    try {
+      const activeProfile = getActiveProfile();
+      if (activeProfile?.id) {
+        const snap = getConnectionSnapshot(activeProfile.id);
+        if (snap && snap.status === "connected") {
+          return { profileId: snap.owner.profileId, owner: snap.owner };
+        }
+      }
+      const connected = getAllConnectionSnapshots().find(
+        (snap) => snap.status === "connected",
+      );
+      if (connected) {
+        return { profileId: connected.owner.profileId, owner: connected.owner };
+      }
+    } catch {
+      // Fall back gracefully
+    }
+  }
+
+  return { profileId: preferredProfileId || "", owner: null };
+}
+
+export function resolveActiveActionContext(
   delegate: ShellInputDelegate | null,
 ): ActionContext {
   const session = useWindowStore.getState().session;
@@ -140,48 +200,68 @@ function resolveActiveActionContext(
       const editorCtx = getEditorContextForWindow(activeWindow.id);
       if (editorCtx) return editorCtx;
     }
-    const profileId = activeWindow.ctx.profileId;
-    let owner: ConnectionRef | null = null;
-    if (profileId) {
-      try {
-        const snap = getConnectionSnapshot(profileId);
-        if (snap && snap.status === "connected") {
-          owner = snap.owner;
-        }
-      } catch {
-        // Fall back gracefully
-      }
-    }
+    const providedCtx = getWindowActionContext(activeWindow.id);
+    if (providedCtx) return providedCtx;
+
+    const { profileId, owner } = resolveConnectedOwner(activeWindow.ctx.profileId);
+    const hasExplicitTarget =
+      Boolean(activeWindow.ctx.worktreeId) ||
+      Boolean(activeWindow.ctx.projectId) ||
+      Boolean(activeWindow.ctx.target);
+    const fallbackTarget: FsTargetRef | undefined =
+      !hasExplicitTarget && owner && profileId
+        ? { kind: "workspace", profileId }
+        : activeWindow.ctx.target;
+    const windowContext: WindowContext = {
+      ...activeWindow.ctx,
+      profileId,
+      ...(fallbackTarget ? { target: fallbackTarget } : {}),
+    };
     return {
       kind: "running-window",
       desktopId: activeWindow.desktopId,
       windowId: activeWindow.id,
-      windowContext: activeWindow.ctx,
+      windowContext,
       runtimeIdentity: activeWindow.runtimeIdentity,
       owner,
-      target: activeWindow.ctx.target,
+      target: fallbackTarget,
     };
   }
 
-  const desktopCtx = activeDesk?.defaultCtx ?? { profileId: "default" };
-  let owner: ConnectionRef | null = null;
-  if (desktopCtx.profileId) {
-    try {
-      const snap = getConnectionSnapshot(desktopCtx.profileId);
-      if (snap && snap.status === "connected") {
-        owner = snap.owner;
-      }
-    } catch {
-      // Fall back gracefully
+  // If no window is explicitly focused, check if the active desktop has a single
+  // visible window with a registered context provider (e.g., only Files or Agent Hub open).
+  const visibleDesktopWindows = Object.values(session.windows).filter(
+    (w) => w.desktopId === activeDesktopId && !w.minimized,
+  );
+  if (visibleDesktopWindows.length === 1) {
+    const soleWin = visibleDesktopWindows[0];
+    if (soleWin.appId === "editor") {
+      const editorCtx = getEditorContextForWindow(soleWin.id);
+      if (editorCtx) return editorCtx;
     }
+    const providedCtx = getWindowActionContext(soleWin.id);
+    if (providedCtx) return providedCtx;
   }
+
+  const rawDesktopCtx = activeDesk?.defaultCtx;
+  const { profileId, owner } = resolveConnectedOwner(rawDesktopCtx?.profileId);
+  const effectiveProfileId = profileId || rawDesktopCtx?.profileId || "default";
+  const target: FsTargetRef | undefined =
+    owner && effectiveProfileId
+      ? { kind: "workspace", profileId: effectiveProfileId }
+      : undefined;
+
+  const desktopCtx: WindowContext = {
+    profileId: effectiveProfileId,
+    ...(target ? { target } : {}),
+  };
 
   return {
     kind: "desktop",
     desktopId: activeDesktopId,
     windowContext: desktopCtx,
     owner,
-    target: desktopCtx.target,
+    target,
   };
 }
 

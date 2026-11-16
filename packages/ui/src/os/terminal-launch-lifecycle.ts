@@ -5,7 +5,12 @@ import {
   type ConnectionSnapshot,
 } from "@/api/connections.js";
 import { ApiRequestError } from "@/api/client.js";
-import type { ConnectionRef, FsTargetRef, ServerFsTarget } from "@/api/ownership.js";
+import {
+  toServerFsTarget,
+  type ConnectionRef,
+  type FsTargetRef,
+  type ServerFsTarget,
+} from "@/api/ownership.js";
 import {
   createTerminalTargetFromObservation,
   isCanonicalPositiveU64,
@@ -24,6 +29,53 @@ import {
   type LaunchIdentityParams,
   type ReserveLaunchResult,
 } from "./persistence.js";
+
+/**
+ * Resolves terminal creation target, project, and working-directory parameters
+ * from an OS window or intent context.
+ *
+ * Workspace-scoped targets without an explicit folder or target-root intent
+ * represent generic profile-default launches; omitting `wireTarget` lets the
+ * server use `workspace.root` when configured and fall back to its untargeted
+ * default CWD instead of failing closed with 400/403 when `workspace.root` is
+ * unconfigured.
+ */
+export function resolveTerminalCreateParams(input: {
+  target?: FsTargetRef;
+  projectId?: string;
+  cwd?: string | null;
+  directoryKind?: string;
+}): {
+  wireTarget: ServerFsTarget | undefined;
+  project: string | undefined;
+  cwd: string | undefined;
+} {
+  const rawCwd =
+    typeof input.cwd === "string" && input.cwd.length > 0 ? input.cwd : undefined;
+  if (input.target?.kind !== "workspace") {
+    return {
+      wireTarget: input.target ? toServerFsTarget(input.target) : undefined,
+      project: input.projectId,
+      cwd: rawCwd,
+    };
+  }
+  const isExplicitWorkspaceFolder =
+    input.directoryKind === "explicit-folder" ||
+    input.directoryKind === "target-root" ||
+    rawCwd !== undefined;
+  if (!isExplicitWorkspaceFolder) {
+    return {
+      wireTarget: undefined,
+      project: undefined,
+      cwd: undefined,
+    };
+  }
+  return {
+    wireTarget: toServerFsTarget(input.target),
+    project: undefined,
+    cwd: rawCwd ?? ".",
+  };
+}
 
 export function buildTerminalLaunchIdentity(input: {
   profileId: string;

@@ -28,7 +28,7 @@ Both root `/` and `/os` route directly to `OsShell` via `AuthenticatedOsRoute`. 
 | `deploy/release/`          | Linux systemd and Windows release packaging, installers, and service templates                                    |
 ## Requirements
 
-- Node.js 22.13.0 or newer (Node.js 24 recommended) and pnpm 10 or newer for development workflows (release installations use self-contained native binaries without Node.js).
+- Node.js 26.13.0 or newer and pnpm 10 or newer for development workflows (release installations use self-contained native binaries without Node.js).
 - Current stable Rust toolchain (container builder pinned to 1.97.1) for server builds.
 
 ## Port & Network Topology

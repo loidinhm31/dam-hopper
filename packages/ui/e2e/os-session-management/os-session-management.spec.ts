@@ -114,11 +114,25 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     const termFrame = page.locator("[data-os-window-frame]").first();
     await expect(termFrame).toBeVisible({ timeout: 15_000 });
 
-    // Focus terminal surface and start byte oracle
+    // Focus terminal surface and start byte oracle once initial attach/replay has completed
     const textarea = termFrame.locator(".xterm-helper-textarea").first();
     await expect(textarea).toBeAttached({ timeout: 15_000 });
+    await expect
+      .poll(
+        async () => {
+          const entries = await observer.getDiagnosticEntries();
+          return entries.some(
+            (e) =>
+              e.scope === "terminal-panel" &&
+              e.message === "buffer_replay_complete",
+          );
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await expect(textarea).toHaveAttribute("tabindex", "0", { timeout: 15_000 });
     await textarea.focus();
-    await page.waitForTimeout(500);
+    await expect(textarea).toBeFocused({ timeout: 5_000 });
 
     // Start od byte inspector in raw no-echo mode with single-byte width (-w1)
     await page.keyboard.type("clear; stty raw -echo; od -An -v -tx1 -w1\n", { delay: 20 });
