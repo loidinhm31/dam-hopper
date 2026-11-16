@@ -49,7 +49,7 @@ pub async fn update_config(
 
     // Read existing TOML to preserve unrepresented sections
     let mut doc = read_toml_value(&config_path)?;
-    let tv = json_to_toml(&body).ok_or_else(|| {
+    let tv = crate::config::global::json_to_toml(&body).ok_or_else(|| {
         ApiError::from_app(AppError::InvalidInput("Cannot convert JSON to TOML".into()))
     })?;
     if let (Some(doc_table), Some(new_table)) = (doc.as_table_mut(), tv.as_table()) {
@@ -61,6 +61,7 @@ pub async fn update_config(
     } else {
         doc = tv;
     }
+    crate::config::global::normalize_config_toml_value(&mut doc);
     let toml_str = toml::to_string_pretty(&doc)
         .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
     let candidate = crate::config::parse_config_str_at_path(&toml_str, &config_path)
@@ -635,6 +636,7 @@ pub(crate) fn merge_global_ui_config(
     let mut merged = serde_json::to_value(existing.unwrap_or_default())
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let mut incoming = incoming.clone();
+    crate::config::global::normalize_ui_json_keys(&mut incoming);
     crate::config::schema::migrate_terminal_agent_notifications(&mut incoming);
     if let (Some(base_policy), Some(patch_policy)) = (
         merged.pointer_mut("/terminalAgentNotifications"),
@@ -697,6 +699,7 @@ pub(crate) fn merge_global_ui_config(
         }
     }
 
+    crate::config::global::normalize_ui_json_keys(&mut merged);
     merge_json_objects(&mut merged, &incoming);
     let new_ui: crate::config::schema::UiConfig = serde_json::from_value(merged)
         .map_err(|e| AppError::InvalidInput(format!("Invalid UI config: {e}")))?;
@@ -993,11 +996,25 @@ fn patch_project(doc: &mut toml::Value, name: &str, patch: &Value) -> Result<(),
     })?;
 
     if let (toml::Value::Table(tbl), Value::Object(patch_map)) = (proj, patch) {
+        // Apply camelCase-converted keys before canonical snake_case keys so
+        // canonical snake_case deterministically wins if both are provided.
+        let mut converted = Vec::new();
+        let mut canonical = Vec::new();
         for (k, v) in patch_map {
-            let toml_key = project_json_key_to_toml(k);
-            let normalized_value = normalize_project_field_value_for_toml(toml_key, v);
+            let toml_key = crate::config::global::project_key_to_snake(k);
+            let mut normalized_value = v.clone();
+            if toml_key == "services" {
+                crate::config::global::normalize_services_json_for_toml(&mut normalized_value);
+            }
+            if toml_key != k {
+                converted.push((toml_key, normalized_value));
+            } else {
+                canonical.push((toml_key, normalized_value));
+            }
+        }
+        for (toml_key, normalized_value) in converted.into_iter().chain(canonical) {
             remove_project_key_aliases(tbl, toml_key);
-            match json_to_toml(&normalized_value) {
+            match crate::config::global::json_to_toml(&normalized_value) {
                 Some(tv) => {
                     tbl.insert(toml_key.to_string(), tv);
                 }
@@ -1011,75 +1028,26 @@ fn patch_project(doc: &mut toml::Value, name: &str, patch: &Value) -> Result<(),
 }
 
 fn normalize_config_json_for_toml(value: &mut Value) {
+    if let Some(root) = value.as_object_mut() {
+        if !root.contains_key("agent_store") {
+            if let Some(agent_store) = root.remove("agentStore") {
+                root.insert("agent_store".to_string(), agent_store);
+            }
+        } else {
+            root.remove("agentStore");
+        }
+    }
     if let Some(projects) = value.get_mut("projects").and_then(Value::as_array_mut) {
         for project in projects {
-            normalize_project_json_for_toml(project);
+            crate::config::global::normalize_project_json_for_toml(project);
         }
     }
-    if let Some(server) = value.get_mut("server").and_then(Value::as_object_mut) {
-        if let Some(sc) = server.remove("sessionChangesEnabled") {
-            server.insert("session_changes_enabled".to_string(), sc);
-        }
+    if let Some(server) = value.get_mut("server") {
+        crate::config::global::normalize_server_json_for_toml(server);
     }
-}
-
-fn normalize_project_json_for_toml(value: &mut Value) {
-    let Some(project) = value.as_object_mut() else {
-        return;
-    };
-
-    let entries = std::mem::take(project);
-    for (key, value) in entries {
-        let toml_key = project_json_key_to_toml(&key).to_string();
-        project.insert(
-            toml_key.clone(),
-            normalize_project_field_value_for_toml(&toml_key, &value),
-        );
+    if let Some(ui) = value.get_mut("ui") {
+        crate::config::global::normalize_ui_json_for_toml(ui);
     }
-}
-
-fn project_json_key_to_toml(key: &str) -> &str {
-    match key {
-        "envFile" => "env_file",
-        "restartPolicy" => "restart",
-        "restartMaxRetries" => "restart_max_retries",
-        "healthCheckUrl" => "health_check_url",
-        other => other,
-    }
-}
-
-fn normalize_project_field_value_for_toml(key: &str, value: &Value) -> Value {
-    if key == "services" {
-        return normalize_services_for_toml(value);
-    }
-    value.clone()
-}
-
-fn normalize_services_for_toml(value: &Value) -> Value {
-    let Some(services) = value.as_array() else {
-        return value.clone();
-    };
-
-    Value::Array(
-        services
-            .iter()
-            .map(|service| {
-                let Some(service_obj) = service.as_object() else {
-                    return service.clone();
-                };
-                let mut normalized = serde_json::Map::new();
-                for (key, value) in service_obj {
-                    let toml_key = match key.as_str() {
-                        "buildCommand" => "build_command",
-                        "runCommand" => "run_command",
-                        other => other,
-                    };
-                    normalized.insert(toml_key.to_string(), value.clone());
-                }
-                Value::Object(normalized)
-            })
-            .collect(),
-    )
 }
 
 fn remove_project_key_aliases(tbl: &mut toml::map::Map<String, toml::Value>, toml_key: &str) {
@@ -1092,34 +1060,6 @@ fn remove_project_key_aliases(tbl: &mut toml::map::Map<String, toml::Value>, tom
     };
     for alias in aliases {
         tbl.remove(*alias);
-    }
-}
-
-fn json_to_toml(v: &Value) -> Option<toml::Value> {
-    match v {
-        Value::Null => None,
-        Value::Bool(b) => Some(toml::Value::Boolean(*b)),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(toml::Value::Integer(i))
-            } else {
-                n.as_f64().map(toml::Value::Float)
-            }
-        }
-        Value::String(s) => Some(toml::Value::String(s.clone())),
-        Value::Array(arr) => {
-            let items: Vec<_> = arr.iter().filter_map(json_to_toml).collect();
-            Some(toml::Value::Array(items))
-        }
-        Value::Object(map) => {
-            let mut tbl = toml::map::Map::new();
-            for (k, v) in map {
-                if let Some(tv) = json_to_toml(v) {
-                    tbl.insert(k.clone(), tv);
-                }
-            }
-            Some(toml::Value::Table(tbl))
-        }
     }
 }
 

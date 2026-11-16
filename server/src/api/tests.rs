@@ -7915,3 +7915,161 @@ async fn test_terminal_terminate_success_outcomes_and_domain_refusals() {
 
     state.pty_manager.test_respawn_hook().release();
 }
+
+#[tokio::test]
+async fn config_put_followed_by_global_ui_post_writes_snake_case_without_duplicate_fields() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    // 1. Fetch GET /api/config (returns camelCase ServerConfig) and PUT it back.
+    let get_resp = get(state.clone(), "/api/config").await;
+    assert_eq!(get_resp.status(), StatusCode::OK);
+    let get_body = axum::body::to_bytes(get_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let mut cfg_json: serde_json::Value = serde_json::from_slice(&get_body).unwrap();
+    cfg_json["server"]["sessionBufferTtlHours"] = serde_json::json!(36);
+    cfg_json["server"]["hostResources"]["lightSampleSeconds"] = serde_json::json!(7);
+    cfg_json["server"]["browser"]["budgets"]["maxTargets"] = serde_json::json!(4);
+
+    let put_resp = put_json(state.clone(), "/api/config", cfg_json).await;
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    let written_after_put = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+    assert!(!written_after_put.contains("sessionBufferTtlHours"));
+    assert!(!written_after_put.contains("sessionDbPath"));
+    assert!(!written_after_put.contains("hostResources"));
+    assert!(!written_after_put.contains("lightSampleSeconds"));
+    assert!(!written_after_put.contains("maxTargets"));
+    assert!(written_after_put.contains("session_buffer_ttl_hours = 36"));
+
+    // 2. Call POST /api/global-config/ui twice (must succeed both times).
+    let ui_resp1 = post_json(
+        state.clone(),
+        "/api/global-config/ui",
+        serde_json::json!({ "ui": { "terminalFontSize": 17 } }),
+    )
+    .await;
+    assert_eq!(ui_resp1.status(), StatusCode::OK);
+
+    let ui_resp2 = post_json(
+        state.clone(),
+        "/api/global-config/ui",
+        serde_json::json!({ "ui": { "terminalFontSize": 18 } }),
+    )
+    .await;
+    assert_eq!(ui_resp2.status(), StatusCode::OK);
+    assert_eq!(state.global_config.read().await.server.session_buffer_ttl_hours, 36);
+    assert_eq!(
+        state
+            .global_config
+            .read()
+            .await
+            .ui
+            .as_ref()
+            .unwrap()
+            .terminal_font_size,
+        18
+    );
+}
+
+#[tokio::test]
+async fn global_ui_post_accepts_snake_case_and_mixed_keys_without_duplicate_fields() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let resp = post_json(
+        state.clone(),
+        "/api/global-config/ui",
+        serde_json::json!({
+            "ui": {
+                "terminal_font_size": 19,
+                "editorFontSize": 15,
+                "editor_font_size": 16,
+                "agent_settings_paths": {
+                    "codex_dir": "~/.codex"
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ui = state.global_config.read().await.ui.clone().unwrap();
+    assert_eq!(ui.terminal_font_size, 19);
+    assert_eq!(ui.editor_font_size, 16);
+    assert_eq!(
+        ui.agent_settings_paths.unwrap().codex_dir.as_deref(),
+        Some("~/.codex")
+    );
+
+    let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+    assert!(written.contains("terminal_font_size = 19"));
+    assert!(written.contains("editor_font_size = 16"));
+    assert!(!written.contains("terminalFontSize"));
+    assert!(!written.contains("editorFontSize"));
+}
+
+#[tokio::test]
+async fn settings_import_normalizes_camel_case_toml_to_snake_case() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let imported_toml = r#"
+[workspace]
+name = "test-workspace"
+
+[server]
+sessionBufferTtlHours = 48
+workflowStaleAfterHours = 12
+
+[[projects]]
+name = "test-project"
+path = "."
+type = "custom"
+restartPolicy = "always"
+"#;
+
+    let router = build_router(state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/settings/import/workspace.toml")
+        .header("Cookie", auth_cookie())
+        .header("Content-Type", "application/toml")
+        .body(Body::from(imported_toml))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+    assert!(!written.contains("sessionBufferTtlHours"));
+    assert!(!written.contains("workflowStaleAfterHours"));
+    assert!(!written.contains("restartPolicy"));
+    assert!(written.contains("session_buffer_ttl_hours = 48"));
+    assert!(written.contains("workflow_stale_after_hours = 12"));
+    assert!(written.contains("restart = \"always\""));
+}
+
+#[tokio::test]
+async fn patch_project_prefers_snake_case_when_mixed_and_normalizes_disk_toml() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let resp = patch_json(
+        state.clone(),
+        "/api/config/projects/test-project",
+        serde_json::json!({
+            "restartPolicy": "never",
+            "restart": "always",
+            "healthCheckUrl": "http://localhost:4800/health"
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+    assert!(!written.contains("restartPolicy"));
+    assert!(!written.contains("healthCheckUrl"));
+    assert!(written.contains("restart = \"always\""));
+    assert!(written.contains("health_check_url = \"http://localhost:4800/health\""));
+}

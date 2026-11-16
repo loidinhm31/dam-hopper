@@ -2441,3 +2441,92 @@ allowed_target_origins = ["https://example.com"]
     let cfg_top = read_config(&config_path_top).unwrap();
     assert_eq!(cfg_top.server.browser.allowed_target_origins, vec!["https://example.com"]);
 }
+
+#[test]
+fn global_config_write_normalizes_legacy_camel_case_server_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    std::fs::write(
+        &cfg_path,
+        r#"
+[workspace]
+name = "ws"
+
+[server]
+sessionDbPath = "/tmp/sessions.db"
+sessionBufferTtlHours = 24
+workflowEventRetentionDays = 90
+workflowDeletedNoteRetentionDays = 7
+workflowStaleAfterHours = 24
+sessionChangesEnabled = true
+
+[server.hostResources]
+lightSampleSeconds = 7
+
+[server.browser]
+enabled = false
+executablePath = "/usr/bin/chromium"
+
+[server.browser.budgets]
+maxTargets = 4
+"#,
+    )
+    .unwrap();
+
+    let mut loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
+    loaded.ui = Some(UiConfig {
+        terminal_font_size: 17,
+        ..UiConfig::default()
+    });
+    write_global_config_at(&cfg_path, &loaded).unwrap();
+
+    let written = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(!written.contains("sessionDbPath"));
+    assert!(!written.contains("sessionBufferTtlHours"));
+    assert!(!written.contains("hostResources"));
+    assert!(!written.contains("lightSampleSeconds"));
+    assert!(!written.contains("executablePath"));
+    assert!(!written.contains("maxTargets"));
+    assert!(written.contains("session_buffer_ttl_hours = 24"));
+    assert!(written.contains("session_db_path = \"/tmp/sessions.db\""));
+
+    // Must parse cleanly on subsequent read without duplicate field error.
+    let reloaded = read_global_config_at(&cfg_path).unwrap().unwrap();
+    assert_eq!(reloaded.server.session_buffer_ttl_hours, 24);
+    assert_eq!(reloaded.ui.unwrap().terminal_font_size, 17);
+}
+
+#[test]
+fn config_readers_tolerate_and_heal_mixed_camel_and_snake_server_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    std::fs::write(
+        &cfg_path,
+        r#"
+[workspace]
+name = "ws"
+
+[server]
+sessionDbPath = "/tmp/old.db"
+session_db_path = "/tmp/new.db"
+sessionBufferTtlHours = 24
+session_buffer_ttl_hours = 48
+"#,
+    )
+    .unwrap();
+
+    let global_loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
+    assert_eq!(global_loaded.server.session_db_path, "/tmp/new.db");
+    assert_eq!(global_loaded.server.session_buffer_ttl_hours, 48);
+
+    let full_loaded = read_config(&cfg_path).unwrap();
+    assert_eq!(full_loaded.server.session_db_path, "/tmp/new.db");
+    assert_eq!(full_loaded.server.session_buffer_ttl_hours, 48);
+
+    write_global_config_at(&cfg_path, &global_loaded).unwrap();
+    let written = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(!written.contains("sessionDbPath"));
+    assert!(!written.contains("sessionBufferTtlHours"));
+    assert!(written.contains("session_db_path = \"/tmp/new.db\""));
+    assert!(written.contains("session_buffer_ttl_hours = 48"));
+}

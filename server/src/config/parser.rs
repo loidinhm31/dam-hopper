@@ -28,7 +28,11 @@ pub fn parse_config_str_at_path(
     content: &str,
     file_path: &Path,
 ) -> Result<DamHopperConfig, AppError> {
-    let raw: DamHopperConfigRaw = toml::from_str(content)
+    let mut doc: toml::Value = toml::from_str(content)
+        .map_err(|e| AppError::Config(format!("Invalid TOML in {}: {}", file_path.display(), e)))?;
+    super::global::normalize_config_toml_value(&mut doc);
+    let raw: DamHopperConfigRaw = doc
+        .try_into()
         .map_err(|e| AppError::Config(format!("Invalid TOML in {}: {}", file_path.display(), e)))?;
 
     validate_config(&raw)?;
@@ -412,6 +416,7 @@ fn build_raw_toml(
 
     let serialized_server = server_to_toml(&config.server);
     if let Some(existing_server) = map.get_mut("server").and_then(|t| t.as_table_mut()) {
+        super::global::normalize_server_toml_table(existing_server);
         existing_server.remove("advisor");
         if !config.server.session_changes_enabled {
             existing_server.remove("session_changes_enabled");

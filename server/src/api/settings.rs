@@ -223,6 +223,7 @@ pub async fn import_workspace_settings(
             }
         }
     }
+    crate::config::global::normalize_config_toml_value(&mut imported_doc);
     let merged_toml_str = toml::to_string_pretty(&imported_doc)
         .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?;
 
