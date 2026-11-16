@@ -2199,6 +2199,75 @@ mod tests {
         assert_eq!(registry.reap_expired_at(late).await, 1);
         assert_eq!(registry.retained_session_count().await, 0);
     }
+
+    #[tokio::test]
+    async fn download_progress_preserves_browser_path_across_pathless_page_updates() {
+        let registry = SessionRegistry::new();
+        let creation_key = Uuid::new_v4().to_string();
+        let req = request(&creation_key, "about:blank");
+        let (session, _) = registry
+            .insert_running_for_test("alice", true, "inc1", 1, &req, &[])
+            .await
+            .unwrap();
+        let session_id = session.browser_session_id;
+        let guid = "download-guid".to_string();
+        let host_path = "/host/Downloads/blob-dl.txt".to_string();
+
+        registry
+            .record_download_will_begin(&session_id, guid.clone(), "blob-dl.txt".to_string())
+            .await;
+        // A Page completion has no filePath on this Chromium event.
+        registry
+            .record_download_progress(
+                &session_id,
+                guid.clone(),
+                "completed".to_string(),
+                1,
+                1,
+                None,
+            )
+            .await;
+        assert!(registry
+            .get_session(&session_id, "alice")
+            .await
+            .unwrap()
+            .last_download
+            .unwrap()
+            .file_path
+            .is_none());
+
+        // The Browser event supplies the host path; a later pathless Page update must preserve it.
+        registry
+            .record_download_progress(
+                &session_id,
+                guid.clone(),
+                "completed".to_string(),
+                1,
+                1,
+                Some(host_path.clone()),
+            )
+            .await;
+        registry
+            .record_download_progress(
+                &session_id,
+                guid,
+                "completed".to_string(),
+                1,
+                1,
+                None,
+            )
+            .await;
+
+        let download = registry
+            .get_session(&session_id, "alice")
+            .await
+            .unwrap()
+            .last_download
+            .unwrap();
+        assert_eq!(download.suggested_filename, "blob-dl.txt");
+        assert_eq!(download.file_path.as_deref(), Some(host_path.as_str()));
+    }
+
 }
 
 #[cfg(test)]

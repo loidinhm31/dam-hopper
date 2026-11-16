@@ -1760,6 +1760,25 @@ pub(crate) async fn ensure_session_navigation_watcher_with_initial(
     .await
 }
 
+fn accept_download_progress_event(
+    active_download_guids: &mut std::collections::HashSet<String>,
+    event_session_id: Option<&str>,
+    page_session_id: &str,
+    guid: &str,
+    state: &str,
+) -> bool {
+    if event_session_id.is_some_and(|sid| sid != page_session_id)
+        || (event_session_id.is_none() && !active_download_guids.contains(guid))
+    {
+        return false;
+    }
+    // Page completion can precede the browser event carrying filePath.
+    if event_session_id.is_none() && state != "inProgress" {
+        active_download_guids.remove(guid);
+    }
+    true
+}
+
 async fn install_navigation_watcher(
     state: &AppState,
     session_id: &str,
@@ -1972,18 +1991,16 @@ async fn install_navigation_watcher(
                             file_path,
                             ..
                         } => {
-                            if evt_sid
-                                .as_deref()
-                                .is_some_and(|sid| sid != page_sid_owned.as_str())
-                            {
+                            if !accept_download_progress_event(
+                                &mut active_download_guids,
+                                evt_sid.as_deref(),
+                                &page_sid_owned,
+                                guid,
+                                state,
+                            ) {
                                 continue;
                             }
-                            if evt_sid.is_none() && !active_download_guids.contains(guid) {
-                                continue;
-                            }
-                            if state != "inProgress" {
-                                active_download_guids.remove(guid);
-                            }
+
                             global_session_registry()
                                 .record_download_progress(
                                     &sid_owned,
@@ -2491,4 +2508,76 @@ mod tests {
         assert!(sel.locator.len() <= MAX_LOCATOR_LENGTH);
         assert!(sel.is_valid());
     }
+
+    #[test]
+    fn download_progress_retains_guid_across_page_first_and_browser_first_events() {
+        let guid = "download-guid";
+        let mut active = std::collections::HashSet::from([guid.to_string()]);
+
+        // Page completion arrives first; retain correlation for Browser completion.
+        assert!(accept_download_progress_event(
+            &mut active,
+            Some("page-1"),
+            "page-1",
+            guid,
+            "completed"
+        ));
+        assert!(active.contains(guid));
+        assert!(accept_download_progress_event(
+            &mut active,
+            None,
+            "page-1",
+            guid,
+            "completed"
+        ));
+        assert!(!active.contains(guid));
+
+        // Browser completion may arrive first; a later page event remains admissible.
+        active.insert(guid.to_string());
+        assert!(accept_download_progress_event(
+            &mut active,
+            None,
+            "page-1",
+            guid,
+            "completed"
+        ));
+        assert!(!active.contains(guid));
+        assert!(accept_download_progress_event(
+            &mut active,
+            Some("page-1"),
+            "page-1",
+            guid,
+            "completed"
+        ));
+    }
+
+    #[test]
+    fn canceled_browser_download_retires_guid_and_unrelated_events_are_ignored() {
+        let guid = "download-guid";
+        let mut active = std::collections::HashSet::from([guid.to_string()]);
+
+        assert!(!accept_download_progress_event(
+            &mut active,
+            Some("other-page"),
+            "page-1",
+            guid,
+            "inProgress"
+        ));
+        assert!(accept_download_progress_event(
+            &mut active,
+            None,
+            "page-1",
+            guid,
+            "canceled"
+        ));
+        assert!(!active.contains(guid));
+        assert!(!accept_download_progress_event(
+            &mut active,
+            None,
+            "page-1",
+            "untracked-guid",
+            "completed"
+        ));
+    }
+
 }

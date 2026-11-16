@@ -1,6 +1,6 @@
 # Phase 03 — Integrated Verification & Architecture Documentation
 
-Priority: P2 · Status: Pending · Effort: 3h · Owner: Integration & Docs owner
+Priority: P2 · Status: Done (2026-11-16 09:04:55 EST) · Effort: 3h · Owner: Integration & Docs owner
 
 ## Context Links
 
@@ -56,6 +56,14 @@ Reconciles Gate 2 architecture documentation with the verified implementation fr
 2. Update `docs/api/browser-host.md` with request/response schemas and security invariants for the DevTools routes and `lastDownload` DTO.
 3. Update `docs/architecture/host-browser-cdp-streaming.md` and `docs/system-architecture.md` with the native Chromium DevTools dock and native host file download architecture.
 
+- Updated the three architecture/API documents. With user authorization, also updated `server/tests/browser_host_devtools.rs` and `server/src/browser_host/selection.rs`: a real Chromium regression exposed that Page completion removed a download GUID before the browser completion event supplied `filePath`; correlation now retains the GUID until the browser event.
+- Previously recorded verification: `cargo test --manifest-path server/Cargo.toml --test browser_host_devtools` passed 5/5, including real Chromium asset, WebSocket and download verification; `cargo test --manifest-path server/Cargo.toml browser_host` passed 149 tests. An earlier broader post-fix attempt timed out during compilation; a subsequent attempt completed.
+- Previously recorded UI verification: `pnpm --filter @dam-hopper/ui test` passed 4050 tests in 405 files and `pnpm --filter @dam-hopper/ui build` passed. The UI test runner reported jsdom navigation warnings. No full-application visual review is claimed.
+- The added `filePath` regression failed before the fix and passed after it. Exact host-path assertion is exercised in the real-Chromium qualification lane when Linux Chromium is installed; CDP documents `filePath` as optional on some platforms.
+- Fresh verification in the finalization session: `cargo test --manifest-path server/Cargo.toml download_progress` passed (2 tests); `cargo test --manifest-path server/Cargo.toml --test browser_host_devtools` passed (5 tests), exercising `/usr/bin/chromium`; `cargo test --manifest-path server/Cargo.toml canceled_browser_download_retires_guid_and_unrelated_events_are_ignored` passed (1 test).
+- Independent code review cycle 2 approved 10/10, with 0 critical issues, 0 warnings, and 0 suggestions. Review fixes added deterministic event-order/cancellation/pathless-path-preservation tests and documented Linux Chromium path qualification.
+- Integrated verification and maintained API/architecture documentation are complete. No visual review was performed or is claimed.
+
 ## Todo List
 
 ```evcrate-tasks
@@ -86,7 +94,7 @@ Reconciles Gate 2 architecture documentation with the verified implementation fr
 ]
 ```
 
-- [ ] <!-- evcrate-task:verify-and-document-browser-devtools --> Run integrated backend/UIVerification and update Browser architecture and API docs
+- [x] <!-- evcrate-task:verify-and-document-browser-devtools --> Run integrated backend/UI verification and update Browser architecture and API docs
 
 ## Success Criteria
 

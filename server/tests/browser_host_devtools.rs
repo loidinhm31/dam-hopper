@@ -843,6 +843,9 @@ async fn test_devtools_ws_enforces_max_concurrent_connections() {
 async fn test_real_chromium_devtools_and_native_host_downloads() {
     let _serial = TEST_SERIAL.lock().await;
     global_session_registry().reset_for_test().await;
+    // The exact filePath assertion below is a real-Chromium qualification lane:
+    // CDP permits filePath to be omitted on other platforms.
+
     let Some(chromium_path) = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]
         .iter()
         .map(PathBuf::from)
@@ -971,6 +974,16 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
     assert!(html_txt.contains("devtools_app"), "must serve real Chromium devtools_app.html");
     assert!(html_txt.contains("'self' ws: wss: ws://127.0.0.1:*"));
 
+    let module = client
+        .get(format!("http://{addr}/api/browser/devtools/{dt_tok}/panels/network/network.js"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(module.status(), StatusCode::OK);
+    assert_eq!(module.headers().get(CACHE_CONTROL).unwrap(), "private, max-age=300");
+    assert!(module.headers().get(CONTENT_TYPE).unwrap().to_str().unwrap().contains("javascript"));
+    assert!(!module.bytes().await.unwrap().is_empty(), "Chromium module must not be empty");
+
     // 2. Connect WS, trigger console log + blocked geometry command
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok}/ws"))
         .await
@@ -1027,13 +1040,22 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
                 .unwrap(),
         )
         .await;
-        if dto.pointer("/lastDownload/state") == Some(&json!("completed")) {
+        if dto.pointer("/lastDownload/state") == Some(&json!("completed"))
+            && dto.pointer("/lastDownload/suggestedFilename") == Some(&json!("blob-dl.txt"))
+            && dto.pointer("/lastDownload/filePath").and_then(Value::as_str)
+                == dl_dir.join("blob-dl.txt").to_str()
+        {
             final_dto = dto;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     assert_eq!(final_dto.pointer("/lastDownload/state"), Some(&json!("completed")));
+    assert_eq!(
+        final_dto.pointer("/lastDownload/filePath").and_then(Value::as_str),
+        dl_dir.join("blob-dl.txt").to_str(),
+        "completed download must report its native host path"
+    );
     assert_eq!(final_dto.get("inputAvailable"), Some(&json!(true)));
 
     drop(ws);

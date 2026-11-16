@@ -8,9 +8,9 @@ For process containment, supervisory death pipes, and binary wire framing (BHJF 
 
 ## 1. Admission Security Model
 
-All `/api/browser/*` routes require caller admission through `evaluate_browser_admission`. The handler strictly rejects ambiguous credentials, unapproved origins, and unauthorized roles.
+Browser management routes require caller admission through `evaluate_browser_admission`. The DevTools asset and WebSocket routes instead redeem a path capability and revalidate the admission captured when it was minted. Admission rejects ambiguous credentials, unapproved origins, and unauthorized roles.
 
-All successful and error responses from `/api/browser/*` set `Cache-Control: no-store`.
+Browser management responses and DevTools HTML responses use `Cache-Control: no-store`; proxied non-HTML DevTools assets use private caching as described below.
 
 ### Production Admission Rules
 
@@ -123,7 +123,7 @@ Returns the browser host capability summary for the calling principal.
 
 ### GET /api/browser/sessions
 
-Lists all active and transitioning browser sessions (`initializing`, `running`, `closing`, `lost`) owned by the authenticated principal. `closing` sessions hold target capacity until native absence is proven; `lost` reflects unexpected native page destruction. (Note: UI TypeScript `BrowserSessionStatus` union does not yet include `closing` or `lost`).
+Lists all active and transitioning browser sessions (`initializing`, `running`, `closing`, `lost`) owned by the authenticated principal. `closing` sessions hold target capacity until native absence is proven; `lost` reflects unexpected native page destruction.
 
 **Response (200 OK):** Array of `BrowserSessionDto` objects.
 
@@ -192,6 +192,8 @@ Retrieves current metadata, viewport epoch, navigation revision, active lease, a
 - `activePopupSessionId` *(optional)*: Present when an admitted popup child session opened by this session is currently `running`. Automatically cleared and published via `sessionUpdated` when the popup session closes or is lost.
 - `parentSessionId` *(optional)*: Present on admitted popup sessions, identifying the opener `browserSessionId` so the Browser App can display the popup session and restore the opener when OAuth sign-in completes (`window.close()`) or when the user clicks **Return to Page**.
 - `lastDownload` *(optional `BrowserDownloadSummaryDto`)*: Present once a native host download begins on the session (`{ "guid": "...", "suggestedFilename": "...", "state": "inProgress" | "completed" | "canceled", "receivedBytes": 0, "totalBytes": 0, "filePath": "/path/to/file" }`; `filePath` omitted when absent). Updated from CDP `Browser/Page.downloadWillBegin` and `Browser/Page.downloadProgress` events and broadcast via `sessionUpdated`.
+
+The summary reports the latest download for the session, not a download history. `filePath` is optional even on completion and refers to the server host, not the viewer device. The exact-path assertion in the real-Chromium qualification test applies when Linux Chromium is installed; other platforms must tolerate omission.
 
 ### DELETE /api/browser/sessions/{id}
 
@@ -523,6 +525,8 @@ Mints a target-scoped Chromium DevTools capability lease for an owned `running` 
 - **Token & Storage:** 256-bit `OsRng` token encoded as URL-safe unpadded Base64; server stores only its SHA-256 hash (`DevToolsLeaseManager`).
 - **TTL & Capacity:** `300` seconds (`DEVTOOLS_LEASE_TTL`), clipped to caller auth `effective_deadline`. Capped at `8` active leases per principal (`MAX_LEASES_PER_PRINCIPAL`) and `32` globally (`MAX_LEASES_GLOBAL`); excess returns HTTP 429 `kind: "tooManyDevToolsLeases"`.
 - **Errors:** Foreign session returns HTTP 404 `sessionNotFound`; non-running session returns HTTP 409 `sessionConflict`; stale browser incarnation returns HTTP 409 `staleIncarnation`.
+
+No request body is required. The capability permits DOM, JavaScript, and network inspection of the bound target; treat the token-bearing URL as sensitive and do not persist it.
 
 **Response (200 OK, `Cache-Control: no-store`):**
 ```json

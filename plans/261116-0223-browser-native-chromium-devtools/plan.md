@@ -1,7 +1,7 @@
 ---
 title: "Native Host Chromium Developer Tools and File Downloads in Browser App"
 description: "Embed host Chromium's native DevTools frontend and enable native host file downloads inside BrowserApp."
-status: in-progress
+status: completed
 priority: P2
 effort: 14h
 branch: main
@@ -18,7 +18,7 @@ Enable two native host-Chromium capabilities in `BrowserApp`:
 2. **Native Host File Downloads:** Configure host Chromium (`Browser.setDownloadBehavior`) to save browser-initiated downloads directly to the host machine's native `Downloads` directory (`~/Downloads`) and surface live download progress/completion in `BrowserApp`.
 
 <!-- evcrate-progress:start -->
-Tasks: 2/3 completed; remaining: 1.
+Tasks: 3/3 completed; remaining: 0.
 <!-- evcrate-progress:end -->
 
 ## Phases
@@ -27,7 +27,7 @@ Tasks: 2/3 completed; remaining: 1.
 | --- | --- | --- | --- | --- |
 | 1 | Backend DevTools Proxy & Native Host Downloads | DONE (2026-11-16 04:20:50 EST) | 6h | [phase-01](./phase-01-backend-devtools-proxy.md) |
 | 2 | UI DevTools Dock, Toolbar Controls & Download Banner | DONE (2026-11-16 05:01:24 EST) | 5h | [phase-02](./phase-02-ui-devtools-dock.md) |
-| 3 | Integrated Verification & Architecture Documentation | Pending | 3h | [phase-03](./phase-03-verification-and-docs.md) |
+| 3 | Integrated Verification & Architecture Documentation | DONE (2026-11-16 09:04:55 EST) | 3h | [phase-03](./phase-03-verification-and-docs.md) |
 
 ## Settled Design Decisions
 
