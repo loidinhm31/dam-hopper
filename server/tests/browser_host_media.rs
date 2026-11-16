@@ -1643,7 +1643,10 @@ async fn test_real_chromium_media_stealth_and_pcm_audio_bridge() {
         .register_viewer_demand("v1", "sub-live-2", true)
         .await;
     let first_attach_chunk = loop {
-        let c = tokio::time::timeout(std::time::Duration::from_secs(5), audio_rx.recv())
+        // Real-engine audio start after a cold attach is scheduler-bound; 5 s flaked on loaded CI
+        // runners (before and after the geometry work). The contract is unchanged: PCM at epoch 1
+        // arrives with no second navigation.
+        let c = tokio::time::timeout(std::time::Duration::from_secs(15), audio_rx.recv())
             .await
             .expect("first viewer attachment after initial navigation must receive PCM without a second navigation")
             .expect("first attach chunk");
