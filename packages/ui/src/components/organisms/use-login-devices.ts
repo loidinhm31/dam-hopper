@@ -8,7 +8,6 @@ import {
 
 export function useLoginDevices(
   owner: LoginDevicesOwner | null,
-  onSelfRevoked?: (owner: LoginDevicesOwner) => void,
 ) {
   const [state, setState] = useState({
     owner, rows: [] as AuthSessionInfo[], cursor: null as string | null,
@@ -87,10 +86,6 @@ export function useLoginDevices(
       if (controller.signal.aborted) return;
       if (row.current) {
         captured.selfAcknowledged = true;
-        // ACK invalidates this credential's dialog draft even if WS retirement or
-        // a replacement login already retired the section. It grants no cleanup
-        // authority over the replacement runtime or persisted credential.
-        onSelfRevoked?.(captured.owner);
         if (captured.active || isLoginDevicesOwnerRetired(captured.owner)) {
           completeLoginDeviceSelfRevoke(captured.owner);
         }

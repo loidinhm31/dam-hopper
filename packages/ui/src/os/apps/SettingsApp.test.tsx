@@ -16,7 +16,11 @@ vi.mock("@/components/pages/SettingsPage.js", () => ({
 }));
 
 vi.mock("@/components/pages/DevicesPage.js", () => ({
-  DevicesPage: () => <div data-testid="mock-devices-page">Mock Devices Page</div>,
+  DevicesPage: ({ noLayout, profileId, onProfileChange }: { noLayout?: boolean; profileId?: string | null; onProfileChange?: (id: string | null) => void }) => (
+    <div data-testid="mock-devices-page" data-no-layout={String(noLayout)} data-profile-id={profileId ?? ""}>
+      <button onClick={() => onProfileChange?.("chosen")}>Choose profile</button>
+    </div>
+  ),
 }));
 
 describe("SettingsApp", () => {
@@ -57,13 +61,30 @@ describe("SettingsApp", () => {
     expect(container.querySelector('[data-testid="mock-devices-page"]')).toBeNull();
 
     // Click Login Devices tab
-    const devicesBtn = container.querySelectorAll("button")[1]!;
+    const devicesBtn = [...container.querySelectorAll("button")].find((button) => button.textContent === "Login Devices")!;
     act(() => {
       devicesBtn.click();
     });
 
     expect(container.querySelector('[data-testid="mock-devices-page"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="mock-settings-page"]')).toBeNull();
+  });
+
+  it("embeds the explicit target and stores profile changes in window state", () => {
+    const window: OsWindow = {
+      id: "win-target", appId: "settings", title: "Settings", ctx: { profileId: "ambient" },
+      mode: "float", desktopId: "desktop-1", maximized: false, minimized: false,
+      appState: { activeTab: "devices", targetProfileId: "selected" },
+    };
+    const session = createDefaultOsSession();
+    session.windows[window.id] = window;
+    useWindowStore.getState().setSession(session);
+    act(() => root.render(<SettingsApp window={window} />));
+    const page = container.querySelector('[data-testid="mock-devices-page"]')!;
+    expect(page.getAttribute("data-no-layout")).toBe("true");
+    expect(page.getAttribute("data-profile-id")).toBe("selected");
+    act(() => page.querySelector<HTMLButtonElement>("button")!.click());
+    expect(useWindowStore.getState().session.windows[window.id]?.appState?.targetProfileId).toBe("chosen");
   });
 
   it("switches to General tab and passes requestedSection when Appearance delivery arrives", () => {

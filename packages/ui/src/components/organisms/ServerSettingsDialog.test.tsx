@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getAuthToken,
+  getProfiles,
   saveProfiles,
   setActiveProfile,
   setAuthToken,
@@ -154,8 +155,8 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
       (button) => button.textContent === "Save profile",
     );
     expect(saveButton).not.toBeNull();
+    expect(getProfiles().find((candidate) => candidate.id === profile.id)?.url).toBe("http://old.test");
     await act(async () => saveButton!.click());
-
     expect(getAuthToken(profile.id)).toBeNull();
     expect(fetchMock.mock.calls.map(([url]) => url)).toContain(
       "http://old.test/api/fs/media-session",
@@ -521,69 +522,36 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(document.querySelector('[data-testid="account-logout-dialog"]')).toBeNull();
   });
-  it("uses the selected saved login despite unsaved edits and ambient selection changes", async () => {
+  it.each(["saved", "legacy", "new"] as const)("does not expose or request login devices in %s mode", async (mode) => {
     const selected = { id: "saved-a", name: "Saved A", url: "https://saved.test", authType: "basic" as const, username: "alice", createdAt: 1, autoConnect: false };
     const other = { ...selected, id: "saved-b", url: "https://ambient.test" };
-    saveProfiles([selected, other]); setActiveProfile(other.id);
-    setAuthToken("saved-credential", selected.id); setAuthToken("ambient-credential", other.id);
-    const session = { id: "selected-session", userAgent: "Selected saved client", current: false,
-      issuedAt: "2026-10-22T00:00:00Z", expiresAt: "2026-11-22T00:00:00Z", mfaVerifiedAt: "2026-10-22T00:00:00Z" };
-    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      if (String(url).endsWith("/api/auth/login")) {
-        return new Response(JSON.stringify({ token: "unsaved-draft-token", user: "alice" }));
-      }
-      const owned = String(url).startsWith(`${selected.url}/`) &&
-        new Headers(init?.headers).get("Authorization") === "Bearer saved-credential";
-      if (init?.method === "DELETE") return new Response(null, { status: owned ? 204 : 404 });
-      return new Response(JSON.stringify({ sessions: [owned ? session : { ...session, userAgent: "Wrong ambient or draft client" }], nextCursor: null }));
-    });
+    saveProfiles([selected, other]);
+    setActiveProfile(selected.id);
+    setAuthToken("saved-credential", selected.id);
+    setAuthToken("ambient-credential", other.id);
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+      new Response(JSON.stringify({ token: "draft-token", user: "alice" })));
     vi.stubGlobal("fetch", fetchMock);
-    const container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-    await act(async () => root?.render(createElement(ServerSettingsDialog, { open: true, profile: selected, onClose: vi.fn() })));
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => root?.render(createElement(ServerSettingsDialog, {
+      open: true, profile: mode === "saved" ? selected : mode === "new" ? null : undefined, onClose: vi.fn(),
+    })));
     await act(async () => {
-      setInputValue(document.querySelector<HTMLInputElement>('input[placeholder="http://127.0.0.1:4801"]')!, "https://unsaved.test");
+      setInputValue(document.querySelector<HTMLInputElement>('input[placeholder="http://127.0.0.1:4801"]')!, "https://draft.test");
+      const inputs = document.querySelectorAll<HTMLInputElement>("input");
+      const username = [...inputs].find((input) => input.placeholder === "Username");
+      if (username) setInputValue(username, "alice");
       setInputValue(document.querySelector<HTMLInputElement>('input[type="password"]')!, "draft-password");
+      setActiveProfile(other.id);
     });
     await act(async () => [...document.querySelectorAll("button")].find((item) => item.textContent === "Test connection")!.click());
-    expect(document.body.textContent).toContain("Reachable");
-    const section = document.querySelector('section[aria-label="Login devices"]')!;
-    await act(async () => [...section.querySelectorAll("button")].find((item) => item.textContent === "Refresh")!.click());
-    expect(section.textContent).toContain("Selected saved client");
-    expect(section.textContent).not.toContain("Wrong ambient or draft client");
-    await act(async () => section.querySelector<HTMLButtonElement>("li button")!.click());
-    const confirmation = [...document.querySelectorAll('[role="dialog"]')].find((dialog) =>
-      dialog.getAttribute("aria-labelledby")?.split(/\s+/).map((id) => document.getElementById(id)?.textContent).join(" ") === "Revoke this login?");
-    expect(confirmation).toBeDefined();
-    await act(async () => [...confirmation!.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent === "Revoke access")!.click());
-    expect(section.querySelector("li")).toBeNull();
-    const deviceCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("/api/auth/sessions"));
-    expect(deviceCalls).toHaveLength(3);
-    expect(deviceCalls.map(([url]) => String(url))).toEqual([
-      `${selected.url}/api/auth/sessions`, `${selected.url}/api/auth/sessions`,
-      `${selected.url}/api/auth/sessions/selected-session`,
-    ]);
-    for (const [, init] of deviceCalls) {
-      expect(init).toMatchObject({ credentials: "omit", headers: { Authorization: "Bearer saved-credential" } });
-    }
-    expect(getAuthToken(selected.id)).toBe("saved-credential");
-    expect(getAuthToken(other.id)).toBe("ambient-credential");
-  });
-
-  it("captures legacy saved selection once, and gives a new profile no device authority", async () => {
-    const selected = { id: "legacy-a", name: "Legacy A", url: "https://saved.test", authType: "basic" as const, createdAt: 1, autoConnect: false };
-    const other = { ...selected, id: "legacy-b", url: "https://other.test" };
-    saveProfiles([selected, other]); setActiveProfile(selected.id); setAuthToken("saved-credential", selected.id);
-    const fetchMock = vi.fn<(url: string | URL | Request) => Promise<Response>>(async () => new Response(JSON.stringify({ sessions: [], nextCursor: null })));
-    vi.stubGlobal("fetch", fetchMock);
-    const container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-    await act(async () => root?.render(createElement(ServerSettingsDialog, { open: true, onClose: vi.fn() })));
-    await act(async () => setActiveProfile(other.id));
-    const section = document.querySelector('section[aria-label="Login devices"]')!;
-    await act(async () => [...section.querySelectorAll("button")].find((item) => item.textContent === "Refresh")!.click());
-    expect(fetchMock.mock.calls.every(([url]) => String(url) === "https://saved.test/api/auth/sessions")).toBe(true);
-    await act(async () => root?.render(createElement(ServerSettingsDialog, { open: true, profile: null, onClose: vi.fn() })));
-    expect(document.querySelector('section[aria-label="Login devices"]')?.textContent).toContain("Save and select");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/auth/login"))).toBe(true);
+    expect(document.querySelector('section[aria-label="Login devices"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("Login devices");
+    expect([...document.querySelectorAll("button")].some((button) => /revoke access|refresh/i.test(button.textContent ?? ""))).toBe(false);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/api/auth/sessions"))).toHaveLength(0);
   });
 
   it("supports standalone Reset Browser data now preserving login, Cancel-first focus, and pending status polling (W7)", async () => {

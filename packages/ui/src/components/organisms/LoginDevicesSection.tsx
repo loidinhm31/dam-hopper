@@ -2,22 +2,20 @@ import { useState } from "react";
 import { getActiveProfileId } from "@/api/server-config.js";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import { Button } from "@/components/atoms/Button.js";
-import { useLoginDevicesOwner, type LoginDevicesOwner } from "./login-devices-owner.js";
+import { useLoginDevicesOwner } from "./login-devices-owner.js";
 import { useLoginDevices } from "./use-login-devices.js";
 
-/** Mount only inside an open settings dialog; legacy selection is captured once. */
+/** Manage logins for the selected saved profile; legacy selection is captured once. */
 export function LoginDevicesSection({
   profileId,
-  onSelfRevoked,
   variant = "dialog",
 }: {
   profileId?: string | null;
-  onSelfRevoked?: (owner: LoginDevicesOwner) => void;
   variant?: "dialog" | "page";
 }) {
   const [legacyProfileId] = useState(() => profileId === undefined ? getActiveProfileId() : null);
   const owner = useLoginDevicesOwner(profileId === undefined ? legacyProfileId : profileId);
-  const devices = useLoginDevices(owner, onSelfRevoked);
+  const devices = useLoginDevices(owner);
   const needsLogin = owner?.authType === "basic" && !owner.token;
   const busy = devices.loading || devices.pending !== null || devices.cleanupRequired;
 

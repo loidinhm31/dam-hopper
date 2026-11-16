@@ -79,7 +79,7 @@ disconnect profiles.
 
 ## Manage login devices
 
-The **Server Settings** dialog includes a dedicated **Login devices** section for saved, authenticated server profiles. This interface lets you inspect active login sessions and revoke access across your account.
+Manage account sessions from **OS Settings > Login Devices**. This tab uses the existing Settings app and lets you view or revoke sessions for the selected saved, authenticated server profile. Server Settings is for profile configuration and does not contain login-device controls.
 
 ### Scope & Presentation
 
@@ -90,17 +90,16 @@ The **Server Settings** dialog includes a dedicated **Login devices** section fo
 
 ### Controls & Actions
 
-- **Refresh:** Re-queries the active sessions list from the server without closing the dialog.
+- **Refresh:** Re-queries the selected server's active sessions without leaving the Login Devices tab.
 - **Load more:** Available when more than 50 sessions exist, loading the next keyset page.
 - **Revoke access:** Prompts with an explicit confirmation dialog before contacting the server:
   - **Revoking another session:** Invalidates that remote session across all projects on the server while keeping your current session and connection active.
   - **Self-revocation (current session):** Presents a high-visibility warning confirming that ending this login will disconnect the current profile. When acknowledged, the server invalidates the session and the UI clears only the local profile's token.
 
-### Security Invariants & Draft Protection
+### Security Invariants & Owner Fencing
 
 - **HTTPS or Loopback HTTP Only:** Device session management enforces secure transport. Remote plain HTTP URLs are blocked with an unsafe transport warning, and ambient browser cookies are never used as a mutation fallback (`credentials: "omit"`).
-- **Owner Fencing:** Requests, query results, and self-revocation cleanup capture the exact `{ profileId, generation }` owner. Stale responses or superseded connection generations cannot clear replacement credentials, leak into newer login drafts, or affect another profile.
-- **Revoked-Draft Save Guard:** Acknowledging self-revocation immediately marks the dialog's credential draft as revoked. Clicking **Save** in the settings dialog will not re-save the dead token or overwrite a newer login established in another window.
+- **Exact-Owner Fencing and Cleanup:** Requests, query results, and self-revocation cleanup capture the exact `{ profileId, generation }` owner. Stale responses or superseded connection generations cannot clear replacement credentials or affect another profile. After the server acknowledges self-revocation, local cleanup remains fenced to that owner. Server Settings has no device controls; its independent verified-credential baseline and ownership-qualified rollback prevent stale saves from restoring revoked credentials or overwriting replacements. A fresh successful login/MFA can be saved after prior revocation.
 - **Cookie Isolation:** The server never emits cookie headers on revocation. Revoking a session does not clear unrelated or replacement cookies in your browser cookie jar.
 - **No-Auth Notice:** On servers running in `--no-auth` development mode, the section displays an informative status message indicating that login device management is unavailable.
 
