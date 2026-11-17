@@ -324,11 +324,55 @@ describe("server profile migration", () => {
 
     setAuthToken("token", "profile-a");
 
-    expect(events.at(-1)).toEqual({ type: "dataChanged" });
+    expect(events.at(-1)).toMatchObject({
+      type: "dataChanged",
+      credentialProfileId: "profile-a",
+      credentialPresent: true,
+      revision: expect.any(Number),
+    });
     expect(events).not.toContainEqual({
       type: "activeChanged",
       activeProfileId: null,
     });
+    unsubscribe();
+  });
+  it("preserves cross-tab profile and credential transitions", () => {
+    const events: unknown[] = [];
+    const unsubscribe = subscribeToProfileChanges((event) =>
+      events.push(event),
+    );
+    window.dispatchEvent(new StorageEvent("storage", {
+      key: "damhopper_server_profiles",
+      oldValue: "[]",
+      newValue: "[]",
+    }));
+    expect(events.at(-1)).toEqual({ type: "profileListChanged" });
+
+    const key = "damhopper_profile_auth_v2_profile-a";
+    window.dispatchEvent(new StorageEvent("storage", {
+      key,
+      oldValue: null,
+      newValue: '{"version":2,"token":"replacement"}',
+    }));
+    window.dispatchEvent(new StorageEvent("storage", {
+      key,
+      oldValue: '{"version":2,"token":"replacement"}',
+      newValue: null,
+    }));
+    expect(events.slice(-2)).toEqual([
+      expect.objectContaining({
+        type: "dataChanged",
+        credentialProfileId: "profile-a",
+        credentialPresent: true,
+        revision: expect.any(Number),
+      }),
+      expect.objectContaining({
+        type: "dataChanged",
+        credentialProfileId: "profile-a",
+        credentialPresent: false,
+        revision: expect.any(Number),
+      }),
+    ]);
     unsubscribe();
   });
 

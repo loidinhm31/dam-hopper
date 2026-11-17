@@ -25,7 +25,12 @@ export type KnownServerProfiles =
 export type ServerProfileChange =
   | { type: "activeChanged"; activeProfileId: string | null }
   | { type: "profileListChanged" }
-  | { type: "dataChanged" }
+  | {
+      type: "dataChanged";
+      credentialProfileId?: string;
+      credentialPresent?: boolean;
+      revision?: number;
+    }
   | {
       type: "deleted";
       deletedProfileId: string;
@@ -342,7 +347,11 @@ export function setAuthToken(token: string, profileId?: string): boolean {
   if (writeLocalStorage(v2Key, serialized)) {
     removeLocalStorage(legacyTokenKey(profileId));
     removeSessionStorage(legacyTokenKey(profileId));
-    notifyProfileChange({ type: "dataChanged" });
+    notifyProfileChange({
+      type: "dataChanged",
+      credentialProfileId: profileId,
+      credentialPresent: true,
+    });
     return true;
   }
   return false;
@@ -356,7 +365,11 @@ export function clearAuthToken(profileId?: string): boolean {
   const legKey = legacyTokenKey(profileId);
   const legCleared = removeLocalStorage(legKey);
   const sessCleared = removeSessionStorage(legKey);
-  notifyProfileChange({ type: "dataChanged" });
+  notifyProfileChange({
+    type: "dataChanged",
+    credentialProfileId: profileId,
+    credentialPresent: false,
+  });
   return (v2Cleared || legCleared) && sessCleared;
 }
 
@@ -818,13 +831,17 @@ export function reconcileManagedProfile(config: {
 function notifyProfileChange(event?: ServerProfileChange): void {
   profileChangeVersion += 1;
   if (event) {
-    for (const listener of profileChangeListeners) listener(event);
+    const publishedEvent =
+      event.type === "dataChanged"
+        ? { ...event, revision: profileChangeVersion }
+        : event;
+    for (const listener of profileChangeListeners) listener(publishedEvent);
     return;
   }
   if (typeof window !== "undefined")
     window.dispatchEvent(
       new CustomEvent<ServerProfileChange>(PROFILE_CHANGED_EVENT, {
-        detail: { type: "dataChanged" },
+        detail: { type: "dataChanged", revision: profileChangeVersion },
       }),
     );
 }
@@ -861,7 +878,22 @@ export function subscribeToProfileChanges(
       event.key?.startsWith(KEY_PROFILE_AUTH_V2_PREFIX)
     ) {
       profileChangeVersion += 1;
-      callback({ type: "dataChanged" });
+      const credentialProfileId =
+        event.key?.startsWith(KEY_PROFILE_AUTH_V2_PREFIX)
+          ? event.key.slice(KEY_PROFILE_AUTH_V2_PREFIX.length)
+          : event.key?.startsWith(`${KEY_TOKEN}_`)
+            ? event.key.slice(`${KEY_TOKEN}_`.length)
+            : undefined;
+      callback({
+        type: "dataChanged",
+        revision: profileChangeVersion,
+        ...(credentialProfileId
+          ? {
+              credentialProfileId,
+              credentialPresent: event.newValue !== null,
+            }
+          : {}),
+      });
     }
   };
   window.addEventListener(PROFILE_CHANGED_EVENT, onProfileChange);

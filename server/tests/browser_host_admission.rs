@@ -933,6 +933,7 @@ async fn test_request_policy_blocks_forbidden_redirect_and_subresource_on_chromi
 
     let config = BrowserHostConfig {
         allowed_target_origins: vec![format!("http://127.0.0.1:{a_port}")],
+        denied_destinations: vec![format!("127.0.0.1:{b_port}")],
         ..BrowserHostConfig::default()
     };
     let policy = Arc::new(NetworkPolicy::from_config(&config, false).unwrap());
@@ -1034,6 +1035,15 @@ async fn native_env(
     max_targets: usize,
     allowed_origins: Vec<String>,
 ) -> Option<NativeEnv> {
+    native_env_with_denied(principal, max_targets, allowed_origins, vec![]).await
+}
+
+async fn native_env_with_denied(
+    principal: &str,
+    max_targets: usize,
+    allowed_origins: Vec<String>,
+    denied_destinations: Vec<String>,
+) -> Option<NativeEnv> {
     let serial = NATIVE_SERIAL.lock().await;
     let Some(exec) = find_chromium() else {
         if std::env::var("DAM_HOPPER_REQUIRE_BROWSER").as_deref() == Ok("1") {
@@ -1051,6 +1061,7 @@ async fn native_env(
         executable_path: Some(exec),
         profile_root: Some(tmp.path().join("profiles")),
         allowed_target_origins: allowed_origins,
+        denied_destinations,
         budgets: BrowserBudgetsConfig {
             max_targets,
             ..BrowserBudgetsConfig::default()
@@ -1858,10 +1869,11 @@ async fn test_popup_admission_policy_and_overflow_share_capacity() {
     let (b_port, b_hits) = spawn_origin(None, None).await;
     let forbidden_img = format!("http://127.0.0.1:{b_port}/sub.png");
     let (a_port, a_hits) = spawn_origin(None, Some(forbidden_img)).await;
-    let Some(env) = native_env(
+    let Some(env) = native_env_with_denied(
         "admin-native-popup",
         2,
         vec![format!("http://127.0.0.1:{a_port}")],
+        vec![format!("127.0.0.1:{b_port}")],
     )
     .await
     else {

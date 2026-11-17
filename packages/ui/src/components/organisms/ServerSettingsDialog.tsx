@@ -43,8 +43,6 @@ import {
 } from "@/os/BrowserStreamKeepAliveHost.js";
 import { generateUUID } from "@/lib/utils.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
-import { LoginDevicesSection } from "@/components/organisms/LoginDevicesSection.js";
-import type { LoginDevicesOwner } from "./login-devices-owner.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import {
   login,
@@ -76,6 +74,8 @@ import {
   clearActiveProfile,
   createProfile,
   getProfiles,
+  getProfileChangeVersion,
+  subscribeToProfileChanges,
   saveProfiles,
   updateProfile,
   setActiveProfile,
@@ -91,13 +91,35 @@ interface Props {
   onSaved?: (profile: ServerProfile) => void;
 }
 
-type TestState = "idle" | "testing" | "challenge" | "ok" | "fail";
+type CredentialMode = "saved" | "legacy" | "new";
 
-interface CredentialDraftScope {
+type CredentialAttempt = {
+  mode: CredentialMode;
   profileId: string | null;
-  serverUrl: string;
-  revokedToken?: string;
-}
+  activeProfileId: string | null;
+  profileCreatedAt: number | null;
+  profileName: string | null;
+  profileUsername: string | undefined;
+  profileAutoConnect: boolean | undefined;
+  legacyServerUrl: string | null;
+  legacyServerUrlExplicit: boolean | null;
+  persistedUrl: string | null;
+  persistedAuthType: "basic" | "none" | null;
+  baselineToken: string | null;
+  baselineGeneration: number | null;
+  baselineRuntimeIntent: boolean;
+  dialogSession: number;
+  requestId: number;
+  endpoint: string;
+  authType: "basic" | "none";
+};
+
+type VerifiedCredential = {
+  attempt: CredentialAttempt;
+  candidate: string;
+};
+
+type TestState = "idle" | "testing" | "challenge" | "ok" | "fail";
 
 
 
@@ -135,13 +157,221 @@ export function ServerSettingsDialog({
   const [mfaLoading, setMfaLoading] = useState(false);
   const latestUrlRef = useRef("");
   const latestProfileIdRef = useRef<string | undefined>(profile?.id);
-  const testRequestIdRef = useRef(0);
+  const latestProfileRef = useRef(profile);
+  const currentAuthAttemptRef = useRef<CredentialAttempt | null>(null);
+  const verifiedCredentialRef = useRef<VerifiedCredential | null>(null);
+  const invalidatedCredentialAttemptsRef = useRef(
+    new WeakSet<CredentialAttempt>(),
+  );
+  const retiredCredentialAttemptsRef = useRef(
+    new WeakSet<CredentialAttempt>(),
+  );
+  const credentialObservationRef = useRef<{
+    attempt: CredentialAttempt;
+    stop: () => void;
+  } | null>(null);
+  const saveCredentialMutationRef = useRef<{
+    attempt: CredentialAttempt;
+    revision: number;
+  } | null>(null);
+  const latestAuthTypeRef = useRef(authType);
+  latestProfileRef.current = profile;
   latestProfileIdRef.current = profile?.id;
-  const bodyScrollRef = useRef<HTMLDivElement>(null);
+  latestAuthTypeRef.current = authType;
+  const captureCredentialAttempt = (
+    requestId: number,
+    endpoint: string,
+  ): CredentialAttempt => {
+    const currentProfile = latestProfileRef.current;
+    const mode: CredentialMode =
+      currentProfile === null
+        ? "new"
+        : currentProfile === undefined
+          ? "legacy"
+          : "saved";
+    const activeProfileId = getActiveProfileId();
+    const profileId =
+      mode === "saved"
+        ? (currentProfile?.id ?? null)
+        : mode === "legacy"
+          ? activeProfileId
+          : null;
+    const baselineSnapshot = profileId
+      ? getConnectionSnapshot(profileId)
+      : null;
+    const persistedProfile = profileId
+      ? getProfiles().find((candidate) => candidate.id === profileId)
+      : null;
+    return {
+      mode,
+      profileId,
+      activeProfileId,
+      profileCreatedAt: persistedProfile?.createdAt ?? null,
+      profileName: persistedProfile?.name ?? null,
+      profileUsername: persistedProfile?.username,
+      profileAutoConnect: persistedProfile?.autoConnect,
+      legacyServerUrl: mode === "legacy" ? getServerUrl() : null,
+      legacyServerUrlExplicit: mode === "legacy" ? hasServerUrl() : null,
+      persistedUrl: persistedProfile
+        ? normalizeServerUrl(persistedProfile.url)
+        : null,
+      persistedAuthType: persistedProfile?.authType ?? null,
+      baselineToken:
+        persistedProfile && profileId ? getAuthToken(profileId) : null,
+      baselineGeneration: baselineSnapshot?.owner.generation ?? null,
+      baselineRuntimeIntent: baselineSnapshot?.intent ?? false,
+      dialogSession: dialogSessionRef.current,
+      requestId,
+      endpoint,
+      authType: latestAuthTypeRef.current,
+    };
+  };
+  const currentAttemptProfile = (attempt: CredentialAttempt) =>
+    attempt.profileId
+      ? getProfiles().find((candidate) => candidate.id === attempt.profileId) ??
+        null
+      : null;
+  const attemptTargetIsCurrent = (attempt: CredentialAttempt) => {
+    if (
+      dialogSessionRef.current !== attempt.dialogSession ||
+      testRequestIdRef.current !== attempt.requestId ||
+      latestUrlRef.current !== attempt.endpoint ||
+      latestAuthTypeRef.current !== attempt.authType
+    ) {
+      return false;
+    }
+    const currentProfile = latestProfileRef.current;
+    if (attempt.mode === "new") return currentProfile === null;
+    if (
+      attempt.mode === "saved" &&
+      currentProfile?.id !== attempt.profileId
+    ) {
+      return false;
+    }
+    if (
+      attempt.mode === "legacy" &&
+      (currentProfile !== undefined ||
+        getActiveProfileId() !== attempt.activeProfileId ||
+        normalizeServerUrl(getServerUrl()) !==
+          normalizeServerUrl(attempt.legacyServerUrl ?? "") ||
+        hasServerUrl() !== attempt.legacyServerUrlExplicit)
+    ) {
+      return false;
+    }
+    if (!attempt.profileId) return attempt.persistedUrl === null;
+    const persisted = currentAttemptProfile(attempt);
+    return Boolean(
+      persisted &&
+        persisted.createdAt === attempt.profileCreatedAt &&
+        persisted.name === attempt.profileName &&
+        persisted.username === attempt.profileUsername &&
+        persisted.autoConnect === attempt.profileAutoConnect &&
+        normalizeServerUrl(persisted.url) === attempt.persistedUrl &&
+        persisted.authType === attempt.persistedAuthType,
+    );
+  };
+  const attemptIncarnationIsCurrent = (attempt: CredentialAttempt) =>
+    dialogSessionRef.current === attempt.dialogSession &&
+    testRequestIdRef.current === attempt.requestId &&
+    currentAuthAttemptRef.current === attempt;
+  const rejectInvalidatedAttempt = (attempt: CredentialAttempt) => {
+    if (!attemptIncarnationIsCurrent(attempt)) return;
+    stopCredentialObservation();
+    currentAuthAttemptRef.current = null;
+    verifiedCredentialRef.current = null;
+    setTestState("fail");
+    setTestError("The target profile changed during authentication. Test again.");
+    setMfaLoading(false);
+    setMfaSubmitting(false);
+  };
+  const stopCredentialObservation = () => {
+    credentialObservationRef.current?.stop();
+    credentialObservationRef.current = null;
+  };
+  const observeCredentialLineage = (attempt: CredentialAttempt) => {
+    stopCredentialObservation();
+    if (!attempt.profileId) return;
+    const stop = subscribeToProfileChanges((event) => {
+      const ownedMutation = saveCredentialMutationRef.current;
+      const isExactOwnedMutation =
+        event.type === "dataChanged" &&
+        ownedMutation?.attempt === attempt &&
+        ownedMutation.revision === event.revision;
+      if (
+        event.type === "dataChanged" &&
+        currentAuthAttemptRef.current === attempt &&
+        !isExactOwnedMutation
+      ) {
+        const isObservedReplacement =
+          event.credentialProfileId === attempt.profileId &&
+          event.credentialPresent === true;
+        const isSaveTimeCredentialChange =
+          saveOperationRef.current &&
+          event.credentialProfileId === attempt.profileId;
+        const currentToken = getAuthToken(attempt.profileId!);
+        if (
+          isObservedReplacement ||
+          isSaveTimeCredentialChange ||
+          (event.credentialProfileId === undefined &&
+            currentToken !== null &&
+            currentToken !== attempt.baselineToken)
+        ) {
+          invalidatedCredentialAttemptsRef.current.add(attempt);
+        } else if (
+          event.credentialProfileId === attempt.profileId &&
+          event.credentialPresent === false &&
+          attempt.baselineToken !== null &&
+          currentToken === null
+        ) {
+          retiredCredentialAttemptsRef.current.add(attempt);
+        }
+      }
+    });
+    credentialObservationRef.current = { attempt, stop };
+  };
+  const currentAttemptToken = (attempt: CredentialAttempt) =>
+    attempt.profileId ? getAuthToken(attempt.profileId) : null;
+  const currentAttemptGeneration = (attempt: CredentialAttempt) =>
+    attempt.profileId
+      ? (getConnectionSnapshot(attempt.profileId)?.owner.generation ?? null)
+      : null;
+  const attemptHasBaseline = (attempt: CredentialAttempt) =>
+    attemptTargetIsCurrent(attempt) &&
+    currentAttemptToken(attempt) === attempt.baselineToken &&
+    currentAttemptGeneration(attempt) === attempt.baselineGeneration;
+  const attemptHasQualifiedRetirement = (attempt: CredentialAttempt) => {
+    if (!attempt.profileId || !attempt.baselineToken) return false;
+    const snapshot = getConnectionSnapshot(attempt.profileId);
+    const currentGeneration = snapshot?.owner.generation ?? null;
+    const generationMatchesObservedRetirement =
+      currentGeneration === attempt.baselineGeneration ||
+      (attempt.baselineGeneration !== null &&
+        currentGeneration === attempt.baselineGeneration + 1);
+    const hasObservedRetirement =
+      retiredCredentialAttemptsRef.current.has(attempt);
+    return Boolean(
+      attemptTargetIsCurrent(attempt) &&
+        currentAttemptToken(attempt) === null &&
+        !invalidatedCredentialAttemptsRef.current.has(attempt) &&
+        (hasObservedRetirement
+          ? generationMatchesObservedRetirement
+          : snapshot?.status === "login-required" &&
+            attempt.baselineGeneration !== null &&
+            currentGeneration === attempt.baselineGeneration + 1),
+    );
+  };
+  const canAcceptCredential = (
+    attempt: CredentialAttempt,
+    candidate: string,
+  ) =>
+    attemptTargetIsCurrent(attempt) &&
+    !invalidatedCredentialAttemptsRef.current.has(attempt) &&
+    (attemptHasBaseline(attempt) ||
+      (candidate !== attempt.baselineToken &&
+        attemptHasQualifiedRetirement(attempt)));
   const mfaSectionRef = useRef<HTMLDivElement>(null);
+  const bodyScrollRef = useRef<HTMLDivElement>(null);
   const hasMfaSetupData = Boolean(mfaSetupData);
-  const [credentialDraftScope, setCredentialDraftScope] = useState<CredentialDraftScope | null>(null);
-  const credentialDraftScopeRef = useRef<CredentialDraftScope | null>(null);
   const { registerModalMount } = useShellInputContext();
   const [dirtyConfirmOpen, setDirtyConfirmOpen] = useState(false);
   const [logoutTarget, setLogoutTarget] = useState<AccountLogoutTarget | null>(
@@ -166,6 +396,8 @@ export function ServerSettingsDialog({
   const browserResetCancelRef = useRef<HTMLButtonElement | null>(null);
   const browserResetAbortRef = useRef<AbortController | null>(null);
   const dialogSessionRef = useRef(0);
+  const testRequestIdRef = useRef(0);
+  const saveOperationRef = useRef(false);
   const browserResetOpRef = useRef(0);
   const logoutWasStaleRef = useRef(false);
 
@@ -204,7 +436,7 @@ export function ServerSettingsDialog({
           username !== (profile.username || "") ||
           password !== "" ||
           token !== initialToken ||
-          autoConnect !== profile.autoConnect
+          autoConnect !== (profile.autoConnect ?? true)
         );
       }
       return (
@@ -271,14 +503,6 @@ export function ServerSettingsDialog({
     handleRequestClose,
   ]);
 
-  const handleSelfRevoked = (owner: LoginDevicesOwner) => {
-    if (!credentialDraftScope || credentialDraftScopeRef.current !== credentialDraftScope ||
-        owner.profileId !== credentialDraftScope.profileId ||
-        owner.serverUrl !== credentialDraftScope.serverUrl || !owner.token) return;
-    credentialDraftScope.revokedToken = owner.token;
-    setToken((draft) => draft.trim() === owner.token ? "" : draft);
-    setInitialToken((initial) => initial === owner.token ? "" : initial);
-  };
 
   const clearAuthDraft = useCallback(() => {
     setMfaChallengeToken("");
@@ -292,10 +516,14 @@ export function ServerSettingsDialog({
   const initiateStepUp = useCallback(
     async (serverUrl: string, existingToken: string, profileId?: string) => {
       const requestId = ++testRequestIdRef.current;
-      const isCurrent = () =>
-        requestId === testRequestIdRef.current &&
-        latestProfileIdRef.current === profileId;
-
+      const endpoint = normalizeServerUrl(serverUrl);
+      latestUrlRef.current = endpoint;
+      const attempt = captureCredentialAttempt(requestId, endpoint);
+      if (attempt.profileId !== profileId) return;
+      currentAuthAttemptRef.current = attempt;
+      observeCredentialLineage(attempt);
+      verifiedCredentialRef.current = null;
+      const isCurrent = () => attemptTargetIsCurrent(attempt);
       setMfaMode("verification");
       setMfaLoading(true);
       setTestState("challenge");
@@ -316,7 +544,10 @@ export function ServerSettingsDialog({
             : "Step-up challenge request failed",
         );
       } finally {
-        if (isCurrent()) setMfaLoading(false);
+        if (attemptIncarnationIsCurrent(attempt)) {
+          if (isCurrent()) setMfaLoading(false);
+          else rejectInvalidatedAttempt(attempt);
+        }
       }
     },
     [],
@@ -337,7 +568,7 @@ export function ServerSettingsDialog({
         setAuthType(profile.authType);
         setUsername(profile.username || "");
         setPassword("");
-        setAutoConnect(profile.autoConnect);
+        setAutoConnect(profile.autoConnect ?? true);
       } else if (isEditMode) {
         // New profile (profile = null)
         setName("");
@@ -362,9 +593,9 @@ export function ServerSettingsDialog({
           : undefined);
       const storedToken =
         profile === null ? "" : (getAuthToken(tokenProfileId) ?? "");
-      const scope = { profileId: tokenProfileId ?? null, serverUrl: normalizeServerUrl(storedUrl) };
-      credentialDraftScopeRef.current = scope;
-      setCredentialDraftScope(scope);
+      stopCredentialObservation();
+      currentAuthAttemptRef.current = null;
+      verifiedCredentialRef.current = null;
       setInitialUrl(storedUrl);
       setInitialToken(storedToken);
       setToken(storedToken);
@@ -410,8 +641,8 @@ export function ServerSettingsDialog({
     return () => {
       dialogSessionRef.current += 1;
       browserResetOpRef.current += 1;
-      credentialDraftScopeRef.current = null;
       browserResetAbortRef.current?.abort();
+      stopCredentialObservation();
       clearAuthDraft();
     };
   }, [open, profile, isEditMode, clearAuthDraft, initiateStepUp]);
@@ -458,7 +689,10 @@ export function ServerSettingsDialog({
     urlSchemeValid && normalized ? isCrossOriginServer(normalized) : false;
 
   const invalidateConnectionTest = () => {
+    stopCredentialObservation();
     testRequestIdRef.current += 1;
+    currentAuthAttemptRef.current = null;
+    verifiedCredentialRef.current = null;
     setTestState("idle");
     setTestError(null);
     setMfaChallengeToken("");
@@ -473,12 +707,12 @@ export function ServerSettingsDialog({
     if (!normalized || !urlSchemeValid) return;
     const requestId = ++testRequestIdRef.current;
     const requestUrl = normalized;
-    const requestProfileId = profile?.id;
     latestUrlRef.current = requestUrl;
-    const isCurrentRequest = () =>
-      requestId === testRequestIdRef.current &&
-      requestUrl === latestUrlRef.current &&
-      requestProfileId === latestProfileIdRef.current;
+    const attempt = captureCredentialAttempt(requestId, requestUrl);
+    currentAuthAttemptRef.current = attempt;
+    observeCredentialLineage(attempt);
+    verifiedCredentialRef.current = null;
+    const isCurrentRequest = () => attemptTargetIsCurrent(attempt);
 
     setTestState("testing");
     setTestError(null);
@@ -494,23 +728,30 @@ export function ServerSettingsDialog({
       }
       const credentials =
         authType === "none" ? {} : { username: u, password: p };
-
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
       try {
         const result = await login(normalized, credentials, controller.signal);
-        if (!isCurrentRequest()) return;
-
+        if (!isCurrentRequest()) {
+          rejectInvalidatedAttempt(attempt);
+          return;
+        }
         if (result.kind === "session") {
+          if (!canAcceptCredential(attempt, result.data.token)) {
+            setTestState("fail");
+            setTestError(
+              "The login changed during verification. Retest before saving.",
+            );
+            return;
+          }
+          verifiedCredentialRef.current = {
+            attempt,
+            candidate: result.data.token,
+          };
           setToken(result.data.token);
           setTestState("ok");
           clearAuthDraft();
-          clearBrowserViewFenceForProfile(
-            profile?.id ??
-              (profile === undefined
-                ? (getActiveProfileId() ?? undefined)
-                : undefined),
-          );
+          clearBrowserViewFenceForProfile(attempt.profileId ?? undefined);
           if (result.data.dev_mode || result.data.devMode) {
             setTestError("✓ Dev mode active");
           }
@@ -527,10 +768,14 @@ export function ServerSettingsDialog({
                 challengeToken,
                 controller.signal,
               );
-              if (!isCurrentRequest()) return;
+              if (!isCurrentRequest()) {
+                rejectInvalidatedAttempt(attempt);
+                return;
+              }
               setMfaSetupData(setup);
             } finally {
               if (isCurrentRequest()) setMfaLoading(false);
+              else rejectInvalidatedAttempt(attempt);
             }
           } else {
             setMfaMode("verification");
@@ -550,24 +795,35 @@ export function ServerSettingsDialog({
         } else {
           setTestError(e instanceof Error ? e.message : String(e));
         }
+      } else {
+        rejectInvalidatedAttempt(attempt);
       }
-    }
+    } finally {
+      if (
+        attemptIncarnationIsCurrent(attempt) &&
+        !attemptTargetIsCurrent(attempt)
+      ) {
+        rejectInvalidatedAttempt(attempt);
+      }
   }
-
+  }
   async function handleMfaCodeSubmit(code: string) {
-    if (!normalized || !mfaChallengeToken) return;
-    const requestId = testRequestIdRef.current;
-    const requestUrl = normalized;
-    const requestProfileId = profile?.id;
+    const attempt = currentAuthAttemptRef.current;
+    if (
+      !attempt ||
+      !normalized ||
+      !mfaChallengeToken ||
+      attempt.endpoint !== normalized
+    ) {
+      return;
+    }
     const isCurrentRequest = () =>
-      requestId === testRequestIdRef.current &&
-      requestUrl === latestUrlRef.current &&
-      requestProfileId === latestProfileIdRef.current;
+      currentAuthAttemptRef.current === attempt &&
+      attemptTargetIsCurrent(attempt);
 
     setMfaSubmitting(true);
     setMfaError(null);
     setMfaRetryAfter(undefined);
-
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
@@ -586,17 +842,20 @@ export function ServerSettingsDialog({
                 code,
                 controller.signal,
               );
-
         if (!isCurrentRequest()) return;
+        if (!canAcceptCredential(attempt, session.token)) {
+          verifiedCredentialRef.current = null;
+          setTestState("fail");
+          setTestError(
+            "The login changed during verification. Retest before saving.",
+          );
+          return;
+        }
+        verifiedCredentialRef.current = { attempt, candidate: session.token };
         setToken(session.token);
         setTestState("ok");
         clearAuthDraft();
-        clearBrowserViewFenceForProfile(
-          profile?.id ??
-            (profile === undefined
-              ? (getActiveProfileId() ?? undefined)
-              : undefined),
-        );
+        clearBrowserViewFenceForProfile(attempt.profileId ?? undefined);
       } finally {
         clearTimeout(timeout);
       }
@@ -610,48 +869,35 @@ export function ServerSettingsDialog({
         }
       }
     } finally {
-      if (isCurrentRequest()) {
-        setMfaSubmitting(false);
+      if (attemptIncarnationIsCurrent(attempt)) {
+        if (isCurrentRequest()) setMfaSubmitting(false);
+        else rejectInvalidatedAttempt(attempt);
       }
     }
   }
 
   function handleMfaCancel() {
     clearAuthDraft();
+    stopCredentialObservation();
     testRequestIdRef.current += 1;
+    currentAuthAttemptRef.current = null;
+    verifiedCredentialRef.current = null;
     setTestState("idle");
   }
 
   async function handleSave(): Promise<boolean> {
+    if (saveOperationRef.current) return false;
+    saveOperationRef.current = true;
+    try {
+      return await persistSettings();
+    } finally {
+      saveOperationRef.current = false;
+    }
+  }
+
+  async function persistSettings(): Promise<boolean> {
     if (!urlSchemeValid) return false;
     const t = token.trim();
-    const saveScope = credentialDraftScope;
-    const saveProfileId = profile?.id ?? (profile === undefined ? getActiveProfileId() ?? undefined : undefined);
-    let expectedCredential = getAuthToken(saveProfileId);
-    // Only self-revoked drafts need this precondition. A blanked stale draft is
-    // not an instruction to clear a replacement login stored by another flow.
-    // Recheck after awaits and before rollback/reconnect as well as on entry.
-    const credentialStillOwned = () => {
-      const revokedToken = saveScope?.revokedToken;
-      return !revokedToken ||
-        (credentialDraftScopeRef.current === saveScope &&
-          saveProfileId === saveScope?.profileId && t !== revokedToken &&
-          (expectedCredential === null || expectedCredential === revokedToken || t === expectedCredential) &&
-          getAuthToken(saveProfileId) === expectedCredential);
-    };
-    const requireCredentialOwnership = () => {
-      if (credentialStillOwned()) return true;
-      setTestState("fail");
-      setTestError("This login changed while settings were open. Reopen server settings before saving.");
-      return false;
-    };
-    const saveAuthToken = (value: string | null, profileId?: string) => {
-      if (!requireCredentialOwnership()) return false;
-      const persisted = value ? setAuthToken(value, profileId) : clearAuthToken(profileId);
-      if (persisted) expectedCredential = value;
-      return persisted;
-    };
-    if (!requireCredentialOwnership()) return false;
     const urlChanged = haveServerUrlsChanged(initialUrl, normalized);
     const tokenMustBeCleared = shouldClearAuthTokenForUrlChange(
       initialUrl,
@@ -660,29 +906,165 @@ export function ServerSettingsDialog({
       t,
     );
 
-    if (isEditMode) {
-      const previousProfiles = getProfiles();
-      const previousActiveProfileId = getActiveProfileId();
-      const previousProfileToken = profile?.id
-        ? getAuthToken(profile.id)
-        : null;
-      const shouldRevokePreviousProfileSession = Boolean(
-        profile &&
-        previousProfileToken &&
-        (urlChanged || previousProfileToken !== t),
+    const verified = verifiedCredentialRef.current;
+    const attempt = verified?.attempt;
+    if (
+      !verified ||
+      !attempt ||
+      verified !== verifiedCredentialRef.current ||
+      attempt !== currentAuthAttemptRef.current ||
+      verified.candidate !== t ||
+      attempt.endpoint !== normalized ||
+      attempt.authType !== authType ||
+      !canAcceptCredential(attempt, verified.candidate)
+    ) {
+      setTestState("fail");
+      setTestError(
+        "The login changed while this dialog was open. Test the connection again before saving.",
       );
-      const restoreProfileState = (profileId: string): boolean => {
-        if (!credentialStillOwned() || previousProfileToken === saveScope?.revokedToken) return false;
-        const profilesRestored = saveProfiles(previousProfiles);
-        const activeProfileRestored = previousActiveProfileId
-          ? setActiveProfile(previousActiveProfileId)
-          : clearActiveProfile();
-        const tokenRestored = previousProfileToken
-          ? setAuthToken(previousProfileToken, profileId)
-          : clearAuthToken(profileId);
-        return profilesRestored && activeProfileRestored && tokenRestored;
+      return false;
+    }
+    let ownerProfileId = attempt.profileId;
+    let expectedProfileUrl = attempt.persistedUrl;
+    let expectedProfileAuthType = attempt.persistedAuthType;
+    let expectedProfileCreatedAt = attempt.profileCreatedAt;
+    let expectedProfileName = attempt.profileName;
+    let expectedProfileUsername = attempt.profileUsername;
+    let expectedProfileAutoConnect = attempt.profileAutoConnect;
+    let expectedLegacyServerUrl = attempt.legacyServerUrl;
+    let expectedLegacyServerUrlExplicit = attempt.legacyServerUrlExplicit;
+    let expectedToken = currentAttemptToken(attempt);
+    let expectedGeneration = currentAttemptGeneration(attempt);
+    const saveSession = attempt.dialogSession;
+    const targetStillCurrent = () => {
+      if (
+        !open ||
+        dialogSessionRef.current !== saveSession ||
+        currentAuthAttemptRef.current !== attempt ||
+        testRequestIdRef.current !== attempt.requestId ||
+        latestAuthTypeRef.current !== attempt.authType ||
+        latestUrlRef.current !== attempt.endpoint
+      ) {
+        return false;
+      }
+      const currentProfile = latestProfileRef.current;
+      if (
+        (attempt.mode === "saved" &&
+          currentProfile?.id !== attempt.profileId) ||
+        (attempt.mode === "legacy" &&
+          (currentProfile !== undefined ||
+            getActiveProfileId() !== attempt.activeProfileId ||
+            normalizeServerUrl(getServerUrl()) !==
+              normalizeServerUrl(expectedLegacyServerUrl ?? "") ||
+            hasServerUrl() !== expectedLegacyServerUrlExplicit)) ||
+        (attempt.mode === "new" && currentProfile !== null)
+      ) {
+        return false;
+      }
+      if (!ownerProfileId) {
+        return attempt.mode === "new" || attempt.activeProfileId === null;
+      }
+      const persisted = getProfiles().find(
+        (candidate) => candidate.id === ownerProfileId,
+      );
+      return Boolean(
+        persisted &&
+          persisted.createdAt === expectedProfileCreatedAt &&
+          persisted.name === expectedProfileName &&
+          persisted.username === expectedProfileUsername &&
+          persisted.autoConnect === expectedProfileAutoConnect &&
+          normalizeServerUrl(persisted.url) === expectedProfileUrl &&
+          persisted.authType === expectedProfileAuthType,
+      );
+    };
+    const currentOperationToken = () =>
+      ownerProfileId ? getAuthToken(ownerProfileId) : null;
+    const currentOperationGeneration = () =>
+      ownerProfileId
+        ? (getConnectionSnapshot(ownerProfileId)?.owner.generation ?? null)
+        : null;
+    const ownsSaveCredential = () =>
+      targetStillCurrent() &&
+      !invalidatedCredentialAttemptsRef.current.has(attempt) &&
+      currentOperationToken() === expectedToken &&
+      currentOperationGeneration() === expectedGeneration;
+    const mutateOwnedCredential = <T,>(mutation: () => T): T => {
+      const previousMutation = saveCredentialMutationRef.current;
+      saveCredentialMutationRef.current = {
+        attempt,
+        revision: getProfileChangeVersion() + 1,
       };
-      // Profile mode: create or update profile
+      try {
+        return mutation();
+      } finally {
+        saveCredentialMutationRef.current = previousMutation;
+      }
+    };
+    const acceptOwnedTransition = (
+      expectedTokenAfter: string | null,
+      generationBefore: number | null,
+      allowedGenerationDelta = 1,
+      allowInitialGeneration = false,
+    ) => {
+      const actualGeneration = currentOperationGeneration();
+      const acceptedInitialGeneration =
+        allowInitialGeneration &&
+        generationBefore === null &&
+        (actualGeneration === 1 || actualGeneration === 2);
+      const generationDelta =
+        actualGeneration === null || generationBefore === null
+          ? actualGeneration === generationBefore
+            ? 0
+            : null
+          : actualGeneration - generationBefore;
+      if (
+        !targetStillCurrent() ||
+        invalidatedCredentialAttemptsRef.current.has(attempt) ||
+        currentOperationToken() !== expectedTokenAfter ||
+        (!acceptedInitialGeneration &&
+          (generationDelta === null ||
+            generationDelta < 0 ||
+            generationDelta > allowedGenerationDelta))
+      ) {
+        return false;
+      }
+      expectedToken = expectedTokenAfter;
+      expectedGeneration = actualGeneration;
+      return true;
+    };
+    const abortLostCredential = () => {
+      if (
+        dialogSessionRef.current === saveSession &&
+        currentAuthAttemptRef.current === attempt &&
+        testRequestIdRef.current === attempt.requestId
+      ) {
+        setTestState("fail");
+        setTestError(
+          "The login changed while saving. Reauthenticate and try again.",
+        );
+      }
+      return false;
+    };
+    if (!ownsSaveCredential()) return abortLostCredential();
+
+
+    if (isEditMode) {
+      const previousProfiles = getProfiles().map((item) => ({ ...item }));
+      const previousActiveProfileId = getActiveProfileId();
+      const previousProfile = attempt.profileId
+        ? previousProfiles.find((item) => item.id === attempt.profileId) ?? null
+        : null;
+      const previousProfileMediaClientId = previousProfile
+        ? getMediaClientIdForProfile(previousProfile.id)
+        : null;
+      const previousProfileToken = expectedToken;
+      const authTypeChanged =
+        attempt.persistedAuthType !== null &&
+        attempt.persistedAuthType !== authType;
+      const shouldRevokePreviousProfileSession = Boolean(
+        previousProfileToken &&
+          (urlChanged || authTypeChanged || previousProfileToken !== t),
+      );
       const profileData = {
         name: name.trim() || "Unnamed Server",
         url: normalized,
@@ -691,174 +1073,380 @@ export function ServerSettingsDialog({
           authType === "basic" ? username.trim() || undefined : undefined,
         autoConnect,
       };
-
-      let tokenClearedForUrlChange = false;
-      const clearPreviousProfileToken = async () => {
-        if (shouldRevokePreviousProfileSession) {
-          // Persist profile changes first: local persistence failure must not
-          // revoke a still-active remote media session.
-          await revokeCurrentMediaSession(
-            profile!.url,
-            previousProfileToken!,
-            getMediaClientIdForProfile(profile!.id),
-          );
-        }
-        if (!saveAuthToken(null, profile!.id)) {
-          restoreProfileState(profile!.id);
-          setTestState("fail");
-          setTestError(
-            "Unable to clear the old login token; server URL was not changed",
-          );
-          return false;
-        }
-        tokenClearedForUrlChange = true;
-        return true;
-      };
-
-      let savedProfile: ServerProfile;
-      if (profile) {
-        // Update existing profile
-        if (!updateProfile(profile.id, profileData)) {
-          const restored = restoreProfileState(profile.id);
-          setTestState("fail");
-          setTestError(
-            restored
-              ? "Unable to persist the server profile in this browser"
-              : "Unable to persist the server profile and restore the old login",
-          );
-          return false;
-        }
-        savedProfile = { ...profile, ...profileData };
-      } else {
-        // Create new profile
-        savedProfile = createProfile(profileData);
-        const persistedProfile = getProfiles().find(
-          (candidate) => candidate.id === savedProfile.id,
+      
+      const profileMatchesDraft = (candidate: ServerProfile) =>
+        candidate.name === profileData.name &&
+        normalizeServerUrl(candidate.url) === normalized &&
+        candidate.authType === authType &&
+        candidate.username === profileData.username &&
+        candidate.autoConnect === profileData.autoConnect;
+      const restoreProfileState = (): boolean => {
+        const profileId = ownerProfileId;
+        if (!profileId || !ownsSaveCredential()) return false;
+        const currentProfiles = getProfiles();
+        const currentTarget = currentProfiles.find(
+          (item) => item.id === profileId,
         );
         if (
-          !persistedProfile ||
-          normalizeServerUrl(persistedProfile.url) !== normalized
+          !currentTarget ||
+          currentTarget.createdAt !== expectedProfileCreatedAt ||
+          currentTarget.name !== expectedProfileName ||
+          currentTarget.username !== expectedProfileUsername ||
+          currentTarget.autoConnect !== expectedProfileAutoConnect ||
+          normalizeServerUrl(currentTarget.url) !== expectedProfileUrl ||
+          currentTarget.authType !== expectedProfileAuthType
         ) {
+          return false;
+        }
+        const generationBefore = expectedGeneration;
+        const nextProfiles = previousProfile
+          ? currentProfiles.map((item) =>
+              item.id === profileId ? { ...previousProfile } : { ...item },
+            )
+          : currentProfiles
+              .filter((item) => item.id !== profileId)
+              .map((item) => ({ ...item }));
+        if (!saveProfiles(nextProfiles)) return false;
+        if (invalidatedCredentialAttemptsRef.current.has(attempt)) return false;
+
+        const persistedAfterRestore = getProfiles();
+        const restoredTarget = persistedAfterRestore.find(
+          (item) => item.id === profileId,
+        );
+        const targetWasRestored = previousProfile
+          ? Boolean(
+              restoredTarget &&
+                restoredTarget.createdAt === previousProfile.createdAt &&
+                restoredTarget.name === previousProfile.name &&
+                restoredTarget.username === previousProfile.username &&
+                restoredTarget.autoConnect === previousProfile.autoConnect &&
+                normalizeServerUrl(restoredTarget.url) ===
+                  normalizeServerUrl(previousProfile.url) &&
+                restoredTarget.authType === previousProfile.authType,
+            )
+          : !restoredTarget;
+        const generationAfter = currentOperationGeneration();
+        const generationDelta =
+          generationAfter === null || generationBefore === null
+            ? generationAfter === generationBefore
+              ? 0
+              : null
+            : generationAfter - generationBefore;
+        if (!targetWasRestored || generationDelta === null ||
+          generationDelta < 0 || generationDelta > 1) {
+          return false;
+        }
+        const activeProfileAfterRestore = getActiveProfileId();
+        if (
+          previousProfile &&
+          activeProfileAfterRestore !== previousActiveProfileId
+        ) {
+          return false;
+        }
+        if (!previousProfile && activeProfileAfterRestore === profileId) {
+          const activeRestored = previousActiveProfileId
+            ? setActiveProfile(previousActiveProfileId)
+            : clearActiveProfile();
+          if (!activeRestored) return false;
+        }
+        if (getActiveProfileId() !== previousActiveProfileId) return false;
+        if (previousProfile) {
+          expectedProfileUrl = normalizeServerUrl(previousProfile.url);
+          expectedProfileAuthType = previousProfile.authType;
+          expectedProfileCreatedAt = previousProfile.createdAt;
+          expectedProfileName = previousProfile.name;
+          expectedProfileUsername = previousProfile.username;
+          expectedProfileAutoConnect = previousProfile.autoConnect;
+          expectedGeneration = generationAfter;
+          if (invalidatedCredentialAttemptsRef.current.has(attempt)) {
+            return false;
+          }
+          const restoredToken = currentOperationToken();
+          if (
+            restoredToken !== previousProfileToken &&
+            restoredToken !== null
+          ) {
+            return false;
+          }
+          expectedToken = restoredToken;
+          if (!ownsSaveCredential()) return false;
+          if (restoredToken === previousProfileToken) return true;
+          if (previousProfileToken === null) return false;
+          const tokenGenerationBefore = expectedGeneration;
+          if (!mutateOwnedCredential(() =>
+            setAuthToken(previousProfileToken, profileId)
+          )) return false;
+          return acceptOwnedTransition(
+            previousProfileToken,
+            tokenGenerationBefore,
+          );
+        }
+
+        expectedGeneration = generationAfter;
+        return Boolean(
+          attempt.mode === "new" &&
+            dialogSessionRef.current === saveSession &&
+            currentAuthAttemptRef.current === attempt &&
+            testRequestIdRef.current === attempt.requestId &&
+            latestProfileRef.current === null &&
+            !invalidatedCredentialAttemptsRef.current.has(attempt) &&
+            !getProfiles().some((item) => item.id === profileId) &&
+            currentOperationToken() === null &&
+            currentOperationGeneration() === expectedGeneration &&
+            getActiveProfileId() === previousActiveProfileId,
+        );
+      };
+      
+      
+      let savedProfile: ServerProfile;
+      if (profile) {
+        const generationBefore = expectedGeneration;
+        const transitionBefore = getConnectionSnapshot(profile.id);
+        const updateSucceeded = updateProfile(profile.id, profileData);
+        const persistedProfile = getProfiles().find(
+          (candidate) => candidate.id === profile.id,
+        );
+
+        if (persistedProfile && profileMatchesDraft(persistedProfile)) {
+          expectedProfileUrl = normalized;
+          expectedProfileAuthType = authType;
+          expectedProfileName = profileData.name;
+          expectedProfileUsername = profileData.username;
+          expectedProfileAutoConnect = profileData.autoConnect;
+          const tokenAfterMetadata =
+            urlChanged || authTypeChanged ? null : previousProfileToken;
+          const ownedGenerationDelta =
+            !urlChanged &&
+            profile.authType === "basic" &&
+            authType === "none" &&
+            transitionBefore?.intent
+              ? 2
+              : 1;
+          if (
+            !acceptOwnedTransition(
+              tokenAfterMetadata,
+              generationBefore,
+              ownedGenerationDelta,
+            )
+          ) {
+            return abortLostCredential();
+          }
+          savedProfile = { ...profile, ...profileData };
+        } else if (updateSucceeded) {
+          return abortLostCredential();
+        } else {
           setTestState("fail");
           setTestError("Unable to persist the server profile in this browser");
           return false;
         }
-        if (!setActiveProfile(savedProfile.id)) {
-          const restored = restoreProfileState(savedProfile.id);
+        if (!updateSucceeded) {
+          const restored = restoreProfileState();
+          setTestState("fail");
+          setTestError(
+            restored
+              ? "Unable to persist the server profile in this browser"
+              : "Unable to persist the server profile; its previous login was not restored",
+          );
+          return false;
+        }
+
+      } else {
+        const generationBefore = expectedGeneration;
+        savedProfile = createProfile(profileData);
+        ownerProfileId = savedProfile.id;
+        expectedProfileUrl = normalized;
+        expectedProfileAuthType = authType;
+        expectedProfileCreatedAt = savedProfile.createdAt;
+        expectedProfileName = savedProfile.name;
+        expectedProfileUsername = savedProfile.username;
+        expectedProfileAutoConnect = savedProfile.autoConnect;
+        if (
+          !getProfiles().some(
+            (candidate) =>
+              candidate.id === savedProfile.id &&
+              profileMatchesDraft(candidate),
+          ) ||
+          !acceptOwnedTransition(null, generationBefore, 1, true)
+        ) {
+          return abortLostCredential();
+        }
+        const generationBeforeActivation = expectedGeneration;
+        const activationSucceeded = setActiveProfile(savedProfile.id);
+        if (
+          !activationSucceeded ||
+          !acceptOwnedTransition(
+            null,
+            generationBeforeActivation,
+            1,
+            true,
+          )
+        ) {
+          const restored = restoreProfileState();
           setTestState("fail");
           setTestError(
             restored
               ? "Unable to activate the new server profile"
-              : "Unable to activate the new profile and restore the previous state",
+              : "Unable to activate the new profile without overwriting another profile",
           );
           return false;
         }
       }
 
-      // Never carry a token across a backend URL change. A newly tested token
-      // for the replacement URL may be stored instead.
-      if (profile && urlChanged && !(await clearPreviousProfileToken())) {
-        return false;
+      if (shouldRevokePreviousProfileSession) {
+        if (!ownsSaveCredential()) return abortLostCredential();
+        await revokeCurrentMediaSession(
+          previousProfile!.url,
+          previousProfileToken!,
+          previousProfileMediaClientId,
+        );
+        if (!ownsSaveCredential()) return abortLostCredential();
       }
-      if (!tokenClearedForUrlChange && (tokenMustBeCleared || !t)) {
-        if (shouldRevokePreviousProfileSession) {
-          await revokeCurrentMediaSession(
-            profile!.url,
-            previousProfileToken!,
-            getMediaClientIdForProfile(profile!.id),
+
+      const needsTokenClear =
+        previousProfileToken !== null &&
+        (shouldRevokePreviousProfileSession ||
+          urlChanged ||
+          authTypeChanged ||
+          tokenMustBeCleared ||
+          !t);
+      if (needsTokenClear) {
+        if (!ownsSaveCredential()) return abortLostCredential();
+        const generationBefore = expectedGeneration;
+        const clearSucceeded = mutateOwnedCredential(() =>
+          clearAuthToken(savedProfile.id),
+        );
+        if (!clearSucceeded) {
+          const partialClearOwned = acceptOwnedTransition(
+            null,
+            generationBefore,
           );
-        }
-        if (!saveAuthToken(null, savedProfile.id)) {
-          const restored = restoreProfileState(savedProfile.id);
+          const restored = partialClearOwned && restoreProfileState();
           setTestState("fail");
           setTestError(
             restored
-              ? "Unable to clear the login token in this browser"
-              : "Unable to clear the login token and restore the previous state",
+              ? "Unable to clear the previous login token in this browser"
+              : "Unable to clear the previous login token; its prior login was not restored",
           );
           return false;
         }
-      }
-      if (t && !tokenMustBeCleared && shouldRevokePreviousProfileSession) {
-        await revokeCurrentMediaSession(
-          profile!.url,
-          previousProfileToken!,
-          getMediaClientIdForProfile(profile!.id),
-        );
-      }
-      if (t && !tokenMustBeCleared && !saveAuthToken(t, savedProfile.id)) {
-        const restored = restoreProfileState(savedProfile.id);
-        setTestState("fail");
-        setTestError(
-          restored
-            ? "Unable to persist the login token in this browser"
-            : "Unable to persist the login token and restore the previous state",
-        );
-        return false;
+        if (!acceptOwnedTransition(null, generationBefore)) {
+          return abortLostCredential();
+        }
       }
 
-      setSaved(true);
+      if (
+        t &&
+        !tokenMustBeCleared &&
+        currentOperationToken() !== t
+      ) {
+        if (!ownsSaveCredential()) return abortLostCredential();
+        const generationBefore = expectedGeneration;
+        const reconnectIntent =
+          getConnectionSnapshot(savedProfile.id)?.intent ?? false;
+        if (!mutateOwnedCredential(() => setAuthToken(t, savedProfile.id))) {
+          restoreProfileState();
+          setTestState("fail");
+          setTestError("Unable to persist the login token in this browser");
+          return false;
+        }
+        if (!acceptOwnedTransition(
+          t,
+          generationBefore,
+          reconnectIntent ? 2 : 1,
+          attempt.mode === "new",
+        )) {
+          return abortLostCredential();
+        }
+      }
 
-      // Notify parent and close
-      onSaved?.(savedProfile);
-
-      // Invalidate the runtime connection for this profile so changes take effect without reloading
-      if (!requireCredentialOwnership()) return false;
+      if (!ownsSaveCredential()) return abortLostCredential();
       if (urlChanged || tokenMustBeCleared || t) {
+        const generationBefore = expectedGeneration;
         disconnectProfile(savedProfile.id);
+        if (!acceptOwnedTransition(
+          expectedToken,
+          generationBefore,
+          1,
+          attempt.mode === "new",
+        )) {
+          return abortLostCredential();
+        }
         if (
           savedProfile.autoConnect &&
-          (savedProfile.authType === "none" || getAuthToken(savedProfile.id))
+          (savedProfile.authType === "none" || currentOperationToken())
         ) {
+          const generationBeforeConnect = expectedGeneration;
           void connectProfile(savedProfile.id);
+          if (
+            !acceptOwnedTransition(
+              expectedToken,
+              generationBeforeConnect,
+              1,
+              attempt.mode === "new" ||
+                (attempt.mode === "saved" &&
+                  generationBeforeConnect === null &&
+                  savedProfile.autoConnect),
+            )
+          ) {
+            return abortLostCredential();
+          }
         }
       }
+      stopCredentialObservation();
+      setSaved(true);
+      onSaved?.(savedProfile);
       return true;
     } else {
-      // Legacy mode: direct URL/token storage
-      const isSameOrigin =
-        !normalized || normalized === `${location.protocol}//${location.host}`;
-
-      const activeProfileId = getActiveProfileId() ?? undefined;
-      const previousLegacyToken = getAuthToken(activeProfileId);
+      // Legacy mode: direct URL/token storage, bound to the profile selected
+      // when authentication began.
+      const activeProfileId = attempt.profileId ?? undefined;
+      const previousLegacyToken = expectedToken;
+      const previousLegacyUrl = attempt.legacyServerUrl ?? initialUrl;
+      const previousUrlWasExplicit = attempt.legacyServerUrlExplicit ?? false;
+      const previousLegacyMediaClientId = activeProfileId
+        ? getMediaClientIdForProfile(activeProfileId)
+        : null;
       const shouldRevokePreviousLegacySession = Boolean(
-        previousLegacyToken && (urlChanged || previousLegacyToken !== t),
+        previousLegacyToken &&
+          (urlChanged || previousLegacyToken !== t),
       );
-      const previousUrlWasExplicit = hasServerUrl();
       const restoreLegacyState = (): boolean => {
-        if (!credentialStillOwned() || previousLegacyToken === saveScope?.revokedToken) return false;
+        if (!ownsSaveCredential()) return false;
         const urlRestored = previousUrlWasExplicit
-          ? setServerUrl(initialUrl)
+          ? setServerUrl(previousLegacyUrl)
           : clearServerUrl();
-        const tokenRestored = previousLegacyToken
-          ? setAuthToken(previousLegacyToken, activeProfileId)
-          : clearAuthToken(activeProfileId);
-        return urlRestored && tokenRestored;
-      };
-      let tokenClearedForUrlChange = false;
-      const clearPreviousLegacyToken = async () => {
-        if (shouldRevokePreviousLegacySession) {
-          // Persist the replacement URL first so failed local storage does not
-          // revoke a session whose credentials are restored locally.
-          await revokeCurrentMediaSession(
-            initialUrl || getServerUrl(),
-            previousLegacyToken!,
-            activeProfileId
-              ? getMediaClientIdForProfile(activeProfileId)
-              : null,
-          );
-        }
-        if (!saveAuthToken(null, activeProfileId)) {
-          restoreLegacyState();
-          setTestState("fail");
-          setTestError(
-            "Unable to clear the old login token; server URL was not changed",
-          );
+        if (!urlRestored) return false;
+        const restoredUrl = getServerUrl();
+        const restoredUrlExplicit = hasServerUrl();
+        if (
+          normalizeServerUrl(restoredUrl) !==
+            normalizeServerUrl(previousLegacyUrl) ||
+          restoredUrlExplicit !== previousUrlWasExplicit ||
+          getActiveProfileId() !== attempt.activeProfileId
+        ) {
           return false;
         }
-        tokenClearedForUrlChange = true;
-        return true;
+        expectedLegacyServerUrl = restoredUrl;
+        expectedLegacyServerUrlExplicit = restoredUrlExplicit;
+        if (currentOperationToken() === previousLegacyToken) {
+          expectedToken = previousLegacyToken;
+          return true;
+        }
+        if (
+          currentOperationToken() !== null ||
+          previousLegacyToken === null
+        ) {
+          return false;
+        }
+        const generationBefore = expectedGeneration;
+        if (!mutateOwnedCredential(() =>
+          setAuthToken(previousLegacyToken, activeProfileId)
+        )) return false;
+        return acceptOwnedTransition(previousLegacyToken, generationBefore);
       };
+
+      const isSameOrigin =
+        !normalized || normalized === `${location.protocol}//${location.host}`;
       const urlPersisted = isSameOrigin
         ? clearServerUrl()
         : setServerUrl(normalized);
@@ -868,54 +1456,80 @@ export function ServerSettingsDialog({
         setTestError(
           restored
             ? "Unable to persist the server URL in this browser"
-            : "Unable to persist the server URL and restore the old login",
+            : "Unable to persist the server URL; the previous login was not restored",
         );
         return false;
       }
-      if (urlChanged && !(await clearPreviousLegacyToken())) {
-        return false;
-      }
-      if (
-        !tokenClearedForUrlChange &&
-        (tokenMustBeCleared || !t) &&
-        !saveAuthToken(null, activeProfileId)
-      ) {
-        const restored = restoreLegacyState();
-        setTestState("fail");
-        setTestError(
-          restored
-            ? "Unable to clear the login token in this browser"
-            : "Unable to clear the login token and restore the previous state",
-        );
-        return false;
-      }
-      if (t && !tokenMustBeCleared && shouldRevokePreviousLegacySession) {
+      expectedLegacyServerUrl = getServerUrl();
+      expectedLegacyServerUrlExplicit = hasServerUrl();
+      if (!ownsSaveCredential()) return abortLostCredential();
+
+      if (shouldRevokePreviousLegacySession) {
+        if (!ownsSaveCredential()) return abortLostCredential();
         await revokeCurrentMediaSession(
-          initialUrl || getServerUrl(),
+          previousLegacyUrl,
           previousLegacyToken!,
-          activeProfileId ? getMediaClientIdForProfile(activeProfileId) : null,
+          previousLegacyMediaClientId,
         );
-      }
-      if (t && !tokenMustBeCleared && !saveAuthToken(t, activeProfileId)) {
-        const restored = restoreLegacyState();
-        setTestState("fail");
-        setTestError(
-          restored
-            ? "Unable to persist the login token in this browser"
-            : "Unable to persist the login token and restore the previous state",
-        );
-        return false;
+        if (!ownsSaveCredential()) return abortLostCredential();
       }
 
-      if (!requireCredentialOwnership()) return false;
+      const needsTokenClear =
+        previousLegacyToken !== null &&
+        (shouldRevokePreviousLegacySession ||
+          urlChanged ||
+          tokenMustBeCleared ||
+          !t);
+      if (needsTokenClear) {
+        if (!ownsSaveCredential()) return abortLostCredential();
+        const generationBefore = expectedGeneration;
+        const clearSucceeded = mutateOwnedCredential(() =>
+          clearAuthToken(activeProfileId),
+        );
+        if (!clearSucceeded) {
+          const partialClearOwned = acceptOwnedTransition(
+            null,
+            generationBefore,
+          );
+          const restored = partialClearOwned && restoreLegacyState();
+          setTestState("fail");
+          setTestError(
+            restored
+              ? "Unable to clear the previous login token in this browser"
+              : "Unable to clear the previous login token; its prior login was not restored",
+          );
+          return false;
+        }
+        if (!acceptOwnedTransition(null, generationBefore)) {
+          return abortLostCredential();
+        }
+      }
+
+      if (t && !tokenMustBeCleared && currentOperationToken() !== t) {
+        if (!ownsSaveCredential()) return abortLostCredential();
+        const generationBefore = expectedGeneration;
+        if (!mutateOwnedCredential(() => setAuthToken(t, activeProfileId))) {
+          restoreLegacyState();
+          setTestState("fail");
+          setTestError("Unable to persist the login token in this browser");
+          return false;
+        }
+        if (!acceptOwnedTransition(t, generationBefore)) {
+          return abortLostCredential();
+        }
+      }
+
+      if (!ownsSaveCredential()) return abortLostCredential();
       if (username) {
         setAuthUsername(username.trim());
       } else {
         clearAuthUsername();
       }
-
+      stopCredentialObservation();
       setSaved(true);
-      setTimeout(() => window.location.reload(), 800);
+      setTimeout(() => {
+        if (ownsSaveCredential()) window.location.reload();
+      }, 800);
       return true;
     }
   }
@@ -1364,10 +1978,9 @@ export function ServerSettingsDialog({
               type="text"
               value={url}
               onChange={(e) => {
-                testRequestIdRef.current += 1;
+                invalidateConnectionTest();
                 latestUrlRef.current = normalizeServerUrl(e.target.value);
                 setUrl(e.target.value);
-                setTestState("idle");
               }}
               placeholder="http://127.0.0.1:4801"
               data-auth-input="true"
@@ -1550,11 +2163,6 @@ export function ServerSettingsDialog({
             </div>
           )}
 
-          <LoginDevicesSection
-            key={profile === undefined ? "legacy" : (profile?.id ?? "new")}
-            profileId={profile === undefined ? undefined : (profile?.id ?? null)}
-            onSelfRevoked={handleSelfRevoked}
-          />
 
           {canManageBrowserReset && (
             <div
