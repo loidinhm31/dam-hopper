@@ -190,7 +190,11 @@ jobs:
       - name: Clippy production targets
         run: cargo clippy --manifest-path server/Cargo.toml --lib --bins
       - name: Server tests
-        run: cargo test --manifest-path server/Cargo.toml
+        run: |
+          # Keep the real-Chromium PCM qualification out of the parallel harness; it has flaked
+          # under CI load, and remains a required test below.
+          cargo test --manifest-path server/Cargo.toml -- --skip test_real_chromium_media_stealth_and_pcm_audio_bridge
+          cargo test --manifest-path server/Cargo.toml --test browser_host_media test_real_chromium_media_stealth_and_pcm_audio_bridge
 
   server_windows:
     name: Rust server - Windows
