@@ -846,13 +846,15 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
     // The exact filePath assertion below is a real-Chromium qualification lane:
     // CDP permits filePath to be omitted on other platforms.
 
-    let Some(chromium_path) = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]
-        .iter()
-        .map(PathBuf::from)
-        .find(|p| p.is_file())
-    else {
-        eprintln!("SKIP: Chromium binary not found");
-        return;
+    let chromium_path = match dam_hopper_server::browser_host::process::find_browser_executable(None) {
+        Ok(path) => path,
+        Err(error) if std::env::var("DAM_HOPPER_REQUIRE_BROWSER").as_deref() == Ok("1") => {
+            panic!("DAM_HOPPER_REQUIRE_BROWSER=1 is set but no browser was found: {error}");
+        }
+        Err(error) => {
+            eprintln!("SKIP: No configured Chrome/Chromium executable: {error}");
+            return;
+        }
     };
 
     let tmp = tempdir().unwrap();
@@ -948,7 +950,14 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
         .send()
         .await
         .unwrap();
-    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    let create_status = create_resp.status();
+    if create_status != StatusCode::CREATED {
+        let error_body = create_resp
+            .text()
+            .await
+            .unwrap_or_else(|error| format!("<failed to read response body: {error}>"));
+        panic!("expected browser session creation to return 201, got {create_status}: {error_body}");
+    }
     let created = resp_json(create_resp).await;
     let sid = created["browserSessionId"].as_str().unwrap().to_string();
 
