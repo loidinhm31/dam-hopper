@@ -1203,7 +1203,7 @@ fn test_input_message_wire_counters_are_canonical_decimal_strings() {
 /// oracle observing what the native page actually received.
 mod live {
     use super::*;
-    use chromiumoxide_cdp::cdp::browser_protocol::target::CreateTargetParams;
+    use chromiumoxide_cdp::cdp::browser_protocol::target::{AttachToTargetParams, CreateTargetParams};
     use dam_hopper_server::api::browser_host::get_or_register_producer;
     use dam_hopper_server::browser_host::cdp::CdpClient;
     use dam_hopper_server::browser_host::process::{
@@ -1244,6 +1244,7 @@ mod live {
         process: BrowserProcess,
         pub client: Arc<CdpClient>,
         pub page_sid: String,
+        pub target_id: String,
         pub producer: Arc<ScreencastProducer>,
         pub session_id: String,
         pub incarnation: String,
@@ -1314,7 +1315,7 @@ mod live {
             1,
             1,
             client.clone(),
-            target_id,
+            target_id.clone(),
             TargetGeometry {
                 css_width: 1280.0, css_height: 900.0, offset_top: 0.0, scroll_x: 0.0, scroll_y: 0.0,
                 page_scale: 1.0, visual_offset_x: 0.0, visual_offset_y: 0.0, dpr: 1.0,
@@ -1343,6 +1344,7 @@ mod live {
             process,
             client,
             page_sid,
+            target_id,
             producer,
             session_id,
             incarnation,
@@ -2209,11 +2211,31 @@ mod live {
     async fn real_chromium_escape_heavy_paste_oversize_rejection_and_mid_paste_disconnect() {
         let _serial = SERIAL_TEST_LOCK.lock().await;
         let Some(live) = start(None).await else { return };
+        let oracle_client = CdpClient::connect(live.process.ws_endpoint())
+            .await
+            .expect("oracle CDP connection");
+        let oracle_page_sid: String = oracle_client
+            .send_typed(
+                AttachToTargetParams::builder()
+                    .target_id(live.target_id.clone())
+                    .flatten(true)
+                    .build()
+                    .unwrap(),
+                None,
+            )
+            .await
+            .expect("attach independent DOM oracle")
+            .session_id
+            .into();
+        oracle_client
+            .send_command("Runtime.enable", None, Some(&oracle_page_sid))
+            .await
+            .expect("enable independent DOM oracle");
         let mgr = dam_hopper_server::api::browser_host::get_or_create_input_manager(&live.session_id).await;
         let token = live.acquire("viewer-1").await;
         let (mut media, mut control) = live.pair("viewer-1", "sub-esc").await;
 
-        live.client
+        oracle_client
             .send_command(
                 "Runtime.evaluate",
                 Some(json!({
@@ -2224,18 +2246,17 @@ mod live {
                         ta.focus();
                     })()"#,
                 })),
-                Some(&live.page_sid),
+                Some(&oracle_page_sid),
             )
             .await
             .unwrap();
 
         let read_dom = || async {
-            let val = live
-                .client
+            let val = oracle_client
                 .send_command(
                     "Runtime.evaluate",
                     Some(json!({ "expression": "document.getElementById('esc-target').value", "returnByValue": true })),
-                    Some(&live.page_sid),
+                    Some(&oracle_page_sid),
                 )
                 .await
                 .unwrap();
