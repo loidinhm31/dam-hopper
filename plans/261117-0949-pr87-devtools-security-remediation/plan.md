@@ -1,0 +1,70 @@
+---
+title: "PR #87 DevTools security and isolation remediation"
+description: "Confine DevTools download effects, attribute frame downloads correctly, bind control authority and suppress foreign targets."
+status: in-progress
+priority: P1
+effort: 40h
+branch: feat/browser-enhancement
+tags: [bugfix, backend, frontend, auth, security]
+created: 2026-11-17
+---
+# PR #87 DevTools security and isolation remediation
+
+## Outcome and route
+Phase 01 implementation completed and explicitly approved with noted limitations; this plan now tracks remaining remediation phases. The completed [native DevTools feature](../261116-0223-browser-native-chromium-devtools/plan.md) remains historical context, not a security closure receipt. Phase 01 does not imply completion or qualification of the full remediation.
+
+Close four findings end-to-end: F1 client download-directory override; F2 iframe download cross-tab attribution; F3 DevTools bypass of viewer control; F4 foreign worker/child-target metadata or attachment, including non-Target ServiceWorker authority. Planning evidence did not include deployed Chromium reproduction; Phase 01 reported test results and acceptance are recorded below.
+
+## Phases
+| Phase | Scope | Status | Effort |
+|---|---|---|---|
+| [01](phase-01-command-effect-boundary.md) | Command/download policy, ServiceWorker deny and bounded analogous effect inventory | DONE (2026-11-17 12:44:55 EST) | 5h |
+| [02](phase-02-frame-download-ownership.md) | Positive frame ownership and GUID-pinned download routing | pending | 8h |
+| [03](phase-03-control-capability-lifecycle.md) | Control binding, ordered revocation and shared UI/CDP held-input accounting, all UI callers | pending | 10h |
+| [04](phase-04-target-session-isolation.md) | Positive target/session filtering plus non-Target worker metadata/control closure | pending | 10h |
+| [05](phase-05-regressions-qualification-docs.md) | Real-Chromium attacks/input-release/compatibility matrix and canonical API docs | pending | 7h |
+Nine durable tasks; strictly sequential graph. Estimates exclude unavailable environment waits. Main is integration/scheduling owner; assign one writer at a time for overlapping sources/tests.
+## Phase 01 completion receipt
+- **Status:** DONE (2026-11-17 12:44:55 EST), explicitly approved by the user with noted limitations.
+- **Validation reported PASS:** latest targeted tester report: unit 5/5; integration 5/5, including the real-Chromium test. The project-manager status update did not rerun checks.
+- **Review:** 9/10; accepted with noted limitations.
+- **Deferred limitations / scope:** memory-accounting and write-buffer lifetime concerns remain deferred. Phase 02+ ownership work and Phase 05 worker compatibility remain out of scope for this approval and are still pending. This receipt does not claim deployed-Chromium qualification or completion of the four findings.
+
+
+## Settled design
+- Native full DevTools is active page control, not a read-only inspector. Require current authenticated viewer's control lease, including Runtime/DOM/navigation, not only Input.*. Do not introduce a read-only mode.
+- A valid holder cannot change server-owned download policy: deny Page.setDownloadBehavior plus Browser.*, geometry/lifecycle escapes and opaque routing bypasses. ServiceWorker commands default-deny and events suppress unless an enforceable target-scoped contract is proven; context-wide lifecycle commands always deny. Inventory analogous currently-forwarded nonlocal effects narrowly, not a protocol redesign.
+- Resolve child/OOPIF frames positively; bind GUID to exact logical session, native target and process/profile incarnation. Unknown/ambiguous frame ownership means no attribution, never all-watchers fallback. Progress follows GUID only.
+- Capabilities bind auth session/principal/viewer/logical/native target/incarnation/profile/control epoch. Reuse existing authority owner and shared pending/confirmed UI/CDP native-hold ledger: fence old authority → cancel/drain commands → release holds on captured identity → confirm → publish successor. Ambiguous write/release keeps control unavailable until reconcile/retire; revoked token requires remint.
+- Targets/child sessions: Unknown → Owned only with causal live ownership proof; Unknown/Foreign suppressed and unusable; Detached/Retired removed. Origin/type/opener guesses and shared browser process are not proof. Ambiguous shared/service workers stay denied.
+- Existing `/api/browser/cdp/*` remains explicitly privileged instance-wide raw automation, outside cooperative viewer control. Audit/document this authority, do not claim universal exclusivity or that these fixes sandbox trusted raw CDP/local host users.
+- Preserve owned Console/Network/Elements/Issues, safe native downloads, server geometry ownership and current privacy/logout fences. Clean API cutover; no bodyless-mint compatibility shim.
+
+## Dependencies and serialization
+- [Host Browser review remediation](../261109-2251-host-browser-review-remediation/plan.md): concurrent writable overlap, not superseded or an imported whole-plan dependency. Phase 02 `unify-geometry-counters`, `enforce-paired-input-lifecycle`, `recover-screencast-runs`, `bound-browser-payloads` share input/actor/media/API/gateway/tests. Phase 03 `reconcile-browser-ownership` and `wire-browser-interaction` share BrowserApp/API/types/input. Phase 04 shares docs and qualification.
+- BLOCK scheduling until Main confirms exclusive shared-file handoff against that plan's current uncommitted work and rechecks live interfaces. Current overview says Phase 02 failures; its detailed handoff reports repairs plus unresolved qualification/review. Neither is approval. Do not require unrelated Windows/Android/soak tasks to finish before reachable Linux security repairs.
+- Existing overlapping Phase 03 says downloads denied; completed feature and current source permit native downloads. This plan preserves approved native host downloads. Coordinator must reconcile that stale scope at integration without this author editing the other plan.
+- Canonical `docs/api/browser-host.md` overlaps the other plan's Phase 04 `reconcile-release-docs`; Main must serialize that file's explicit handoff with this plan's `reconcile-security-docs`, as well as architecture/system/roadmap docs. API index remains a link, not a duplicate specification.
+- Preferred `docs/architecture.md` and root `ARCHITECTURE.md` absent. Relevant baseline `docs/architecture/host-browser-cdp-streaming.md` exists; intended design is recorded here because planner cannot edit maintained docs. Phase 05 publishes reconciled actual contracts, not a claim of prior Gate 1 publication.
+
+## Acceptance and evidence gates
+All four attacks denied or correctly isolated through DamHopper routes; owned commands/downloads/frontend still succeed. Assert filesystem bytes/path, per-session DTO/events, DOM outcomes, foreign metadata absence plus independently live B-worker after A's ServiceWorker attempts, and observable UI/CDP native release before safe successor. [Phase 05](phase-05-regressions-qualification-docs.md) gives exact future commands/oracles; skipped native scenarios never pass.
+
+## Accepted independent review triage
+[Independent review](reports/independent-plan-review.md): complete, **revision required** (R1 high; R2/R3 medium); report remains reviewer-owned and unchanged. Main/advisor accepted all findings. This revision records design disposition, not resolved findings or approval.
+- **R1 accepted:** Phase 01 policy/inventory → Phase 04 enforcement → Phase 05 actual-proxy ServiceWorker metadata/liveness and positive frontend gates. Upstream evidence is not deployed-engine qualification.
+- **R2 accepted:** Phase 03 shared authority/held-input lifecycle → Phase 05 CDP and mixed-channel release, failure/race and successor-safety gates; no rollback promise for prior JavaScript.
+- **R3 accepted:** Phase 05 owns canonical API JSON/control/asset/WS/revocation/worker/raw-exception docs with cross-plan serialization; no shared docs edits in this planning assignment.
+
+## Planning status and handoff gates
+- Selected artifacts revised in place; nine stable tasks, no tasks.json hydration or product edits. Authoring structure inspected on actual linked artifacts before return.
+- Initial challenge and [targeted follow-up](reports/independent-plan-review-followup.md) complete: R1–R3 consistently propagated; no residual material planning finding established on reviewed surfaces. This is not implementation finding closure.
+- Final `prompt` validation **complete** (2026-11-17): user selected all three existing defaults—raw CDP `retain-privileged` (authenticated instance-wide exception, no cooperative viewer-control coverage); stateful Input `tracked-core` (shared UI/CDP key/mouse ledger, unsupported touch/drag/gesture denied unless cleanup proven); worker scope `deny-ambiguous` (positive target-scoped proof only).
+- No material decision changed; existing review/follow-up receipts remain applicable. No repeat review or phase/task changes required.
+Phase 01 is DONE and explicitly approved with noted limitations as recorded above. Phases 02–05 remain pending; their ownership/qualification work is outside this approval. Shared-file handoff, deployed-engine evidence, and eventual implementation/release qualification remain separate gates; no full-plan completion or security-closure claim.
+
+## Unresolved questions / blockers
+- Active-plan setter was invoked from the published harness; `EVCRATE_SESSION_ID` is unset, so session persistence is unavailable. Carry this explicit selected path; no activation claimed.
+1. Main: exclusive source/input/canonical API docs handoff against the active [Host Browser remediation plan](../261109-2251-host-browser-review-remediation/plan.md), including current writers/live interfaces and stale download-denial wording at integration. Scheduling remains blocked until explicit handoff.
+2. Implementer/qualifier: prove deployed frame/OOPIF/worker provenance and actual ServiceWorker route behavior against selected executable/protocol. Unknown worker scope stays denied; context-wide methods never gain holder authorization. Required owned frontend/child compatibility and native held-input release/successor safety remain unexecuted.
+3. Qualifier: executable/version, supported Linux runner, isolated fixtures and real frontend journey availability unverified. No platform parity claimed.

@@ -2470,7 +2470,8 @@ async fn relay_devtools_socket(
     };
     use crate::browser_host::devtools::global_devtools_leases;
     use crate::browser_host::devtools_filter::{
-        inspect_devtools_client_message, ClientMessageVerdict, DevToolsUpstreamFilter,
+        devtools_json_memory_bound, inspect_devtools_client_message, ClientMessageVerdict,
+        DevToolsUpstreamFilter,
     };
     use crate::browser_host::diagnostics::global_memory_controller;
     use crate::browser_host::protocol::MAX_WS_MESSAGE_BYTES;
@@ -2540,21 +2541,20 @@ async fn relay_devtools_socket(
             msg = client_ws.next() => {
                 let ok = match msg {
                     Some(Ok(AxumWsMessage::Text(t))) => {
-                        let Ok(_mem) = global_memory_controller().try_reserve(t.len().saturating_mul(2)) else { break; };
+                        let Some(memory_bound) = devtools_json_memory_bound(t.as_str()) else { break; };
+                        let Ok(_mem) = global_memory_controller().try_reserve(memory_bound) else { break; };
                         match inspect_devtools_client_message(t.as_str(), &lease.native_target_id) {
-                            ClientMessageVerdict::Forward => {
-                                write_with_cancel(upstream_ws.send(UpstreamMessage::Text(t.as_str().into())), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                            ClientMessageVerdict::Forward(message) => {
+                                write_with_cancel(upstream_ws.send(UpstreamMessage::Text(message.into())), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
                             }
                             ClientMessageVerdict::Reject(Some(err)) => {
                                 write_with_cancel(client_ws.send(AxumWsMessage::Text(err.into())), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
                             }
-                            ClientMessageVerdict::Reject(None) => true,
+                            ClientMessageVerdict::Reject(None) => false,
                         }
                     }
-                    Some(Ok(AxumWsMessage::Binary(b))) => {
-                        let Ok(_mem) = global_memory_controller().try_reserve(b.len()) else { break; };
-                        write_with_cancel(upstream_ws.send(UpstreamMessage::Binary(b)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
-                    }
+                    // CDP commands are text JSON envelopes; binary input is never relayed.
+                    Some(Ok(AxumWsMessage::Binary(_))) => false,
                     Some(Ok(AxumWsMessage::Ping(p))) => {
                         write_with_cancel(upstream_ws.send(UpstreamMessage::Ping(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
                     }
@@ -2568,17 +2568,16 @@ async fn relay_devtools_socket(
             msg = upstream_ws.next() => {
                 let ok = match msg {
                     Some(Ok(UpstreamMessage::Text(t))) => {
-                        let Ok(_mem) = global_memory_controller().try_reserve(t.len().saturating_mul(2)) else { break; };
+                        let Some(memory_bound) = devtools_json_memory_bound(t.as_str()) else { break; };
+                        let Ok(_mem) = global_memory_controller().try_reserve(memory_bound) else { break; };
                         if !upstream_filter.should_forward(t.as_str(), &lease.native_target_id) {
                             true
                         } else {
                             write_with_cancel(client_ws.send(AxumWsMessage::Text(t.as_str().into())), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
                         }
                     }
-                    Some(Ok(UpstreamMessage::Binary(b))) => {
-                        let Ok(_mem) = global_memory_controller().try_reserve(b.len()) else { break; };
-                        write_with_cancel(client_ws.send(AxumWsMessage::Binary(b)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
-                    }
+                    // Native DevTools application messages are text JSON only.
+                    Some(Ok(UpstreamMessage::Binary(_))) => false,
                     Some(Ok(UpstreamMessage::Ping(p))) => {
                         write_with_cancel(client_ws.send(AxumWsMessage::Ping(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
                     }

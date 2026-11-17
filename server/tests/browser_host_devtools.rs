@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
 
 use axum::body::Body;
@@ -247,9 +248,22 @@ async fn insert_running_session(
     session_id
 }
 
-async fn spawn_mock_chromium_server(expected_target_id: String) -> (u16, Arc<Mutex<Vec<String>>>) {
+async fn spawn_mock_chromium_server(
+    expected_target_id: String,
+) -> (
+    u16,
+    Arc<Mutex<Vec<String>>>,
+    Arc<Mutex<Vec<usize>>>,
+    Arc<Mutex<Vec<usize>>>,
+) {
     let seen_methods = Arc::new(Mutex::new(Vec::<String>::new()));
+    let triggered_connections = Arc::new(Mutex::new(Vec::<usize>::new()));
+    let closed_connections = Arc::new(Mutex::new(Vec::<usize>::new()));
+    let next_connection_id = Arc::new(AtomicUsize::new(0));
     let seen_clone = seen_methods.clone();
+    let triggered_clone = triggered_connections.clone();
+    let closed_clone = closed_connections.clone();
+    let next_connection_clone = next_connection_id.clone();
     let target_clone = expected_target_id;
 
     let router = Router::new()
@@ -299,11 +313,17 @@ async fn spawn_mock_chromium_server(expected_target_id: String) -> (u16, Arc<Mut
             get(move |AxumPath(tid): AxumPath<String>, ws: WebSocketUpgrade| {
                 let seen = seen_clone.clone();
                 let exp = target_clone.clone();
+                let triggered = triggered_clone.clone();
+                let closed = closed_clone.clone();
+                let next_connection = next_connection_clone.clone();
                 async move {
                     if tid != exp {
                         return StatusCode::NOT_FOUND.into_response();
                     }
                     ws.on_upgrade(move |mut socket| async move {
+                        let connection_id = next_connection.fetch_add(1, Ordering::Relaxed);
+                        let triggered = triggered.clone();
+                        let closed = closed.clone();
                         let _ = socket
                             .send(AxumWsMsg::Text(
                                 json!({
@@ -334,14 +354,63 @@ async fn spawn_mock_chromium_server(expected_target_id: String) -> (u16, Arc<Mut
                                 .into(),
                             ))
                             .await;
-                        while let Some(Ok(AxumWsMsg::Text(txt))) = socket.next().await {
-                            let val: Value = serde_json::from_str(&txt).unwrap();
-                            if let Some(m) = val.get("method").and_then(Value::as_str) {
-                                seen.lock().push(m.to_string());
-                            }
-                            let reply = json!({ "id": val["id"], "result": { "ok": true } });
-                            if socket.send(AxumWsMsg::Text(reply.to_string().into())).await.is_err() {
-                                break;
+                        let _ = socket
+                            .send(AxumWsMsg::Text(
+                                json!({
+                                    "method": "ServiceWorker.workerRegistrationUpdated",
+                                    "sessionId": "unknown-session",
+                                    "params": { "registrations": [{ "scopeURL": "https://foreign.test/" }] }
+                                })
+                                .to_string()
+                                .into(),
+                            ))
+                            .await;
+                        let _ = socket
+                            .send(AxumWsMsg::Text(
+                                json!({
+                                    "method": "BackgroundService.recordingStateChanged",
+                                    "sessionId": "unknown-session",
+                                    "params": { "service": "backgroundFetch", "isRecording": true }
+                                })
+                                .to_string()
+                                .into(),
+                            ))
+                            .await;
+                        while let Some(Ok(frame)) = socket.next().await {
+                            match frame {
+                                AxumWsMsg::Text(txt) => {
+                                    let Ok(val) = serde_json::from_str::<Value>(&txt) else {
+                                        seen.lock().push("<invalid-json>".into());
+                                        continue;
+                                    };
+                                    let Some(method) = val.get("method").and_then(Value::as_str) else {
+                                        seen.lock().push("<non-command>".into());
+                                        continue;
+                                    };
+                                    seen.lock().push(method.to_string());
+                                    if method == "Runtime.triggerBinary" {
+                                        triggered.lock().push(connection_id);
+                                        if socket.send(AxumWsMsg::Binary(vec![0, 1, 2].into())).await.is_err() {
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                    let reply = json!({ "id": val["id"], "result": { "ok": true } });
+                                    if socket.send(AxumWsMsg::Text(reply.to_string().into())).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                AxumWsMsg::Binary(_) => seen.lock().push("<binary>".into()),
+                                AxumWsMsg::Ping(payload) => {
+                                    if socket.send(AxumWsMsg::Pong(payload)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                AxumWsMsg::Pong(_) => {}
+                                AxumWsMsg::Close(_) => {
+                                    closed.lock().push(connection_id);
+                                    break;
+                                }
                             }
                         }
                     })
@@ -354,12 +423,98 @@ async fn spawn_mock_chromium_server(expected_target_id: String) -> (u16, Arc<Mut
     tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    (port, seen_methods)
+    (port, seen_methods, triggered_connections, closed_connections)
 }
 
 async fn resp_json(resp: reqwest::Response) -> Value {
     let bytes = resp.bytes().await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
+}
+async fn mint_devtools_probe_token(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    session_id: &str,
+    auth_token: &str,
+) -> String {
+    let response = client
+        .post(format!("http://{addr}/api/browser/sessions/{session_id}/devtools"))
+        .header(AUTHORIZATION, format!("Bearer {auth_token}"))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .send()
+        .await
+        .unwrap();
+    resp_json(response).await["token"].as_str().unwrap().to_string()
+}
+
+async fn assert_devtools_client_frame_closes(addr: SocketAddr, token: &str, frame: WsMsg) {
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{token}/ws"))
+            .await
+            .expect("connect disposable DevTools socket");
+    let initial = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(initial.to_text().unwrap()).unwrap()["params"]["targetInfo"]["targetId"],
+        "CHILD-WORKER"
+    );
+    ws.send(frame).await.unwrap();
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap();
+    assert!(matches!(closed, None | Some(Ok(WsMsg::Close(_))) | Some(Err(_))));
+}
+
+async fn assert_devtools_upstream_binary_closes(
+    addr: SocketAddr,
+    token: &str,
+    triggered: Arc<Mutex<Vec<usize>>>,
+    closed_connections: Arc<Mutex<Vec<usize>>>,
+) {
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{token}/ws"))
+            .await
+            .expect("connect disposable DevTools socket");
+    let initial = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(initial.to_text().unwrap()).unwrap()["params"]["targetInfo"]["targetId"],
+        "CHILD-WORKER"
+    );
+    ws.send(WsMsg::Text(
+        json!({"id": 501, "method": "Runtime.triggerBinary"}).to_string().into(),
+    ))
+    .await
+    .unwrap();
+    let downstream_closed = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap();
+    assert!(matches!(downstream_closed, None | Some(Ok(WsMsg::Close(_))) | Some(Err(_))));
+    let connection_id = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Some(connection_id) = triggered.lock().last().copied() {
+                break connection_id;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("mock must record the binary-triggering connection");
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if closed_connections.lock().contains(&connection_id) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("relay must close the binary-triggering upstream connection");
 }
 
 #[tokio::test]
@@ -505,7 +660,7 @@ async fn test_devtools_asset_proxy_csp_and_path_traversal() {
     let _serial = TEST_SERIAL.lock().await;
     global_session_registry().reset_for_test().await;
     let tmp = tempdir().unwrap();
-    let (mock_port, _) = spawn_mock_chromium_server("TARGET-ASSET".into()).await;
+    let (mock_port, _, _, _) = spawn_mock_chromium_server("TARGET-ASSET".into()).await;
     let (auth_service, tok) = make_user_token("dt-asset", UserRole::Admin);
     let state = create_test_state(
         tmp.path().to_path_buf(),
@@ -625,7 +780,8 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
     let _serial = TEST_SERIAL.lock().await;
     global_session_registry().reset_for_test().await;
     let tmp = tempdir().unwrap();
-    let (mock_port, seen_methods) = spawn_mock_chromium_server("TARGET-WS".into()).await;
+    let (mock_port, seen_methods, triggered_connections, closed_connections) =
+        spawn_mock_chromium_server("TARGET-WS".into()).await;
     let (store, auth_service, tokens) =
         setup_sqlite_multi_session(tmp.path(), "dt-ws", &["auth-a", "auth-b"]).await;
     let state = create_test_state(
@@ -677,6 +833,22 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
             .unwrap(),
     )
     .await;
+    let binary_lease = resp_json(
+        client
+            .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
+            .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+            .header(ORIGIN, "http://127.0.0.1:5173")
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let tok_binary = binary_lease["token"].as_str().unwrap();
+    let tok_malformed = mint_devtools_probe_token(&client, addr, &sid, &tokens[0]).await;
+    let tok_batch = mint_devtools_probe_token(&client, addr, &sid, &tokens[0]).await;
+    let tok_upstream_binary = mint_devtools_probe_token(&client, addr, &sid, &tokens[0]).await;
+    let tok_dense = mint_devtools_probe_token(&client, addr, &sid, &tokens[0]).await;
+    let tok_scalar = mint_devtools_probe_token(&client, addr, &sid, &tokens[0]).await;
     let tok_a = lease_a["token"].as_str().unwrap();
     let tok_b = lease_b["token"].as_str().unwrap();
 
@@ -687,6 +859,77 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
     // Second WS with same token rejected with 409 Conflict
     let dup = tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{tok_a}/ws")).await;
     assert!(dup.is_err(), "duplicate WS for same token must be rejected");
+    // Unsupported binary application frames terminate only their own socket.
+    let (mut binary_ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{tok_binary}/ws"))
+            .await
+            .expect("connect binary-probe devtools ws");
+    let binary_first_evt = tokio::time::timeout(std::time::Duration::from_secs(2), binary_ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(binary_first_evt.to_text().unwrap()).unwrap()["params"]["targetInfo"]["targetId"],
+        "CHILD-WORKER"
+    );
+    binary_ws.send(WsMsg::Binary(vec![0, 1, 2].into())).await.unwrap();
+    let binary_closed = tokio::time::timeout(std::time::Duration::from_secs(2), binary_ws.next())
+        .await
+        .unwrap();
+    assert!(matches!(binary_closed, None | Some(Ok(WsMsg::Close(_))) | Some(Err(_))));
+    assert_devtools_client_frame_closes(
+        addr,
+        &tok_malformed,
+        WsMsg::Text("{".to_string().into()),
+    )
+    .await;
+    assert_devtools_client_frame_closes(
+        addr,
+        &tok_batch,
+        WsMsg::Text(json!([{"id": 1, "method": "Runtime.enable"}]).to_string().into()),
+    )
+    .await;
+    let dense_values = vec!["0"; 9_000].join(",");
+    let dense_message = format!(
+        r#"{{"id":77,"method":"Runtime.evaluate","params":{{"value":[{dense_values}]}}}}"#
+    );
+    assert_devtools_client_frame_closes(
+        addr,
+        &tok_dense,
+        WsMsg::Text(dense_message.into()),
+    )
+    .await;
+    assert_devtools_client_frame_closes(
+        addr,
+        &tok_scalar,
+        WsMsg::Text(r#""not a command""#.to_string().into()),
+    )
+    .await;
+    assert_devtools_upstream_binary_closes(
+        addr,
+        &tok_upstream_binary,
+        triggered_connections,
+        closed_connections,
+    )
+    .await;
+    assert!(seen_methods.lock().contains(&"Runtime.triggerBinary".to_string()));
+    assert!(!seen_methods.lock().iter().any(|frame| {
+        matches!(frame.as_str(), "<binary>" | "<invalid-json>" | "<non-command>")
+    }));
+    let (mut survivor_ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{tok_b}/ws"))
+            .await
+            .expect("connect auth-b survivor devtools ws");
+    let survivor_first_evt = tokio::time::timeout(std::time::Duration::from_secs(2), survivor_ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(survivor_first_evt.to_text().unwrap()).unwrap()["params"]["targetInfo"]["targetId"],
+        "CHILD-WORKER"
+    );
 
     // Upstream foreign page Target.targetCreated dropped; worker forwarded
     let first_evt = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
@@ -697,7 +940,7 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
     let first_val: Value = serde_json::from_str(first_evt.to_text().unwrap()).unwrap();
     assert_eq!(first_val["params"]["targetInfo"]["targetId"], "CHILD-WORKER");
 
-    // Geometry, Browser.*, and cross-target Target.* rejected with -32601
+    // Protected effects and cross-target commands are rejected before reaching the peer.
     for (id, method, params) in [
         (1, "Emulation.clearDeviceMetricsOverride", json!({})),
         (2, "Emulation.setDeviceMetricsOverride", json!({"width": 500, "height": 500, "deviceScaleFactor": 1, "mobile": false})),
@@ -705,29 +948,127 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
         (4, "Target.getTargets", json!({})),
         (5, "Target.sendMessageToTarget", json!({"sessionId": "x", "message": "{}"})),
         (6, "Target.attachToTarget", json!({"targetId": "OTHER-TAB"})),
+        (7, "Page.setDownloadBehavior", json!({"behavior": "allow", "downloadPath": "/tmp/attacker"})),
+        (8, "ServiceWorker.stopAllWorkers", json!({})),
+        (9, "ServiceWorker.enable", json!({})),
+        (10, "Storage.getCookies", json!({})),
+        (11, "Network.setCookie", json!({"name": "x", "value": "y"})),
+        (12, "BackgroundService.startObserving", json!({"service": "backgroundFetch"})),
+        (13, "BackgroundService.setRecording", json!({"service": "backgroundFetch", "shouldRecord": true})),
     ] {
         ws.send(WsMsg::Text(json!({"id": id, "method": method, "params": params}).to_string().into()))
             .await
             .unwrap();
-        let reply = ws.next().await.unwrap().unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let parsed: Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
         assert_eq!(parsed["id"], id);
         assert_eq!(parsed["error"]["code"], -32601);
     }
+    ws.send(WsMsg::Text(
+        json!({
+            "id": 14,
+            "sessionId": "unknown-session",
+            "method": "Page.setDownloadBehavior",
+            "params": {"behavior": "allow", "downloadPath": "/tmp/child"}
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let flattened_reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let flattened_value: Value = serde_json::from_str(flattened_reply.to_text().unwrap()).unwrap();
+    assert_eq!(flattened_value["id"], 14);
+    assert_eq!(flattened_value["sessionId"], "unknown-session");
+    assert_eq!(flattened_value["error"]["code"], -32601);
+    assert!(flattened_value.get("result").is_none());
+    ws.send(WsMsg::Text(
+        json!({
+            "id": 15,
+            "sessionId": "unknown-session",
+            "method": "BackgroundService.startObserving",
+            "params": {"service": "backgroundFetch"}
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let flattened_worker_reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let flattened_worker_value: Value =
+        serde_json::from_str(flattened_worker_reply.to_text().unwrap()).unwrap();
+    assert_eq!(flattened_worker_value["id"], 15);
+    assert_eq!(flattened_worker_value["sessionId"], "unknown-session");
+    assert_eq!(flattened_worker_value["error"]["code"], -32601);
+    assert!(flattened_worker_value.get("result").is_none());
+    ws.send(WsMsg::Text(
+        json!({
+            "id": 16,
+            "sessionId": "unknown-session",
+            "method": "ServiceWorker.stopAllWorkers",
+            "params": {}
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let flattened_service_worker_reply =
+        tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    let flattened_service_worker_value: Value =
+        serde_json::from_str(flattened_service_worker_reply.to_text().unwrap()).unwrap();
+    assert_eq!(flattened_service_worker_value["id"], 16);
+    assert_eq!(flattened_service_worker_value["sessionId"], "unknown-session");
+    assert_eq!(flattened_service_worker_value["error"]["code"], -32601);
+    assert!(flattened_service_worker_value.get("result").is_none());
 
     // Allowed Runtime.enable reaches upstream
     ws.send(WsMsg::Text(json!({"id": 99, "method": "Runtime.enable"}).to_string().into()))
         .await
         .unwrap();
-    let ok_reply = ws.next().await.unwrap().unwrap();
+    let ok_reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let dense_values = vec!["0"; 2_000].join(",");
+    let dense_allowed = format!(
+        r#"{{"id":100,"method":"Runtime.evaluate","params":{{"value":[{dense_values}]}}}}"#
+    );
+    ws.send(WsMsg::Text(dense_allowed.into())).await.unwrap();
+    let dense_reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let dense_reply_value: Value = serde_json::from_str(dense_reply.to_text().unwrap()).unwrap();
+    assert_eq!(dense_reply_value["id"], 100);
+    assert_eq!(dense_reply_value["result"]["ok"], true);
     let ok_val: Value = serde_json::from_str(ok_reply.to_text().unwrap()).unwrap();
     assert_eq!(ok_val["id"], 99);
     assert_eq!(ok_val["result"]["ok"], true);
-    assert_eq!(seen_methods.lock().as_slice(), &["Runtime.enable"]);
+    assert_eq!(seen_methods.lock().as_slice(), &["Runtime.triggerBinary", "Runtime.enable", "Runtime.evaluate"]);
 
     // Session input_available remains true
     let snap = global_session_registry().snapshot(&sid, "dt-ws").await.unwrap();
     assert!(snap.dto.input_available, "input_available must stay true");
+    assert_eq!(seen_methods.lock().as_slice(), &["Runtime.triggerBinary", "Runtime.enable", "Runtime.evaluate"]);
 
     // Single-session auth revocation (DELETE /api/auth/sessions/auth-a) closes auth-a WS while auth-b survives
     let revoke_resp = client
@@ -740,6 +1081,19 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
     assert_eq!(revoke_resp.status(), StatusCode::NO_CONTENT);
     let closed = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await.unwrap();
     assert!(matches!(closed, None | Some(Ok(WsMsg::Close(_))) | Some(Err(_))));
+    survivor_ws
+        .send(WsMsg::Text(json!({"id": 100, "method": "Runtime.enable"}).to_string().into()))
+        .await
+        .unwrap();
+    let survivor_reply = tokio::time::timeout(std::time::Duration::from_secs(2), survivor_ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let survivor_value: Value = serde_json::from_str(survivor_reply.to_text().unwrap()).unwrap();
+    assert_eq!(survivor_value["id"], 100);
+    assert_eq!(survivor_value["result"]["ok"], true);
+    assert_eq!(seen_methods.lock().as_slice(), &["Runtime.triggerBinary", "Runtime.enable", "Runtime.evaluate", "Runtime.enable"]);
 
     let b_asset = client
         .get(format!("http://{addr}/api/browser/devtools/{tok_b}/devtools_app.html"))
@@ -756,6 +1110,9 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
         .send()
         .await
         .unwrap();
+    let survivor_closed =
+        tokio::time::timeout(std::time::Duration::from_secs(2), survivor_ws.next()).await.unwrap();
+    assert!(matches!(survivor_closed, None | Some(Ok(WsMsg::Close(_))) | Some(Err(_))));
     let b_after = client
         .get(format!("http://{addr}/api/browser/devtools/{tok_b}/devtools_app.html"))
         .send()
@@ -769,7 +1126,7 @@ async fn test_devtools_ws_enforces_max_concurrent_connections() {
     let _serial = TEST_SERIAL.lock().await;
     global_session_registry().reset_for_test().await;
     let tmp = tempdir().unwrap();
-    let (mock_port, _) = spawn_mock_chromium_server("TARGET-MAX".into()).await;
+    let (mock_port, _, _, _) = spawn_mock_chromium_server("TARGET-MAX".into()).await;
     let (auth_service, tok) = make_user_token("dt-max", UserRole::Admin);
     let state = create_test_state(
         tmp.path().to_path_buf(),
