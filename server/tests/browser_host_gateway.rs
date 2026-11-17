@@ -730,14 +730,7 @@ async fn test_raw_page_socket_sessionless_resize_and_clear_fence_its_target() {
 }
 
 fn find_test_browser() -> Option<PathBuf> {
-    [
-        "/usr/bin/google-chrome",
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-    ]
-    .iter()
-    .map(PathBuf::from)
-    .find(|p| p.is_file())
+    dam_hopper_server::browser_host::process::find_browser_executable(None).ok()
 }
 
 async fn get_json(app: &axum::Router, uri: &str, token: &str, host: &str) -> (StatusCode, String) {
