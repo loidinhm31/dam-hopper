@@ -403,6 +403,7 @@ enabled = true
 executable_path = "${browserExec}"
 profile_root = "${browserProfileRoot}"
 allowed_target_origins = ${JSON.stringify(allowedOrigins)}
+denied_destinations = ${JSON.stringify([`127.0.0.1:${deniedPort}`])}
 
 [server.browser.budgets]
 max_targets = ${options.maxTargets ?? 2}
