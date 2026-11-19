@@ -31,7 +31,9 @@ use super::session::{
     creation_marker_url, parse_creation_marker, BindOutcome, BrowserSessionDto, DownloadOwner,
     PopupAdmission, RollbackOutcome, SessionDeparture, SessionRegistry, SessionStatus, TargetClass,
 };
-use super::target_ownership::{FrameOwner, FrameSnapshotNode, OwnershipFence, ValidityToken};
+use super::target_ownership::{
+    FrameOwner, FrameSnapshotNode, OwnershipFence, RootFenceStatus, ValidityToken,
+};
 
 pub const DEFAULT_TERMINATE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_DELETE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1488,6 +1490,42 @@ impl BrowserHostManager {
             .is_some_and(|live| live == incarnation)
     }
 
+    /// Returns the Phase 02 ownership snapshot source for DevTools target/session verification.
+    pub fn devtools_ownership_source(
+        &self,
+        subject: &str,
+        is_dev: bool,
+        profile_epoch: u64,
+        browser_incarnation: &str,
+    ) -> DevToolsOwnershipSource {
+        if !self.is_instance_live_sync(subject, is_dev, profile_epoch, browser_incarnation) {
+            return DevToolsOwnershipSource::Unavailable;
+        }
+        let key = Self::principal_key(subject, is_dev);
+        if let Some(mock) = self._test_mock_handle.read().as_ref() {
+            if mock.subject == subject
+                && mock.is_dev == is_dev
+                && mock.profile_epoch == profile_epoch
+                && mock.browser_incarnation == browser_incarnation
+            {
+                return DevToolsOwnershipSource::MockUnobserved;
+            }
+            return DevToolsOwnershipSource::Unavailable;
+        }
+        match self.native.live_control(&key) {
+            Some(control)
+                if control.profile_epoch == profile_epoch
+                    && control.browser_incarnation == browser_incarnation
+                    && !control.is_closed() =>
+            {
+                DevToolsOwnershipSource::LiveFence(DevToolsOwnershipFence {
+                    inner: Arc::clone(&control.ownership_fence),
+                })
+            }
+            _ => DevToolsOwnershipSource::Unavailable,
+        }
+    }
+
     /// Starts (or reuses) the observer of a live instance. The caller holds the instance lock.
     async fn ensure_observer(
         &self,
@@ -1616,6 +1654,82 @@ const MAX_CHILD_ROOT_RESEEDS: u8 = 4;
 const MAX_PENDING_FRAME_DETACHES: usize = 64;
 const FRAME_TREE_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_TARGET_ID_LEN: usize = 128;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DevToolsRootFenceStatus {
+    Available { generation: u64, epoch: u64 },
+    Pending,
+    Retired,
+}
+
+#[derive(Clone)]
+pub struct DevToolsOwnershipFence {
+    inner: Arc<OwnershipFence>,
+}
+
+impl DevToolsOwnershipFence {
+    pub fn subscribe_state(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.subscribe_state()
+    }
+
+    pub fn root_snapshot_status(
+        &self,
+        principal: &str,
+        is_dev: bool,
+        browser_incarnation: &str,
+        profile_epoch: u64,
+        logical_session_id: &str,
+        native_target_id: &str,
+    ) -> DevToolsRootFenceStatus {
+        match self.inner.root_snapshot_status(
+            principal,
+            is_dev,
+            browser_incarnation,
+            profile_epoch,
+            logical_session_id,
+            native_target_id,
+        ) {
+            RootFenceStatus::Available { generation, epoch } => {
+                DevToolsRootFenceStatus::Available { generation, epoch }
+            }
+            RootFenceStatus::Pending => DevToolsRootFenceStatus::Pending,
+            RootFenceStatus::Retired => DevToolsRootFenceStatus::Retired,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn owns_child_target(
+        &self,
+        principal: &str,
+        is_dev: bool,
+        browser_incarnation: &str,
+        profile_epoch: u64,
+        logical_session_id: &str,
+        native_target_id: &str,
+        child_target_id: &str,
+    ) -> Option<(u64, u64)> {
+        self.inner.owns_child_target(
+            principal,
+            is_dev,
+            browser_incarnation,
+            profile_epoch,
+            logical_session_id,
+            native_target_id,
+            child_target_id,
+        )
+    }
+
+    pub fn is_generation_epoch_live(&self, generation: u64, epoch: u64) -> bool {
+        self.inner.is_generation_epoch_live(generation, epoch)
+    }
+}
+
+#[derive(Clone)]
+pub enum DevToolsOwnershipSource {
+    MockUnobserved,
+    LiveFence(DevToolsOwnershipFence),
+    Unavailable,
+}
 
 /// Notifications of native target decisions, for the OS projection.
 #[allow(clippy::large_enum_variant)] // short-lived broadcast payload carrying the session DTO
@@ -2267,6 +2381,7 @@ struct ObserverState {
     pending_children: HashMap<String, (String, u64)>,
     /// Paused child targets stay inert until their exact frame snapshot is admitted.
     pending_child_resumes: HashMap<String, PendingChildResume>,
+    child_target_ids: HashMap<String, String>,
     child_frame_roots: HashMap<String, ChildFrameAttachment>,
     owners: HashMap<String, FrameOwner>,
     pending_frames: HashMap<usize, PendingFrameTree>,
@@ -3818,6 +3933,7 @@ fn retire_target_frames(
     state.child_frame_roots.retain(|child, attachment| {
         !sessions.contains(child) && !sessions.contains(&attachment.parent_session_id)
     });
+    state.child_target_ids.retain(|child, _| !sessions.contains(child));
     state.pending_children.retain(|child, (parent, _)| {
         !sessions.contains(child) && !sessions.contains(parent)
     });
@@ -3897,6 +4013,7 @@ fn clear_attachment_sessions(
     state.child_frame_roots.retain(|child, attachment| {
         !sessions.contains(child) && !sessions.contains(&attachment.parent_session_id)
     });
+    state.child_target_ids.retain(|child, _| !sessions.contains(child));
     state.pending_frames.retain(|_, pending| {
         !sessions.contains(&pending.session_id)
             && pending.child_parent_session.as_ref().is_none_or(|parent| !sessions.contains(parent))
@@ -4692,7 +4809,7 @@ impl ObserverShared {
         super::screencast::apply_stealth_before_resume(client, session_id, &identity.user_agent_override_params()).await?;
         client.send_command("Target.setAutoAttach", Some(json!({
             "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
-            "filter": [{ "type": "iframe" }, { "exclude": true }]
+            "filter": [{ "type": "iframe" }, { "type": "worker" }, { "exclude": true }]
         })), Some(session_id)).await?;
         Ok(())
     }
@@ -5068,9 +5185,10 @@ impl ObserverShared {
                 logical_frame_id: root_frame_id.clone(),
             });
             nodes[0].parent_frame_id = None;
-            control.ownership_fence.seed_child_snapshot(
+            let child_target_id = state.child_target_ids.get(&pending.session_id).map(String::as_str);
+            control.ownership_fence.seed_child_snapshot_with_target(
                 pending.token, &pending.session_id, parent_session, &containing_parent_frame_id,
-                &root_frame_id, &pending.owner, &nodes,
+                &root_frame_id, child_target_id, &pending.owner, &nodes,
             )
         } else {
             control.ownership_fence.seed_snapshot(
@@ -5165,7 +5283,11 @@ CdpLifecycleEvent::FrameNavigated { session_id: Some(session), .. }
                 if sessions.len() == before { break; }
             }
             for child_session in &sessions {
-                fence.retire_session(token, child_session);
+                if child_session == session {
+                    fence.retire_session_for_reseed(token, child_session);
+                } else {
+                    fence.retire_session(token, child_session);
+                }
             }
             state.pending_frames.retain(|_, pending| {
                 !sessions.contains(&pending.session_id)
@@ -5180,6 +5302,7 @@ CdpLifecycleEvent::FrameNavigated { session_id: Some(session), .. }
             state.child_frame_roots.retain(|child, attachment| {
                 !sessions.contains(child) && !sessions.contains(&attachment.parent_session_id)
             });
+            state.child_target_ids.retain(|child, _| child == session || !sessions.contains(child));
             state.owners.retain(|child_session, _| {
                 child_session == session || !sessions.contains(child_session)
             });
@@ -5207,6 +5330,7 @@ CdpLifecycleEvent::FrameNavigated { session_id: Some(session), .. }
             state.frame_sessions.retain(|owned_session| !owned_sessions.contains(owned_session));
             state.frame_attached.retain(|(owned_session, _), _| !owned_sessions.contains(owned_session));
             state.child_frame_roots.retain(|child, _| !owned_sessions.contains(child));
+            state.child_target_ids.retain(|child, _| child == session || !owned_sessions.contains(child));
             state.pending_children.retain(|child, (parent, _)| {
                 !owned_sessions.contains(child) && !owned_sessions.contains(parent)
             });
@@ -5307,6 +5431,7 @@ CdpTargetEvent::ChildAttached { parent_session_id, session_id, info, waiting_for
                 state.pending_children.insert(
                     session_id.clone(), (parent_session_id.clone(), position.sequence),
                 );
+                state.child_target_ids.insert(session_id.clone(), info.target_id.clone());
                 state.owners.insert(session_id.clone(), owner.clone());
                 if *waiting_for_debugger {
                     state.pending_child_resumes.insert(

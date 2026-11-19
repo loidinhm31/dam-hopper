@@ -73,6 +73,13 @@ struct FrameFact {
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RootFenceStatus {
+    Available { generation: u64, epoch: u64 },
+    Pending,
+    Retired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Disconnected,
     Unavailable,
@@ -87,6 +94,7 @@ struct State {
     epoch: u64,
     phase: Phase,
     frames: HashMap<FrameKey, FrameFact>,
+    child_targets: HashMap<(u64, String), (String, Arc<FrameOwner>, bool)>,
     frame_map_reservation: Option<super::diagnostics::MemoryReservation>,
     memory_controller: Arc<super::diagnostics::MemoryAdmissionController>,
 }
@@ -97,6 +105,7 @@ struct State {
 /// not await, perform I/O, schedule deferred publication, or re-enter the actor from a closure.
 pub(crate) struct OwnershipFence {
     state: Mutex<State>,
+    state_version: tokio::sync::watch::Sender<u64>,
 }
 
 impl OwnershipFence {
@@ -115,7 +124,7 @@ impl OwnershipFence {
         memory_controller: Arc<super::diagnostics::MemoryAdmissionController>,
     ) -> Self {
         let namespace = NEXT_FENCE_NAMESPACE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| next.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| next.checked_add(1))
             .ok();
         Self {
             state: Mutex::new(State {
@@ -123,6 +132,7 @@ impl OwnershipFence {
                 generation: 0,
                 epoch: 0,
                 frames: HashMap::new(),
+                child_targets: HashMap::new(),
                 frame_map_reservation: None,
                 memory_controller,
                 phase: if namespace.is_some() {
@@ -131,7 +141,16 @@ impl OwnershipFence {
                     Phase::Retired
                 },
             }),
+            state_version: tokio::sync::watch::channel(0).0,
         }
+    }
+
+    pub(crate) fn subscribe_state(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.state_version.subscribe()
+    }
+
+    fn notify_state_changed(&self) {
+        self.state_version.send_modify(|v| *v = v.wrapping_add(1));
     }
     /// Atomically allocates the next connection generation, refusing overlap or exhaustion.
     pub(crate) fn start_next_generation(&self) -> Option<ConnectionToken> {
@@ -226,6 +245,7 @@ impl OwnershipFence {
         } else {
             state.phase = Phase::Retired;
         }
+        self.notify_state_changed();
         false
     }
 
@@ -240,9 +260,11 @@ impl OwnershipFence {
         }
         if !advance_epoch(&mut state) {
             state.phase = Phase::Retired;
+            self.notify_state_changed();
             return false;
         }
         state.phase = Phase::Unavailable;
+        self.notify_state_changed();
         true
     }
 
@@ -257,9 +279,11 @@ impl OwnershipFence {
         }
         if !advance_epoch(&mut state) {
             state.phase = Phase::Retired;
+            self.notify_state_changed();
             return false;
         }
         state.phase = Phase::Disconnected;
+        self.notify_state_changed();
         true
     }
 
@@ -270,6 +294,7 @@ impl OwnershipFence {
             && state.generation == connection.generation
         {
             state.phase = Phase::Retired;
+            self.notify_state_changed();
         }
     }
 
@@ -278,6 +303,7 @@ impl OwnershipFence {
         let mut state = self.lock();
         let _ = advance_epoch(&mut state);
         state.phase = Phase::Retired;
+        self.notify_state_changed();
     }
 
     /// Installs a complete top-level frame tree before publishing availability.
@@ -296,9 +322,12 @@ impl OwnershipFence {
         }
         if !valid_id(session_id) || !valid_owner(&owner) {
             fail_projection(&mut state);
+            self.notify_state_changed();
             return false;
         }
-        install_snapshot(&mut state, token, session_id, Arc::new(owner), nodes, None, None)
+        let ok = install_snapshot(&mut state, token, session_id, Arc::new(owner), nodes, None, None);
+        self.notify_state_changed();
+        ok
     }
 
     /// Attach a same-session frame only through its already-known parent frame.
@@ -313,6 +342,7 @@ impl OwnershipFence {
     }
 
     /// Installs a child-session tree only when its root matches explicit frame evidence.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn seed_child_snapshot(
         &self,
         token: ValidityToken,
@@ -323,30 +353,75 @@ impl OwnershipFence {
         owner: &FrameOwner,
         nodes: &[FrameSnapshotNode],
     ) -> bool {
+        self.seed_child_snapshot_with_target(
+            token,
+            child_session_id,
+            parent_session_id,
+            expected_parent_frame_id,
+            expected_child_root_frame_id,
+            None,
+            owner,
+            nodes,
+        )
+    }
+
+    /// Installs a child-session tree and optionally binds its proven native child target ID.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn seed_child_snapshot_with_target(
+        &self,
+        token: ValidityToken,
+        child_session_id: &str,
+        parent_session_id: &str,
+        expected_parent_frame_id: &str,
+        expected_child_root_frame_id: &str,
+        child_target_id: Option<&str>,
+        owner: &FrameOwner,
+        nodes: &[FrameSnapshotNode],
+    ) -> bool {
         let mut state = self.lock();
         if !token_matches(&state, token) || !matches!(state.phase, Phase::Available) {
             return false;
         }
         if !valid_id(child_session_id) || !valid_id(parent_session_id)
             || !valid_id(expected_parent_frame_id) || !valid_id(expected_child_root_frame_id)
+            || child_target_id.is_some_and(|tid| !valid_id(tid))
             || !valid_owner(owner) || child_session_id == parent_session_id
         {
             fail_projection(&mut state);
+            self.notify_state_changed();
             return false;
         }
         let parent = FrameKey::new(token, parent_session_id, expected_parent_frame_id);
         let Some(parent_owner) = resolve_frame(&state, &parent).cloned() else {
             fail_projection(&mut state);
+            self.notify_state_changed();
             return false;
         };
         if parent_owner.as_ref() != owner {
             fail_projection(&mut state);
+            self.notify_state_changed();
             return false;
         }
-        install_snapshot(
-            &mut state, token, child_session_id, parent_owner, nodes,
+        let installed = install_snapshot(
+            &mut state, token, child_session_id, parent_owner.clone(), nodes,
             Some(parent), Some(expected_child_root_frame_id),
-        )
+        );
+        if installed {
+            if let Some(tid) = child_target_id {
+                let key = (token.generation, child_session_id.to_owned());
+                if state.child_targets.contains_key(&key)
+                    || state.child_targets.len() < MAX_FRAME_FACTS
+                {
+                    state.child_targets.insert(key, (tid.to_owned(), parent_owner, false));
+                } else {
+                    fail_projection(&mut state);
+                    self.notify_state_changed();
+                    return false;
+                }
+            }
+        }
+        self.notify_state_changed();
+        installed
     }
 
     fn attach_frame(
@@ -366,6 +441,7 @@ impl OwnershipFence {
             || !valid_id(parent_session_id) || !valid_id(parent_frame_id)
         {
             fail_projection(&mut state);
+            self.notify_state_changed();
             return false;
         }
         let parent = FrameKey::new(token, parent_session_id, parent_frame_id);
@@ -374,10 +450,15 @@ impl OwnershipFence {
         };
         if expected_owner.is_some_and(|expected| expected != owner.as_ref()) {
             fail_projection(&mut state);
+            self.notify_state_changed();
             return false;
         }
         let key = FrameKey::new(token, session_id, frame_id);
-        insert_frame(&mut state, key, owner, Some(parent))
+        let ok = insert_frame(&mut state, key, owner, Some(parent));
+        if !ok {
+            self.notify_state_changed();
+        }
+        ok
     }
 
     /// Returns only an exact frame with an intact chain to a seeded root.
@@ -420,12 +501,18 @@ impl OwnershipFence {
         }
         let Some(removed) = descendant_keys(&state, std::iter::once(root)) else {
             fail_projection(&mut state);
+            self.notify_state_changed();
             return None;
         };
-        let sessions = removed.iter().map(|key| key.session_id.clone()).collect();
+        let sessions: HashSet<String> = removed.iter().map(|key| key.session_id.clone()).collect();
         for key in removed {
             state.frames.remove(&key);
         }
+        state
+            .child_targets
+            .retain(|(gen, sid), _| !(*gen == token.generation && sessions.contains(sid)));
+        prune_child_targets(&mut state);
+        self.notify_state_changed();
         Some((sessions, is_session_root))
     }
 
@@ -436,6 +523,54 @@ impl OwnershipFence {
             return false;
         }
         state.frames.retain(|_, fact| fact.owner.as_ref() != owner);
+        state
+            .child_targets
+            .retain(|_, (_, entry_owner, _)| entry_owner.as_ref() != owner);
+        prune_child_targets(&mut state);
+        self.notify_state_changed();
+        true
+    }
+
+    /// Retire frame facts during an in-place same-target `FrameNavigated` reseed while keeping
+    /// the child target provenance entry until the refreshed frame tree commits or fails.
+    pub(crate) fn retire_session_for_reseed(&self, token: ValidityToken, session_id: &str) -> bool {
+        let mut state = self.lock();
+        if !token_matches(&state, token) || !matches!(state.phase, Phase::Available) {
+            return false;
+        }
+        if let Some(entry) = state
+            .child_targets
+            .get_mut(&(token.generation, session_id.to_owned()))
+        {
+            entry.2 = true;
+        }
+        let roots: Vec<_> = state
+            .frames
+            .keys()
+            .filter(|key| key.session_id == session_id)
+            .cloned()
+            .collect();
+        if roots.is_empty() {
+            return true;
+        }
+        let Some(removed) = descendant_keys(&state, roots.into_iter()) else {
+            state
+                .child_targets
+                .remove(&(token.generation, session_id.to_owned()));
+            fail_projection(&mut state);
+            self.notify_state_changed();
+            return false;
+        };
+        for key in removed {
+            if key.session_id != session_id {
+                state
+                    .child_targets
+                    .remove(&(token.generation, key.session_id.clone()));
+            }
+            state.frames.remove(&key);
+        }
+        prune_child_targets(&mut state);
+        self.notify_state_changed();
         true
     }
 
@@ -445,20 +580,34 @@ impl OwnershipFence {
         if !token_matches(&state, token) || !matches!(state.phase, Phase::Available) {
             return false;
         }
+        let removed_target = state
+            .child_targets
+            .remove(&(token.generation, session_id.to_owned()))
+            .is_some();
         let roots: Vec<_> = state.frames.keys()
             .filter(|key| key.session_id == session_id)
             .cloned()
             .collect();
         if roots.is_empty() {
+            if removed_target {
+                drop(state);
+                self.notify_state_changed();
+            }
             return true;
         }
         let Some(removed) = descendant_keys(&state, roots.into_iter()) else {
             fail_projection(&mut state);
+            self.notify_state_changed();
             return false;
         };
         for key in removed {
+            state
+                .child_targets
+                .remove(&(token.generation, key.session_id.clone()));
             state.frames.remove(&key);
         }
+        prune_child_targets(&mut state);
+        self.notify_state_changed();
         true
     }
     /// Retire a set of CDP sessions and all projected descendants in one bounded traversal.
@@ -471,21 +620,115 @@ impl OwnershipFence {
         if !token_matches(&state, token) || !matches!(state.phase, Phase::Available) {
             return false;
         }
+        let before_targets = state.child_targets.len();
+        state
+            .child_targets
+            .retain(|(gen, sid), _| !(*gen == token.generation && session_ids.contains(sid)));
         let roots: Vec<_> = state.frames.keys()
             .filter(|key| session_ids.contains(&key.session_id))
             .cloned()
             .collect();
         if roots.is_empty() {
+            if state.child_targets.len() != before_targets {
+                drop(state);
+                self.notify_state_changed();
+            }
             return true;
         }
         let Some(removed) = descendant_keys(&state, roots.into_iter()) else {
             fail_projection(&mut state);
+            self.notify_state_changed();
             return false;
         };
         for key in removed {
+            state
+                .child_targets
+                .remove(&(token.generation, key.session_id.clone()));
             state.frames.remove(&key);
         }
+        prune_child_targets(&mut state);
+        self.notify_state_changed();
         true
+    }
+
+    pub(crate) fn root_snapshot_status(
+        &self,
+        principal: &str,
+        is_dev: bool,
+        browser_incarnation: &str,
+        profile_epoch: u64,
+        logical_session_id: &str,
+        native_target_id: &str,
+    ) -> RootFenceStatus {
+        let state = self.lock();
+        match state.phase {
+            Phase::Disconnected | Phase::Retired => RootFenceStatus::Retired,
+            Phase::Unavailable => RootFenceStatus::Pending,
+            Phase::Available => {
+                let has_owner = state.frames.values().any(|fact| {
+                    owner_matches(
+                        &fact.owner,
+                        principal,
+                        is_dev,
+                        browser_incarnation,
+                        profile_epoch,
+                        logical_session_id,
+                        native_target_id,
+                    )
+                });
+                if has_owner {
+                    RootFenceStatus::Available {
+                        generation: state.generation,
+                        epoch: state.epoch,
+                    }
+                } else {
+                    RootFenceStatus::Pending
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn owns_child_target(
+        &self,
+        principal: &str,
+        is_dev: bool,
+        browser_incarnation: &str,
+        profile_epoch: u64,
+        logical_session_id: &str,
+        native_target_id: &str,
+        child_target_id: &str,
+    ) -> Option<(u64, u64)> {
+        let state = self.lock();
+        if !matches!(state.phase, Phase::Available) {
+            return None;
+        }
+        let found = state.child_targets.iter().any(|((gen, sid), (tid, owner, reseeding))| {
+            *gen == state.generation
+                && tid == child_target_id
+                && owner_matches(
+                    owner,
+                    principal,
+                    is_dev,
+                    browser_incarnation,
+                    profile_epoch,
+                    logical_session_id,
+                    native_target_id,
+                )
+                && (*reseeding
+                    || state
+                        .frames
+                        .keys()
+                        .any(|key| key.generation == *gen && key.session_id == *sid))
+        });
+        found.then_some((state.generation, state.epoch))
+    }
+
+    pub(crate) fn is_generation_epoch_live(&self, generation: u64, epoch: u64) -> bool {
+        let state = self.lock();
+        state.generation == generation
+            && state.epoch == epoch
+            && matches!(state.phase, Phase::Available)
     }
 
 
@@ -793,6 +1036,34 @@ fn reserve_frame_fact(
     memory_controller.try_reserve(bytes).ok()
 }
 
+fn owner_matches(
+    owner: &FrameOwner,
+    principal: &str,
+    is_dev: bool,
+    browser_incarnation: &str,
+    profile_epoch: u64,
+    logical_session_id: &str,
+    native_target_id: &str,
+) -> bool {
+    owner.principal == principal
+        && owner.is_dev == is_dev
+        && owner.browser_incarnation == browser_incarnation
+        && owner.profile_epoch == profile_epoch
+        && owner.logical_session_id == logical_session_id
+        && owner.native_target_id == native_target_id
+}
+
+fn prune_child_targets(state: &mut State) {
+    state.child_targets.retain(|(gen, sid), (_, _, reseeding)| {
+        *gen == state.generation
+            && (*reseeding
+                || state
+                    .frames
+                    .keys()
+                    .any(|key| key.generation == *gen && key.session_id == *sid))
+    });
+}
+
 fn fail_projection(state: &mut State) {
     state.phase = if advance_epoch(state) { Phase::Unavailable } else { Phase::Retired };
 }
@@ -800,6 +1071,7 @@ fn fail_projection(state: &mut State) {
 
 fn advance_epoch(state: &mut State) -> bool {
     state.frames.clear();
+    state.child_targets.clear();
     let Some(next) = state.epoch.checked_add(1) else {
         return false;
     };

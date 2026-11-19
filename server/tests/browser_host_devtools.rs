@@ -330,58 +330,68 @@ async fn spawn_mock_chromium_server(
                         let connection_id = next_connection.fetch_add(1, Ordering::Relaxed);
                         let triggered = triggered.clone();
                         let closed = closed.clone();
-                        let _ = socket
-                            .send(AxumWsMsg::Text(
-                                json!({
-                                    "method": "Target.targetCreated",
-                                    "params": { "targetInfo": { "targetId": "FOREIGN-TAB", "type": "page" } }
-                                })
-                                .to_string()
-                                .into(),
-                            ))
-                            .await;
-                        let _ = socket
-                            .send(AxumWsMsg::Text(
-                                json!({
-                                    "method": "Target.targetDestroyed",
-                                    "params": { "targetId": "FOREIGN-TAB" }
-                                })
-                                .to_string()
-                                .into(),
-                            ))
-                            .await;
-                        let _ = socket
-                            .send(AxumWsMsg::Text(
-                                json!({
-                                    "method": "Target.targetCreated",
-                                    "params": { "targetInfo": { "targetId": "CHILD-WORKER", "type": "worker" } }
-                                })
-                                .to_string()
-                                .into(),
-                            ))
-                            .await;
-                        let _ = socket
-                            .send(AxumWsMsg::Text(
-                                json!({
-                                    "method": "ServiceWorker.workerRegistrationUpdated",
-                                    "sessionId": "unknown-session",
-                                    "params": { "registrations": [{ "scopeURL": "https://foreign.test/" }] }
-                                })
-                                .to_string()
-                                .into(),
-                            ))
-                            .await;
-                        let _ = socket
-                            .send(AxumWsMsg::Text(
-                                json!({
-                                    "method": "BackgroundService.recordingStateChanged",
-                                    "sessionId": "unknown-session",
-                                    "params": { "service": "backgroundFetch", "isRecording": true }
-                                })
-                                .to_string()
-                                .into(),
-                            ))
-                            .await;
+                        for event in [
+                            json!({
+                                "method": "Target.targetCreated",
+                                "params": { "targetInfo": { "targetId": "FOREIGN-TAB", "type": "page" } }
+                            }),
+                            json!({
+                                "method": "Target.targetDestroyed",
+                                "params": { "targetId": "FOREIGN-TAB" }
+                            }),
+                            json!({
+                                "method": "Target.targetCreated",
+                                "params": { "targetInfo": { "targetId": "UNOWNED-CREATED-WORKER", "type": "worker" } }
+                            }),
+                            json!({
+                                "method": "Target.attachedToTarget",
+                                "params": {
+                                    "sessionId": "SW-S1",
+                                    "targetInfo": { "targetId": "FOREIGN-SW", "type": "service_worker", "url": "https://foreign.test/sw.js" },
+                                    "waitingForDebugger": true
+                                }
+                            }),
+                            json!({
+                                "method": "Target.attachedToTarget",
+                                "params": {
+                                    "sessionId": "SHW-S1",
+                                    "targetInfo": { "targetId": "FOREIGN-SHARED", "type": "shared_worker", "url": "https://foreign.test/shared.js" },
+                                    "waitingForDebugger": true
+                                }
+                            }),
+                            json!({
+                                "method": "ServiceWorker.workerRegistrationUpdated",
+                                "sessionId": "unknown-session",
+                                "params": { "registrations": [{ "registrationId": "reg-foreign", "scopeURL": "https://foreign.test/" }] }
+                            }),
+                            json!({
+                                "method": "ServiceWorker.workerVersionUpdated",
+                                "params": { "versions": [{ "versionId": "ver-foreign", "scriptURL": "https://foreign.test/sw.js", "controlledClients": ["C-FOREIGN"] }] }
+                            }),
+                            json!({
+                                "method": "BackgroundService.recordingStateChanged",
+                                "sessionId": "unknown-session",
+                                "params": { "service": "backgroundFetch", "isRecording": true }
+                            }),
+                            json!({
+                                "method": "Storage.cacheStorageListUpdated",
+                                "params": { "origin": "https://foreign.test" }
+                            }),
+                            json!({
+                                "method": "Target.receivedMessageFromTarget",
+                                "params": { "sessionId": "SW-S1", "message": "{\"method\":\"ServiceWorker.workerErrorReported\"}" }
+                            }),
+                            json!({
+                                "method": "Target.attachedToTarget",
+                                "params": {
+                                    "sessionId": "WORKER-S1",
+                                    "targetInfo": { "targetId": "CHILD-WORKER", "type": "worker", "url": "https://owned.test/worker.js" },
+                                    "waitingForDebugger": false
+                                }
+                            }),
+                        ] {
+                            let _ = socket.send(AxumWsMsg::Text(event.to_string().into())).await;
+                        }
                         while let Some(Ok(frame)) = socket.next().await {
                             match frame {
                                 AxumWsMsg::Text(txt) => {
@@ -394,6 +404,18 @@ async fn spawn_mock_chromium_server(
                                         continue;
                                     };
                                     seen.lock().push(method.to_string());
+                                    if method == "Target.setAutoAttach" {
+                                        let filter = val.pointer("/params/filter").cloned().unwrap_or(Value::Null);
+                                        assert_eq!(
+                                            filter,
+                                            json!([
+                                                { "type": "iframe", "exclude": false },
+                                                { "type": "worker", "exclude": false },
+                                                { "exclude": true }
+                                            ]),
+                                            "Target.setAutoAttach client filter must be server-enforced"
+                                        );
+                                    }
                                     if method == "Runtime.triggerBinary" {
                                         triggered.lock().push(connection_id);
                                         if socket.send(AxumWsMsg::Binary(vec![0, 1, 2].into())).await.is_err() {
@@ -401,7 +423,23 @@ async fn spawn_mock_chromium_server(
                                         }
                                         continue;
                                     }
-                                    let reply = json!({ "id": val["id"], "result": { "ok": true } });
+                                    let result = if method == "Target.getTargetInfo" {
+                                        let req_tid = val.pointer("/params/targetId").and_then(Value::as_str);
+                                        let (tid, ttype) = if req_tid == Some("CHILD-WORKER")
+                                            || val.get("sessionId").and_then(Value::as_str) == Some("WORKER-S1")
+                                        {
+                                            ("CHILD-WORKER", "worker")
+                                        } else {
+                                            (exp.as_str(), "page")
+                                        };
+                                        json!({ "targetInfo": { "targetId": tid, "type": ttype } })
+                                    } else {
+                                        json!({ "ok": true })
+                                    };
+                                    let mut reply = json!({ "id": val["id"], "result": result });
+                                    if let Some(sid) = val.get("sessionId") {
+                                        reply["sessionId"] = sid.clone();
+                                    }
                                     if socket.send(AxumWsMsg::Text(reply.to_string().into())).await.is_err() {
                                         break;
                                     }
@@ -1112,10 +1150,10 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
         .unwrap()
         .unwrap()
         .unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(binary_first_evt.to_text().unwrap()).unwrap()["params"]["targetInfo"]["targetId"],
-        "CHILD-WORKER"
-    );
+    let binary_first_val: Value = serde_json::from_str(binary_first_evt.to_text().unwrap()).unwrap();
+    assert_eq!(binary_first_val["method"], "Target.attachedToTarget");
+    assert_eq!(binary_first_val["params"]["sessionId"], "WORKER-S1");
+    assert_eq!(binary_first_val["params"]["targetInfo"]["targetId"], "CHILD-WORKER");
     binary_ws.send(WsMsg::Binary(vec![0, 1, 2].into())).await.unwrap();
     let binary_closed = tokio::time::timeout(std::time::Duration::from_secs(2), binary_ws.next())
         .await
@@ -1161,14 +1199,24 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
         matches!(frame.as_str(), "<binary>" | "<invalid-json>" | "<non-command>")
     }));
 
-    // Upstream foreign page Target.targetCreated dropped; worker forwarded
+    // Upstream foreign/unowned Target & ServiceWorker events suppressed; causally attached dedicated worker forwarded
     let first_evt = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
         .await
         .unwrap()
         .unwrap()
         .unwrap();
     let first_val: Value = serde_json::from_str(first_evt.to_text().unwrap()).unwrap();
+    assert_eq!(first_val["method"], "Target.attachedToTarget");
+    assert_eq!(first_val["params"]["sessionId"], "WORKER-S1");
     assert_eq!(first_val["params"]["targetInfo"]["targetId"], "CHILD-WORKER");
+    assert!(
+        seen_methods.lock().iter().any(|m| m == "Target.detachFromTarget"),
+        "unowned service_worker/shared_worker attachments must be internally detached"
+    );
+    assert!(
+        !seen_methods.lock().iter().any(|m| m == "Runtime.runIfWaitingForDebugger" || m == "Target.closeTarget"),
+        "unowned attachments must never be resumed or closed"
+    );
 
     // Protected effects and cross-target commands are rejected before reaching the peer.
     for (id, method, params) in [
@@ -1177,7 +1225,7 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
         (3, "Browser.getVersion", json!({})),
         (4, "Target.getTargets", json!({})),
         (5, "Target.sendMessageToTarget", json!({"sessionId": "x", "message": "{}"})),
-        (6, "Target.attachToTarget", json!({"targetId": "OTHER-TAB"})),
+        (6, "Target.attachToTarget", json!({"targetId": "OTHER-TAB", "flatten": true})),
         (7, "Page.setDownloadBehavior", json!({"behavior": "allow", "downloadPath": "/tmp/attacker"})),
         (8, "ServiceWorker.stopAllWorkers", json!({})),
         (9, "ServiceWorker.enable", json!({})),
@@ -1185,6 +1233,13 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
         (11, "Network.setCookie", json!({"name": "x", "value": "y"})),
         (12, "BackgroundService.startObserving", json!({"service": "backgroundFetch"})),
         (13, "BackgroundService.setRecording", json!({"service": "backgroundFetch", "shouldRecord": true})),
+        (17, "Target.setDiscoverTargets", json!({"discover": true})),
+        (18, "Target.autoAttachRelated", json!({"targetId": "TARGET-WS", "waitForDebuggerOnStart": false})),
+        (19, "Target.getTargetInfo", json!({"targetId": "FOREIGN-TAB"})),
+        (20, "Target.getTargetInfo", json!({"targetId": "UNOWNED-CREATED-WORKER"})),
+        (21, "Target.getTargetInfo", json!({"targetId": "FOREIGN-SW"})),
+        (22, "Target.attachToTarget", json!({"targetId": "UNOWNED-CREATED-WORKER", "flatten": true})),
+        (23, "Target.detachFromTarget", json!({"sessionId": "SW-S1"})),
     ] {
         ws.send(WsMsg::Text(json!({"id": id, "method": method, "params": params}).to_string().into()))
             .await
@@ -1268,7 +1323,41 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
     assert_eq!(flattened_service_worker_value["error"]["code"], -32601);
     assert!(flattened_service_worker_value.get("result").is_none());
 
-    // Allowed Runtime.enable reaches upstream
+    // Allowed Runtime.enable & Target.setAutoAttach (with client filter rewritten) & owned child session
+    let methods_before = seen_methods.lock().len();
+    ws.send(WsMsg::Text(json!({
+        "id": 97,
+        "method": "Target.setAutoAttach",
+        "params": {
+            "autoAttach": true,
+            "waitForDebuggerOnStart": false,
+            "flatten": true,
+            "filter": [{"type": "service_worker", "exclude": false}, {"type": "page", "exclude": false}]
+        }
+    }).to_string().into())).await.unwrap();
+    let aa_reply = wait_cdp_response(&mut ws, 97, std::time::Duration::from_secs(2)).await.unwrap();
+    assert_eq!(aa_reply["result"]["ok"], true);
+
+    ws.send(WsMsg::Text(json!({"id": 98, "sessionId": "WORKER-S1", "method": "Runtime.enable"}).to_string().into())).await.unwrap();
+    let child_ok = wait_cdp_response(&mut ws, 98, std::time::Duration::from_secs(2)).await.unwrap();
+    assert_eq!(child_ok["result"]["ok"], true);
+
+    // Nonlocal restrictions still apply on owned child sessions
+    ws.send(WsMsg::Text(json!({"id": 980, "sessionId": "WORKER-S1", "method": "ServiceWorker.stopAllWorkers"}).to_string().into())).await.unwrap();
+    let child_sw_err = wait_cdp_response(&mut ws, 980, std::time::Duration::from_secs(2)).await.unwrap();
+    assert_eq!(child_sw_err["error"]["code"], -32601);
+    ws.send(WsMsg::Text(json!({"id": 981, "sessionId": "WORKER-S1", "method": "Page.setDownloadBehavior", "params": {"behavior": "allow", "downloadPath": "/tmp/x"}}).to_string().into())).await.unwrap();
+    let child_dl_err = wait_cdp_response(&mut ws, 981, std::time::Duration::from_secs(2)).await.unwrap();
+    assert_eq!(child_dl_err["error"]["code"], -32601);
+
+    // Detach owned child session and confirm it stays permanently denied
+    ws.send(WsMsg::Text(json!({"id": 982, "method": "Target.detachFromTarget", "params": {"sessionId": "WORKER-S1"}}).to_string().into())).await.unwrap();
+    let detach_ok = wait_cdp_response(&mut ws, 982, std::time::Duration::from_secs(2)).await.unwrap();
+    assert_eq!(detach_ok["result"]["ok"], true);
+    ws.send(WsMsg::Text(json!({"id": 983, "sessionId": "WORKER-S1", "method": "Runtime.enable"}).to_string().into())).await.unwrap();
+    let detached_err = wait_cdp_response(&mut ws, 983, std::time::Duration::from_secs(2)).await.unwrap();
+    assert_eq!(detached_err["error"]["code"], -32601);
+
     ws.send(WsMsg::Text(json!({"id": 99, "method": "Runtime.enable"}).to_string().into()))
         .await
         .unwrap();
@@ -1293,12 +1382,20 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
     let ok_val: Value = serde_json::from_str(ok_reply.to_text().unwrap()).unwrap();
     assert_eq!(ok_val["id"], 99);
     assert_eq!(ok_val["result"]["ok"], true);
-    assert_eq!(seen_methods.lock().as_slice(), &["Runtime.triggerBinary", "Runtime.enable", "Runtime.evaluate"]);
+    assert_eq!(
+        seen_methods.lock()[methods_before..].to_vec(),
+        vec![
+            "Target.setAutoAttach".to_string(),
+            "Runtime.enable".to_string(),
+            "Target.detachFromTarget".to_string(),
+            "Runtime.enable".to_string(),
+            "Runtime.evaluate".to_string(),
+        ]
+    );
 
     // Session input_available remains true
     let snap = global_session_registry().snapshot(&sid, "dt-ws").await.unwrap();
     assert!(snap.dto.input_available, "input_available must stay true");
-    assert_eq!(seen_methods.lock().as_slice(), &["Runtime.triggerBinary", "Runtime.enable", "Runtime.evaluate"]);
 
     // Single-session auth revocation (DELETE /api/auth/sessions/auth-a) closes auth-a WS
     let revoke_resp = client
@@ -1326,10 +1423,11 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
         .unwrap()
         .unwrap()
         .unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(survivor_first_evt.to_text().unwrap()).unwrap()["params"]["targetInfo"]["targetId"],
-        "CHILD-WORKER"
-    );
+    let survivor_first_val: Value = serde_json::from_str(survivor_first_evt.to_text().unwrap()).unwrap();
+    assert_eq!(survivor_first_val["method"], "Target.attachedToTarget");
+    assert_eq!(survivor_first_val["params"]["sessionId"], "WORKER-S1");
+    assert_eq!(survivor_first_val["params"]["targetInfo"]["targetId"], "CHILD-WORKER");
+    let methods_before_b = seen_methods.lock().len();
     survivor_ws
         .send(WsMsg::Text(json!({"id": 100, "method": "Runtime.enable"}).to_string().into()))
         .await
@@ -1342,7 +1440,7 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
     let survivor_value: Value = serde_json::from_str(survivor_reply.to_text().unwrap()).unwrap();
     assert_eq!(survivor_value["id"], 100);
     assert_eq!(survivor_value["result"]["ok"], true);
-    assert_eq!(seen_methods.lock().as_slice(), &["Runtime.triggerBinary", "Runtime.enable", "Runtime.evaluate", "Runtime.enable"]);
+    assert!(seen_methods.lock()[methods_before_b..].contains(&"Runtime.enable".to_string()));
 
     let b_asset = client
         .get(format!("http://{addr}/api/browser/devtools/{tok_b}/devtools_app.html"))
@@ -2236,9 +2334,15 @@ async fn test_devtools_control_transfer_race_and_stale_refresh_denial() {
         tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_a}/ws"))
             .await
             .expect("viewer-a devtools ws connects");
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), ws_a.next())
+    let first_evt_a = tokio::time::timeout(std::time::Duration::from_secs(2), ws_a.next())
         .await
+        .unwrap()
+        .unwrap()
         .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(first_evt_a.to_text().unwrap()).unwrap()["params"]["sessionId"],
+        "WORKER-S1"
+    );
 
     // 2. Same-epoch control/renew preserves existing DevTools socket and capability
     let renew_resp = client
@@ -2680,5 +2784,1149 @@ async fn test_devtools_shared_input_ledger_ordered_release_and_stalled_write_can
     drop(ws_b3);
     pair_a.release().await;
     pair_b.release().await;
+    cleanup_test_session_viewers(&sid).await;
+}
+
+#[tokio::test]
+async fn test_devtools_child_input_accounting_and_correlation_isolation() {
+    let _serial = TEST_SERIAL.lock().await;
+    global_session_registry().reset_for_test().await;
+    let tmp = tempdir().unwrap();
+    let (mock_port, seen_methods, _, _) =
+        spawn_mock_chromium_server("TARGET-CHILD-INPUT".into()).await;
+    let (store, auth_service, tokens) =
+        setup_sqlite_multi_session(tmp.path(), "dt-cinput", &["auth-a", "auth-b"]).await;
+    let state = create_test_state(
+        tmp.path().to_path_buf(),
+        Some(store),
+        Some(BrowserHostConfig {
+            enabled: true,
+            ..BrowserHostConfig::default()
+        }),
+    )
+    .with_auth_service(auth_service);
+    *state.browser_host._test_mock_handle.write() = Some(BrowserInstanceHandle {
+        subject: "dt-cinput".into(),
+        is_dev: false,
+        pid: 1,
+        ws_endpoint: format!("ws://127.0.0.1:{mock_port}/devtools/browser/mock"),
+        browser_incarnation: "inc-cinput".into(),
+        profile_epoch: 1,
+        user_data_dir: tmp.path().to_path_buf(),
+    });
+    let app = build_router_with_origins(
+        state,
+        vec![HeaderValue::from_static("http://127.0.0.1:5173")],
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let sid = insert_running_session("dt-cinput", false, "inc-cinput", "TARGET-CHILD-INPUT").await;
+    let client = reqwest::Client::new();
+    let pair_a = admit_paired_viewer("dt-cinput", "auth-a", &sid, "viewer-a", "inc-cinput").await;
+    let lease_a = acquire_control_http(&client, addr, &sid, &tokens[0], "viewer-a").await;
+    let dt_tok_a =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_a).await;
+    let (mut ws_a, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_a}/ws"))
+            .await
+            .unwrap();
+
+    let first_evt = tokio::time::timeout(std::time::Duration::from_secs(2), ws_a.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let first_val: Value = serde_json::from_str(first_evt.to_text().unwrap()).unwrap();
+    assert_eq!(first_val["params"]["sessionId"], "WORKER-S1");
+
+    // Child Input.* goes through Phase 03 shared ledger accounting and unsupported variants deny.
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": 1,
+            "sessionId": "WORKER-S1",
+            "method": "Input.dispatchTouchEvent",
+            "params": { "type": "touchStart", "touchPoints": [] }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let touch_err = wait_cdp_response(&mut ws_a, 1, std::time::Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(touch_err["sessionId"], "WORKER-S1");
+    assert_eq!(touch_err["error"]["code"], -32601);
+
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": 2,
+            "sessionId": "WORKER-S1",
+            "method": "Input.dispatchKeyEvent",
+            "params": { "type": "keyDown", "key": "q", "code": "KeyQ" }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let key_ok = wait_cdp_response(&mut ws_a, 2, std::time::Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(key_ok["sessionId"], "WORKER-S1");
+    assert_eq!(key_ok["result"]["ok"], true);
+
+    // Same call_id=2 on root vs child are independently correlated.
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": 2,
+            "method": "Target.getTargetInfo"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let root_info = wait_cdp_response(&mut ws_a, 2, std::time::Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert!(root_info.get("sessionId").is_none());
+    assert_eq!(root_info["result"]["targetInfo"]["targetId"], "TARGET-CHILD-INPUT");
+
+    // Release control: must emit keyUp KeyQ before returning 200 OK.
+    let methods_before = seen_methods.lock().len();
+    let rel = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/release"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "leaseToken": lease_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rel.status(), StatusCode::OK);
+    assert!(
+        seen_methods.lock()[methods_before..].contains(&"Input.dispatchKeyEvent".to_string()),
+        "child Input hold must release via captured proxy route on control release"
+    );
+
+    pair_a.release().await;
+    cleanup_test_session_viewers(&sid).await;
+}
+
+#[tokio::test]
+async fn test_real_chromium_devtools_worker_oopif_and_service_worker_isolation() {
+    let _serial = TEST_SERIAL.lock().await;
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::DEBUG)
+        .try_init();
+    global_session_registry().reset_for_test().await;
+
+    let chromium_path = match dam_hopper_server::browser_host::process::find_browser_executable(None) {
+        Ok(path) => path,
+        Err(error) if std::env::var("DAM_HOPPER_REQUIRE_BROWSER").as_deref() == Ok("1") => {
+            panic!("DAM_HOPPER_REQUIRE_BROWSER=1 is set but no browser was found: {error}");
+        }
+        Err(error) => {
+            eprintln!("SKIP: No configured Chrome/Chromium executable: {error}");
+            return;
+        }
+    };
+
+    let tmp = tempdir().unwrap();
+    let sw_js = r#"
+const SW_INSTANCE_ID = 'sw-' + Math.random().toString(36).slice(2);
+let swCount = 0;
+self.addEventListener('install', (e) => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'ping' && e.ports && e.ports[0]) {
+    swCount += 1;
+    e.ports[0].postMessage({ instanceId: SW_INSTANCE_ID, count: swCount });
+  }
+});
+"#;
+    let shared_js = r#"
+const SHARED_INSTANCE_ID = 'shared-' + Math.random().toString(36).slice(2);
+let sharedCount = 0;
+self.onconnect = (evt) => {
+  const port = evt.ports[0];
+  port.onmessage = (e) => {
+    if (e.data && e.data.type === 'ping') {
+      sharedCount += 1;
+      port.postMessage({ instanceId: SHARED_INSTANCE_ID, count: sharedCount });
+    }
+  };
+  port.start();
+};
+"#;
+    let b_worker_js = r#"
+const DEDICATED_INSTANCE_ID = 'ded-' + Math.random().toString(36).slice(2);
+let dedCount = 0;
+self.onmessage = (e) => {
+  if (e.data && e.data.type === 'ping') {
+    dedCount += 1;
+    self.postMessage({ instanceId: DEDICATED_INSTANCE_ID, count: dedCount });
+  }
+};
+"#;
+    let a_worker_js = r#"
+self.__workerTag = 'worker-owned-ok';
+console.log('a-owned-worker-alive');
+"#;
+
+    let b_worker_hits = Arc::new(AtomicUsize::new(0));
+    let b_worker_hits_route = b_worker_hits.clone();
+    let site_router = Router::new()
+        .route(
+            "/b-page",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html><script>
+window.__bReady = (async () => {
+  const dedicated = new Worker('/b-worker.js?v=1');
+  const pingDedicated = () => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('dedicated ping timeout')), 3000);
+    dedicated.onerror = (err) => { clearTimeout(timer); reject(new Error('dedicated error: ' + (err.message || err.type))); };
+    dedicated.onmessageerror = (err) => { clearTimeout(timer); reject(new Error('dedicated msgerror')); };
+    dedicated.onmessage = (ev) => { clearTimeout(timer); resolve(ev.data); };
+    dedicated.postMessage({ type: 'ping' });
+  });
+  const shared = new SharedWorker('/b-shared.js?v=1');
+  shared.port.start();
+  const pingShared = () => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('shared ping timeout')), 3000);
+    shared.port.onmessage = (ev) => { clearTimeout(timer); resolve(ev.data); };
+    shared.port.postMessage({ type: 'ping' });
+  });
+  const reg = await navigator.serviceWorker.register('/b-sw.js?v=1', { scope: '/b-sw-scope/' });
+  await new Promise((resolve, reject) => {
+    const deadline = Date.now() + 5000;
+    const check = () => {
+      if (reg.active) { resolve(reg.active); return; }
+      if (Date.now() > deadline) { reject(new Error('sw active timeout')); return; }
+      setTimeout(check, 20);
+    };
+    check();
+  });
+  const active = reg.active;
+  const pingSw = () => new Promise((resolve, reject) => {
+    const mc = new MessageChannel();
+    const timer = setTimeout(() => reject(new Error('sw ping timeout')), 3000);
+    mc.port1.onmessage = (ev) => { clearTimeout(timer); resolve(ev.data); };
+    active.postMessage({ type: 'ping' }, [mc.port2]);
+  });
+  window.pingAllBWorkers = async () => ({
+    dedicated: await pingDedicated(),
+    shared: await pingShared(),
+    sw: await pingSw(),
+  });
+  window.triggerBSwActivity = async () => {
+    await navigator.serviceWorker.register('/b-sw.js?extra=2', { scope: '/b-scope-2/' });
+    return true;
+  };
+  return await window.pingAllBWorkers();
+})();
+</script>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/b-sw.js",
+            get(move || async move {
+                Response::builder()
+                    .header(CONTENT_TYPE, "application/javascript; charset=utf-8")
+                    .header(CACHE_CONTROL, "no-store")
+                    .header("Service-Worker-Allowed", "/")
+                    .body(Body::from(sw_js))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/b-shared.js",
+            get(move || async move {
+                Response::builder()
+                    .header(CONTENT_TYPE, "application/javascript; charset=utf-8")
+                    .body(Body::from(shared_js))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/b-worker.js",
+            get(move || {
+                let hits = b_worker_hits_route.clone();
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    Response::builder()
+                        .header(CONTENT_TYPE, "application/javascript; charset=utf-8")
+                        .body(Body::from(b_worker_js))
+                        .unwrap()
+                }
+            }),
+        )
+        .route(
+            "/a-page",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html><script>
+window.__aReady = true;
+window.spawnOwnedChildren = (crossOrigin) => {
+  window.__aOopifReady = false;
+  window.addEventListener('message', (ev) => {
+    if (ev.data && ev.data.kind === 'a-child-ready') window.__aOopifReady = true;
+  });
+  const iframe = document.createElement('iframe');
+  iframe.src = crossOrigin + '/a-child';
+  document.body.appendChild(iframe);
+  window.__aWorker = new Worker('/a-worker.js');
+  return true;
+};
+</script>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/a-child",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html><script>
+window.__oopifTag = 'oopif-owned-ok';
+parent.postMessage({ kind: 'a-child-ready' }, '*');
+</script>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/a-worker.js",
+            get(move || async move {
+                Response::builder()
+                    .header(CONTENT_TYPE, "application/javascript; charset=utf-8")
+                    .body(Body::from(a_worker_js))
+                    .unwrap()
+            }),
+        );
+
+    let site_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let site_port = site_listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(site_listener, site_router).await.unwrap();
+    });
+
+    let browser_cfg = BrowserHostConfig {
+        enabled: true,
+        executable_path: Some(chromium_path),
+        allowed_target_origins: vec![
+            format!("http://127.0.0.1:{site_port}"),
+            format!("http://localhost:{site_port}"),
+        ],
+        ..BrowserHostConfig::default()
+    };
+    let (auth_service, tok) = make_user_token("dt-p4", UserRole::Admin);
+    let state = create_test_state(tmp.path().to_path_buf(), None, Some(browser_cfg))
+        .with_auth_service(Arc::new(auth_service));
+    let app = build_router_with_origins(
+        state.clone(),
+        vec![HeaderValue::from_static("http://127.0.0.1:5173")],
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let client = reqwest::Client::new();
+    // 1. Independently establish Tab B with dedicated, shared, and service workers BEFORE A connects DevTools.
+    let resp_b = client
+        .post(format!("http://{addr}/api/browser/sessions"))
+        .header(AUTHORIZATION, format!("Bearer {tok}"))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(
+            json!({
+                "creationKey": uuid::Uuid::new_v4().to_string(),
+                "url": format!("http://127.0.0.1:{site_port}/b-page"),
+                "viewport": { "width": 800, "height": 600, "dpr": 1.0 }
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp_b.status(), StatusCode::CREATED);
+    let b_dto = resp_json(resp_b).await;
+    let sid_b = b_dto["browserSessionId"].as_str().unwrap().to_string();
+    let b_target_id = global_session_registry()
+        .get_native_target_id(&sid_b)
+        .await
+        .expect("B native target id");
+
+    let handle = state.browser_host.ensure_running("dt-p4", false).await.unwrap();
+    let (mut raw_ws, _) = tokio_tungstenite::connect_async(&handle.ws_endpoint)
+        .await
+        .expect("connect trusted raw browser CDP");
+    let mut raw_id = 1u64;
+    async fn raw_cmd<S>(
+        ws: &mut tokio_tungstenite::WebSocketStream<S>,
+        id: &mut u64,
+        method: &str,
+        params: Value,
+        session_id: Option<&str>,
+    ) -> Value
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        let my_id = *id;
+        *id += 1;
+        let mut msg = json!({ "id": my_id, "method": method, "params": params });
+        if let Some(sid) = session_id {
+            msg["sessionId"] = Value::String(sid.to_string());
+        }
+        ws.send(WsMsg::Text(msg.to_string().into())).await.unwrap();
+        wait_cdp_response(ws, my_id, std::time::Duration::from_secs(5))
+            .await
+            .expect("raw cdp response")
+    }
+
+    let b_attach = raw_cmd(
+        &mut raw_ws,
+        &mut raw_id,
+        "Target.attachToTarget",
+        json!({ "targetId": b_target_id, "flatten": true }),
+        None,
+    )
+    .await;
+    let b_raw_sid = b_attach["result"]["sessionId"].as_str().unwrap().to_string();
+
+    let b_ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let probe = raw_cmd(
+            &mut raw_ws,
+            &mut raw_id,
+            "Runtime.evaluate",
+            json!({ "expression": "Boolean(window.__bReady)", "returnByValue": true }),
+            Some(&b_raw_sid),
+        )
+        .await;
+        if probe["result"]["result"]["value"] == json!(true) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < b_ready_deadline,
+            "B page did not initialize window.__bReady in time"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let b_init = raw_cmd(
+        &mut raw_ws,
+        &mut raw_id,
+        "Runtime.evaluate",
+        json!({ "expression": "window.__bReady", "awaitPromise": true, "returnByValue": true }),
+        Some(&b_raw_sid),
+    )
+    .await;
+    if !b_init["result"]["exceptionDetails"].is_null() {
+        let targets = raw_cmd(&mut raw_ws, &mut raw_id, "Target.getTargets", json!({}), None).await;
+        panic!("b_init failed: {b_init}; targets={targets}");
+    }
+    let b_initial_workers = b_init["result"]["result"]["value"].clone();
+    let sw_instance_id = b_initial_workers["sw"]["instanceId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("B service worker instanceId missing in {b_init}"))
+        .to_string();
+    let shared_instance_id = b_initial_workers["shared"]["instanceId"]
+        .as_str()
+        .expect("B shared worker instanceId")
+        .to_string();
+    let ded_instance_id = b_initial_workers["dedicated"]["instanceId"]
+        .as_str()
+        .expect("B dedicated worker instanceId")
+        .to_string();
+    let mut last_sw_count = b_initial_workers["sw"]["count"].as_u64().unwrap();
+
+    // Independently discover B's actual target IDs from Chromium.
+    let all_targets = raw_cmd(&mut raw_ws, &mut raw_id, "Target.getTargets", json!({}), None).await;
+    let target_infos = all_targets["result"]["targetInfos"].as_array().unwrap();
+    let find_target_by = |ttype: &str, url_part: &str| -> String {
+        target_infos
+            .iter()
+            .find(|t| {
+                t.get("type").and_then(Value::as_str) == Some(ttype)
+                    && t.get("url")
+                        .and_then(Value::as_str)
+                        .is_some_and(|u| u.contains(url_part))
+            })
+            .and_then(|t| t.get("targetId").and_then(Value::as_str))
+            .unwrap_or_else(|| panic!("expected live {ttype} matching {url_part} in {target_infos:?}"))
+            .to_string()
+    };
+    let b_dedicated_tid = find_target_by("worker", "/b-worker.js");
+    let b_shared_tid = find_target_by("shared_worker", "/b-shared.js");
+    let b_sw_tid = find_target_by("service_worker", "/b-sw.js");
+
+    // 2. Create Tab A, acquire control, and connect A's target-scoped DevTools proxy WS.
+    let resp_a = client
+        .post(format!("http://{addr}/api/browser/sessions"))
+        .header(AUTHORIZATION, format!("Bearer {tok}"))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(
+            json!({
+                "creationKey": uuid::Uuid::new_v4().to_string(),
+                "url": format!("http://127.0.0.1:{site_port}/a-page"),
+                "viewport": { "width": 800, "height": 600, "dpr": 1.0 }
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp_a.status(), StatusCode::CREATED);
+    let a_dto = resp_json(resp_a).await;
+    let sid_a = a_dto["browserSessionId"].as_str().unwrap().to_string();
+    let inc_a = a_dto["browserIncarnation"].as_str().unwrap().to_string();
+
+    let pair_a = admit_paired_viewer("dt-p4", "sess-dt-p4", &sid_a, "viewer-a", &inc_a).await;
+    let lease_a = acquire_control_http(&client, addr, &sid_a, &tok, "viewer-a").await;
+    let dt_tok_a = mint_devtools_probe_token(&client, addr, &sid_a, &tok, "viewer-a", &lease_a).await;
+    let (mut ws_a, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_a}/ws"))
+            .await
+            .expect("connect A devtools ws");
+
+    // Attempt auto-attach with broad malicious filter; trigger further B ServiceWorker activity.
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": 1,
+            "method": "Target.setAutoAttach",
+            "params": {
+                "autoAttach": true,
+                "waitForDebuggerOnStart": false,
+                "flatten": true,
+                "filter": [
+                    { "type": "service_worker", "exclude": false },
+                    { "type": "shared_worker", "exclude": false },
+                    { "type": "page", "exclude": false }
+                ]
+            }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let aa_res = wait_cdp_response(&mut ws_a, 1, std::time::Duration::from_secs(3))
+        .await
+        .unwrap();
+    assert!(aa_res.get("error").is_none());
+
+    let act = raw_cmd(
+        &mut raw_ws,
+        &mut raw_id,
+        "Runtime.evaluate",
+        json!({ "expression": "window.triggerBSwActivity()", "awaitPromise": true, "returnByValue": true }),
+        Some(&b_raw_sid),
+    )
+    .await;
+    assert_eq!(act["result"]["result"]["value"], json!(true));
+
+    // Drain events on A for 400ms and verify zero foreign IDs or ServiceWorker metadata leaked.
+    let mut a_frames_during_b = Vec::new();
+    let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(400);
+    while tokio::time::Instant::now() < drain_deadline {
+        if let Ok(Some(Ok(WsMsg::Text(txt)))) =
+            tokio::time::timeout(std::time::Duration::from_millis(80), ws_a.next()).await
+        {
+            a_frames_during_b.push(txt.to_string());
+        }
+    }
+    for frame in &a_frames_during_b {
+        for forbidden in [
+            &b_target_id,
+            &b_dedicated_tid,
+            &b_shared_tid,
+            &b_sw_tid,
+            &"/b-sw.js".to_string(),
+            &"/b-shared.js".to_string(),
+            &"/b-worker.js".to_string(),
+            &"ServiceWorker.".to_string(),
+        ] {
+            assert!(
+                !frame.contains(forbidden.as_str()),
+                "A DevTools WS leaked foreign/ServiceWorker metadata ({forbidden}): {frame}"
+            );
+        }
+    }
+
+    // 3. A attempts Target discovery/query/attach and ServiceWorker enable/inspection/lifecycle.
+    let mut a_id = 10u64;
+    for (method, params) in [
+        ("Target.getTargets", json!({})),
+        ("Target.setDiscoverTargets", json!({ "discover": true })),
+        ("Target.autoAttachRelated", json!({ "targetId": b_target_id, "waitForDebuggerOnStart": false })),
+        ("Target.getTargetInfo", json!({ "targetId": b_target_id })),
+        ("Target.getTargetInfo", json!({ "targetId": b_dedicated_tid })),
+        ("Target.getTargetInfo", json!({ "targetId": b_shared_tid })),
+        ("Target.getTargetInfo", json!({ "targetId": b_sw_tid })),
+        ("Target.attachToTarget", json!({ "targetId": b_target_id, "flatten": true })),
+        ("Target.attachToTarget", json!({ "targetId": b_dedicated_tid, "flatten": true })),
+        ("Target.attachToTarget", json!({ "targetId": b_shared_tid, "flatten": true })),
+        ("Target.attachToTarget", json!({ "targetId": b_sw_tid, "flatten": true })),
+    ] {
+        let cid = a_id;
+        a_id += 1;
+        ws_a.send(WsMsg::Text(
+            json!({ "id": cid, "method": method, "params": params })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let reply = wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(reply["error"]["code"], -32601, "expected deny for {method}");
+        let reply_str = reply.to_string();
+        assert!(!reply_str.contains("/b-sw.js") && !reply_str.contains("/b-shared.js"));
+    }
+
+    for (method, params) in [
+        ("ServiceWorker.enable", json!({})),
+        ("ServiceWorker.inspectWorker", json!({ "versionId": "0" })),
+        ("ServiceWorker.stopAllWorkers", json!({})),
+        ("ServiceWorker.stopWorker", json!({ "versionId": "0" })),
+        ("ServiceWorker.unregister", json!({ "scopeURL": format!("http://127.0.0.1:{site_port}/b-sw-scope/") })),
+        ("ServiceWorker.updateRegistration", json!({ "scopeURL": format!("http://127.0.0.1:{site_port}/b-sw-scope/") })),
+        ("ServiceWorker.startWorker", json!({ "scopeURL": format!("http://127.0.0.1:{site_port}/b-sw-scope/") })),
+    ] {
+        let cid = a_id;
+        a_id += 1;
+        ws_a.send(WsMsg::Text(
+            json!({ "id": cid, "method": method, "params": params })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let reply = wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(reply["error"]["code"], -32601, "expected deny for {method}");
+
+        // Verify original live B ServiceWorker, SharedWorker, and DedicatedWorker still answer on held channels.
+        let ping = raw_cmd(
+            &mut raw_ws,
+            &mut raw_id,
+            "Runtime.evaluate",
+            json!({ "expression": "window.pingAllBWorkers()", "awaitPromise": true, "returnByValue": true }),
+            Some(&b_raw_sid),
+        )
+        .await;
+        let val = &ping["result"]["result"]["value"];
+        assert_eq!(val["sw"]["instanceId"].as_str(), Some(sw_instance_id.as_str()));
+        assert_eq!(val["shared"]["instanceId"].as_str(), Some(shared_instance_id.as_str()));
+        assert_eq!(val["dedicated"]["instanceId"].as_str(), Some(ded_instance_id.as_str()));
+        let next_count = val["sw"]["count"].as_u64().unwrap();
+        assert!(next_count > last_sw_count, "held B SW channel must increment live instance count");
+        last_sw_count = next_count;
+    }
+
+    // 4. Positive owned OOPIF & dedicated worker inspection on Tab A!
+    let a_ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let cid = a_id;
+        a_id += 1;
+        ws_a.send(WsMsg::Text(
+            json!({
+                "id": cid,
+                "method": "Runtime.evaluate",
+                "params": { "expression": "window.__aReady === true", "returnByValue": true }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        let probe = wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        if probe["result"]["result"]["value"] == json!(true) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < a_ready_deadline,
+            "A page did not initialize window.__aReady in time"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let spawn_cid = a_id;
+    a_id += 1;
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": spawn_cid,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": format!("window.spawnOwnedChildren('http://localhost:{site_port}')"),
+                "returnByValue": true
+            }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let spawn_reply = wait_cdp_response(&mut ws_a, spawn_cid, std::time::Duration::from_secs(3))
+        .await
+        .unwrap();
+    assert_eq!(spawn_reply["result"]["result"]["value"], json!(true));
+
+    let mut owned_iframe_sid = None;
+    let mut owned_iframe_tid = None;
+    let mut owned_worker_sid = None;
+    let mut owned_worker_tid = None;
+    let attach_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(6);
+    while tokio::time::Instant::now() < attach_deadline
+        && (owned_iframe_sid.is_none() || owned_worker_sid.is_none())
+    {
+        if let Ok(Some(Ok(WsMsg::Text(txt)))) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), ws_a.next()).await
+        {
+            let v: Value = serde_json::from_str(&txt).unwrap();
+            if v.get("method") == Some(&json!("Target.attachedToTarget")) {
+                let sid = v.pointer("/params/sessionId").and_then(Value::as_str).map(str::to_string);
+                let tid = v.pointer("/params/targetInfo/targetId").and_then(Value::as_str).map(str::to_string);
+                let ttype = v.pointer("/params/targetInfo/type").and_then(Value::as_str);
+                match ttype {
+                    Some("iframe") => {
+                        owned_iframe_sid = sid;
+                        owned_iframe_tid = tid;
+                    }
+                    Some("worker") => {
+                        let url = v.pointer("/params/targetInfo/url").and_then(Value::as_str).unwrap_or("");
+                        assert!(url.contains("/a-worker.js"), "must only receive A's owned worker, got {url}");
+                        owned_worker_sid = sid;
+                        owned_worker_tid = tid;
+                    }
+                    other => panic!("unexpected attached target type on A: {other:?} {v}"),
+                }
+            }
+        }
+    }
+    let iframe_sid = owned_iframe_sid.expect("A must receive Target.attachedToTarget for owned OOPIF");
+    let iframe_tid = owned_iframe_tid.unwrap();
+    let worker_sid = owned_worker_sid.expect("A must receive Target.attachedToTarget for owned worker");
+    let worker_tid = owned_worker_tid.unwrap();
+
+    // Evaluate inside owned OOPIF and owned dedicated worker
+    let eval_iframe_id = a_id;
+    a_id += 1;
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": eval_iframe_id,
+            "sessionId": iframe_sid,
+            "method": "Runtime.evaluate",
+            "params": { "expression": "window.__oopifTag", "returnByValue": true }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let iframe_eval = wait_cdp_response(&mut ws_a, eval_iframe_id, std::time::Duration::from_secs(3))
+        .await
+        .unwrap();
+    assert_eq!(iframe_eval["sessionId"], iframe_sid);
+    assert_eq!(iframe_eval["result"]["result"]["value"], "oopif-owned-ok");
+
+    let eval_worker_id = a_id;
+    a_id += 1;
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": eval_worker_id,
+            "sessionId": worker_sid,
+            "method": "Runtime.evaluate",
+            "params": { "expression": "self.__workerTag", "returnByValue": true }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let worker_eval = wait_cdp_response(&mut ws_a, eval_worker_id, std::time::Duration::from_secs(3))
+        .await
+        .unwrap();
+    assert_eq!(worker_eval["sessionId"], worker_sid);
+    assert_eq!(worker_eval["result"]["result"]["value"], "worker-owned-ok");
+
+    // Target.getTargetInfo works for owned child targets
+    let info_iframe_id = a_id;
+    a_id += 1;
+    ws_a.send(WsMsg::Text(
+        json!({ "id": info_iframe_id, "method": "Target.getTargetInfo", "params": { "targetId": iframe_tid } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let info_iframe = wait_cdp_response(&mut ws_a, info_iframe_id, std::time::Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(info_iframe["result"]["targetInfo"]["targetId"], iframe_tid);
+
+    let info_worker_id = a_id;
+    a_id += 1;
+    ws_a.send(WsMsg::Text(
+        json!({ "id": info_worker_id, "method": "Target.getTargetInfo", "params": { "targetId": worker_tid } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let info_worker = wait_cdp_response(&mut ws_a, info_worker_id, std::time::Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(info_worker["result"]["targetInfo"]["targetId"], worker_tid);
+
+    // Nonlocal restrictions still apply on owned child sessions
+    for (method, params) in [
+        ("ServiceWorker.stopAllWorkers", json!({})),
+        ("Page.setDownloadBehavior", json!({ "behavior": "allow", "downloadPath": "/tmp/x" })),
+    ] {
+        let cid = a_id;
+        a_id += 1;
+        ws_a.send(WsMsg::Text(
+            json!({ "id": cid, "sessionId": iframe_sid, "method": method, "params": params })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let err = wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(err["error"]["code"], -32601);
+    }
+
+    // Remove owned OOPIF from Tab A and verify iframe_sid detaches/denies while root + worker stay live.
+    let rm_iframe_id = a_id;
+    a_id += 1;
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": rm_iframe_id,
+            "method": "Runtime.evaluate",
+            "params": { "expression": "document.querySelector('iframe')?.remove(); 'removed'", "returnByValue": true }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let rm_reply = wait_cdp_response(&mut ws_a, rm_iframe_id, std::time::Duration::from_secs(3))
+        .await
+        .unwrap();
+    assert_eq!(rm_reply["result"]["result"]["value"], "removed");
+
+    // Poll briefly until OwnershipFence / Target.detachedFromTarget retires iframe_sid
+    let mut iframe_retired = false;
+    for _ in 0..25 {
+        let probe_id = a_id;
+        a_id += 1;
+        ws_a.send(WsMsg::Text(
+            json!({
+                "id": probe_id,
+                "sessionId": iframe_sid,
+                "method": "Runtime.evaluate",
+                "params": { "expression": "1+1" }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        let probe_reply = wait_cdp_response(&mut ws_a, probe_id, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        if probe_reply.get("error").is_some() {
+            iframe_retired = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(iframe_retired, "removed OOPIF session must retire cleanly");
+
+    // Owned dedicated worker remains usable after OOPIF removal
+    let worker_alive_id = a_id;
+    a_id += 1;
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": worker_alive_id,
+            "sessionId": worker_sid,
+            "method": "Runtime.evaluate",
+            "params": { "expression": "self.__workerTag + ':still-alive'", "returnByValue": true }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let worker_alive =
+        wait_cdp_response(&mut ws_a, worker_alive_id, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+    assert_eq!(worker_alive["result"]["result"]["value"], "worker-owned-ok:still-alive");
+
+    // Detach owned worker session and verify stale sessionId stays denied
+    let detach_id = a_id;
+    a_id += 1;
+    ws_a.send(WsMsg::Text(
+        json!({ "id": detach_id, "method": "Target.detachFromTarget", "params": { "sessionId": worker_sid } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let detach_reply = wait_cdp_response(&mut ws_a, detach_id, std::time::Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert!(detach_reply.get("error").is_none());
+
+    let stale_id = a_id;
+    ws_a.send(WsMsg::Text(
+        json!({ "id": stale_id, "sessionId": worker_sid, "method": "Runtime.evaluate", "params": { "expression": "1+1" } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let stale_reply = wait_cdp_response(&mut ws_a, stale_id, std::time::Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(stale_reply["error"]["code"], -32601);
+
+    drop(ws_a);
+    drop(raw_ws);
+    pair_a.release().await;
+    cleanup_test_session_viewers(&sid_a).await;
+    for sid in [&sid_a, &sid_b] {
+        let _ = client
+            .delete(format!("http://{addr}/api/browser/sessions/{sid}"))
+            .header(AUTHORIZATION, format!("Bearer {tok}"))
+            .header(ORIGIN, "http://127.0.0.1:5173")
+            .send()
+            .await;
+    }
+    state.browser_host.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn test_devtools_child_input_detach_during_inflight_no_uncertain() {
+    let _serial = TEST_SERIAL.lock().await;
+    global_session_registry().reset_for_test().await;
+    let tmp = tempdir().unwrap();
+
+    // Custom mock upstream Chromium WS that detaches WORKER-S1 before sending -32001 on Input.dispatchKeyEvent.
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock_port = upstream_listener.local_addr().unwrap().port();
+    let upstream_router = Router::new().route(
+        "/devtools/page/{target_id}",
+        get(
+            |AxumPath(_tid): AxumPath<String>, ws: WebSocketUpgrade| async move {
+                ws.on_upgrade(|mut socket| async move {
+                    let _ = socket
+                        .send(AxumWsMsg::Text(
+                            json!({
+                                "method": "Target.attachedToTarget",
+                                "params": {
+                                    "sessionId": "WORKER-DETACH",
+                                    "targetInfo": {
+                                        "targetId": "CHILD-WORKER-DETACH",
+                                        "type": "worker",
+                                        "attached": true,
+                                        "url": "http://127.0.0.1/w.js"
+                                    }
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await;
+                    while let Some(Ok(AxumWsMsg::Text(txt))) = socket.next().await {
+                        let Ok(val) = serde_json::from_str::<Value>(txt.as_str()) else {
+                            continue;
+                        };
+                        let Some(id) = val.get("id").and_then(Value::as_u64) else {
+                            continue;
+                        };
+                        let method = val.get("method").and_then(Value::as_str).unwrap_or("");
+                        let sid = val.get("sessionId").and_then(Value::as_str);
+                        if method == "Input.dispatchKeyEvent" && sid == Some("WORKER-DETACH") {
+                            let _ = socket
+                                .send(AxumWsMsg::Text(
+                                    json!({
+                                        "method": "Target.detachedFromTarget",
+                                        "params": { "sessionId": "WORKER-DETACH" }
+                                    })
+                                    .to_string()
+                                    .into(),
+                                ))
+                                .await;
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                            let _ = socket
+                                .send(AxumWsMsg::Text(
+                                    json!({
+                                        "id": id,
+                                        "sessionId": "WORKER-DETACH",
+                                        "error": { "code": -32001, "message": "Session not found" }
+                                    })
+                                    .to_string()
+                                    .into(),
+                                ))
+                                .await;
+                        } else if id <= 1_000_000_000 {
+                            let mut reply = json!({ "id": id, "result": { "ok": true } });
+                            if let Some(s) = sid {
+                                reply["sessionId"] = json!(s);
+                            }
+                            let _ = socket.send(AxumWsMsg::Text(reply.to_string().into())).await;
+                        } else {
+                            let _ = socket
+                                .send(AxumWsMsg::Text(json!({ "id": id, "result": {} }).to_string().into()))
+                                .await;
+                        }
+                    }
+                })
+            },
+        ),
+    );
+    tokio::spawn(async move {
+        axum::serve(upstream_listener, upstream_router).await.unwrap();
+    });
+
+    let (store, auth_service, tokens) =
+        setup_sqlite_multi_session(tmp.path(), "dt-indet", &["auth-a"]).await;
+    let state = create_test_state(
+        tmp.path().to_path_buf(),
+        Some(store),
+        Some(BrowserHostConfig {
+            enabled: true,
+            ..BrowserHostConfig::default()
+        }),
+    )
+    .with_auth_service(auth_service);
+    *state.browser_host._test_mock_handle.write() = Some(BrowserInstanceHandle {
+        subject: "dt-indet".into(),
+        is_dev: false,
+        pid: 1,
+        ws_endpoint: format!("ws://127.0.0.1:{mock_port}/devtools/browser/mock"),
+        browser_incarnation: "inc-indet".into(),
+        profile_epoch: 1,
+        user_data_dir: tmp.path().to_path_buf(),
+    });
+    let app = build_router_with_origins(state, vec![HeaderValue::from_static("http://127.0.0.1:5173")]);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let sid = insert_running_session("dt-indet", false, "inc-indet", "TARGET-INDET").await;
+    let client = reqwest::Client::new();
+    let pair_a = admit_paired_viewer("dt-indet", "auth-a", &sid, "viewer-a", "inc-indet").await;
+    let lease_a = acquire_control_http(&client, addr, &sid, &tokens[0], "viewer-a").await;
+    let dt_tok = mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_a).await;
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok}/ws"))
+        .await
+        .unwrap();
+
+    let evt = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let evt_val: Value = serde_json::from_str(evt.to_text().unwrap()).unwrap();
+    assert_eq!(evt_val["params"]["sessionId"], "WORKER-DETACH");
+
+    // In-flight child Input.dispatchKeyEvent triggers Target.detachedFromTarget followed by -32001.
+    // Must cleanly reject without marking native_outcome_uncertain or wedging subsequent root input.
+    ws.send(WsMsg::Text(
+        json!({
+            "id": 1,
+            "sessionId": "WORKER-DETACH",
+            "method": "Input.dispatchKeyEvent",
+            "params": { "type": "keyDown", "key": "a", "code": "KeyA" }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let detached_evt = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let detached_val: Value = serde_json::from_str(detached_evt.to_text().unwrap()).unwrap();
+    assert_eq!(detached_val["method"], "Target.detachedFromTarget");
+
+    let inflight_err = wait_cdp_response(&mut ws, 1, std::time::Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(inflight_err["sessionId"], "WORKER-DETACH");
+    assert_eq!(inflight_err["error"]["code"], -32601);
+
+    // Subsequent root Input.dispatchKeyEvent still acquires op_permit and completes cleanly,
+    // with no duplicate -32001 reply leaked for id 1.
+    ws.send(WsMsg::Text(
+        json!({
+            "id": 2,
+            "method": "Input.dispatchKeyEvent",
+            "params": { "type": "keyDown", "key": "b", "code": "KeyB" }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let next_frame = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let root_ok: Value = serde_json::from_str(next_frame.to_text().unwrap()).unwrap();
+    assert_eq!(root_ok["id"], 2);
+    assert_eq!(root_ok["result"]["ok"], true);
+    let rel = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/release"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "leaseToken": lease_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rel.status(), StatusCode::OK);
+
+    pair_a.release().await;
     cleanup_test_session_viewers(&sid).await;
 }

@@ -1,7 +1,7 @@
 # Phase 04 — Positive target and child-session isolation
 
 ## Context / overview
-[Plan](plan.md) · [Evidence F4, positive ownership design](reports/evidence-and-design.md) · [Frame ownership prerequisite](phase-02-frame-download-ownership.md). P1; pending; 10h. Depends on Phase 03 full cutover; same exclusive source/test writer. One coherent target/session policy task; not four independent endpoint fixes.
+[Plan](plan.md) · [Evidence F4, positive ownership design](reports/evidence-and-design.md) · [Frame ownership prerequisite](phase-02-frame-download-ownership.md). P1; DONE (2026-11-19 EST); 10h. Depends on Phase 03 full cutover; same exclusive source/test writer. One coherent target/session policy task; not four independent endpoint fixes.
 
 ## Key insights / requirements
 Current upstream filter covers only selected foreign Target discovery events; queries/worker/attach/child and separate ServiceWorker domain traffic pass. Root page socket/principal process is not tab ownership or context scoping. Unknown/Foreign metadata/IDs and unproven child routing deny. Preserve proven root/OOPIF/dedicated-worker debugging; shared/service worker ambiguity denies. Phase 01 ServiceWorker default-deny/suppression and finite analogous effect inventory remain prerequisites, independent of positive target/session proof; native deployed behavior unverified.
@@ -34,7 +34,7 @@ Prefix `/home/loidinh/WS/dam-hopper/`. Modify `server/src/browser_host/devtools_
   }
 ]
 ```
-- [ ] <!-- evcrate-task:enforce-owned-target-sessions --> Enforce target and child-session ownership
+- [x] <!-- evcrate-task:enforce-owned-target-sessions --> Enforce target and child-session ownership
 
 ## Success / risk / security / rollback / next
 Fail closed with explicit deployed-engine gap if exclusive child/domain scope cannot be proven. Do not claim compatibility by suppressing all children or relax context-wide ServiceWorker denial for frontend. Keep B worker alive: cleanup cannot stop/unregister/pause/close foreign workers. Internal actor/stealth/raw gateway remain explicitly privileged, not subject to public proxy policy by accident; raw authority does not weaken the proxy boundary or imply viewer exclusivity. Rollback disables/drains DevTools, preserves other tab/worker lifetime. Next Phase 05 qualifies both Target and non-Target surfaces plus shared native-input cleanup after coherent edits.

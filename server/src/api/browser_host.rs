@@ -2599,30 +2599,36 @@ async fn relay_devtools_socket(
     };
     use crate::browser_host::devtools::global_devtools_leases;
     use crate::browser_host::devtools_filter::{
-        classify_devtools_client_message, devtools_json_memory_bound, CdpInputEffect,
-        ClassifiedDevToolsMessage, DevToolsUpstreamFilter,
+        devtools_json_memory_bound, CdpInputEffect, ClassifiedDevToolsMessage,
+        DevToolsSessionFilter, OwnedTargetKind, UpstreamVerdict, CLIENT_CALL_ID_MAX,
+        INTERNAL_FILTER_ID_BASE,
     };
     use crate::browser_host::diagnostics::global_memory_controller;
     use crate::browser_host::input::{SessionInputManager, DEVTOOLS_OP_DRAIN_TIMEOUT};
     use crate::browser_host::input_native_release::{
         CapturedNativeIdentity, DevToolsProxyReleaseRoute, NativeInputTarget, ProxyCleanupCommand,
     };
+    use crate::browser_host::manager::{DevToolsOwnershipSource, DevToolsRootFenceStatus};
     use crate::browser_host::protocol::{COMMAND_TIMEOUT_SECS, MAX_WS_MESSAGE_BYTES};
+    use crate::browser_host::session::TargetClass;
     use uuid::Uuid;
 
     const MAX_QUEUED_CDP_INPUT: usize = 32;
     const MAX_PENDING_CDP_REPLIES: usize = 64;
+    const PENDING_ATTACH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
     #[derive(Debug, Clone, Copy)]
     enum ProxyWriteOutcome {
         Written,
         NotWritten,
+        NotWrittenChildDetached,
         Ambiguous,
     }
 
     struct ProxyInputWriteRequest {
         json: String,
         call_id: u64,
+        session_id: Option<String>,
         write_done: oneshot::Sender<ProxyWriteOutcome>,
         reply: oneshot::Sender<Result<(), CdpError>>,
     }
@@ -2649,8 +2655,31 @@ async fn relay_devtools_socket(
         return;
     };
 
-    // Recheck all bindings after upstream setup before activating relay or forwarding anything.
-    let post_setup_input_mgr = if !lease.cancel.is_cancelled()
+    // Recheck all bindings and Phase 02 instance ownership source after upstream setup before
+    // activating relay or forwarding anything.
+    let ownership_source = state.browser_host.devtools_ownership_source(
+        &lease.admission.principal,
+        lease.admission.is_dev,
+        lease.profile_epoch,
+        &lease.browser_incarnation,
+    );
+    let ownership_live_at_start = match &ownership_source {
+        DevToolsOwnershipSource::MockUnobserved => true,
+        DevToolsOwnershipSource::Unavailable => false,
+        DevToolsOwnershipSource::LiveFence(fence) => !matches!(
+            fence.root_snapshot_status(
+                &lease.admission.principal,
+                lease.admission.is_dev,
+                &lease.browser_incarnation,
+                lease.profile_epoch,
+                &lease.browser_session_id,
+                &lease.native_target_id,
+            ),
+            DevToolsRootFenceStatus::Retired
+        ),
+    };
+    let post_setup_input_mgr = if ownership_live_at_start
+        && !lease.cancel.is_cancelled()
         && global_devtools_leases().is_lease_active(&hash).await
         && resolve_devtools_chrome_port(&state, &lease).await.is_ok()
     {
@@ -2726,7 +2755,26 @@ async fn relay_devtools_socket(
         }),
     );
     tokio::pin!(deadline_sleep);
-    let mut upstream_filter = DevToolsUpstreamFilter::default();
+    let mut session_filter = DevToolsSessionFilter::new(&lease.native_target_id);
+    let mut fence_rx = match &ownership_source {
+        DevToolsOwnershipSource::LiveFence(fence) => Some(fence.subscribe_state()),
+        _ => None,
+    };
+    let mut captured_fence_version: Option<(u64, u64)> = match &ownership_source {
+        DevToolsOwnershipSource::LiveFence(fence) => match fence.root_snapshot_status(
+            &lease.admission.principal,
+            lease.admission.is_dev,
+            &lease.browser_incarnation,
+            lease.profile_epoch,
+            &lease.browser_session_id,
+            &lease.native_target_id,
+        ) {
+            DevToolsRootFenceStatus::Available { generation, epoch } => Some((generation, epoch)),
+            _ => None,
+        },
+        _ => None,
+    };
+    let mut pending_attach_deadlines: HashMap<String, tokio::time::Instant> = HashMap::new();
 
     let (cleanup_tx, mut cleanup_rx) = mpsc::channel::<ProxyCleanupCommand>(128);
     let proxy_conn_id = Uuid::new_v4();
@@ -2735,13 +2783,14 @@ async fn relay_devtools_socket(
         sender: cleanup_tx,
     };
     let (input_write_tx, mut input_write_rx) = mpsc::channel::<ProxyInputWriteRequest>(8);
-    let mut pending_input_replies: HashMap<u64, oneshot::Sender<Result<(), CdpError>>> =
+    let mut pending_input_replies: HashMap<(Option<String>, u64), oneshot::Sender<Result<(), CdpError>>> =
         HashMap::new();
     let mut pending_cleanup_replies: HashMap<u64, oneshot::Sender<Result<(), CdpError>>> =
         HashMap::new();
-    let mut next_cleanup_id: u64 = (u32::MAX as u64) + 1;
+    let mut next_cleanup_id: u64 = CLIENT_CALL_ID_MAX + 1;
 
-    let mut queued_cdp_inputs: VecDeque<(u64, String, CdpInputEffect)> = VecDeque::new();
+    let mut queued_cdp_inputs: VecDeque<(u64, Option<String>, String, CdpInputEffect)> =
+        VecDeque::new();
     let mut active_cdp_input: Option<tokio::task::JoinHandle<bool>> = None;
 
     fn spawn_cdp_input_task(
@@ -2750,6 +2799,7 @@ async fn relay_devtools_socket(
         proxy_route: DevToolsProxyReleaseRoute,
         input_write_tx: mpsc::Sender<ProxyInputWriteRequest>,
         call_id: u64,
+        session_id: Option<String>,
         json: String,
         effect: CdpInputEffect,
     ) -> tokio::task::JoinHandle<bool> {
@@ -2814,6 +2864,7 @@ async fn relay_devtools_socket(
                 .send(ProxyInputWriteRequest {
                     json,
                     call_id,
+                    session_id,
                     write_done: write_done_tx,
                     reply: reply_tx,
                 })
@@ -2832,6 +2883,12 @@ async fn relay_devtools_socket(
                         input_mgr.reject_native_op(&gate, op).await;
                     }
                     return false;
+                }
+                Ok(ProxyWriteOutcome::NotWrittenChildDetached) => {
+                    if let Some(op) = pending_op {
+                        input_mgr.reject_native_op(&gate, op).await;
+                    }
+                    return true;
                 }
                 Ok(ProxyWriteOutcome::Ambiguous) | Err(_) => {
                     if let Some(op) = pending_op {
@@ -2876,11 +2933,15 @@ async fn relay_devtools_socket(
     fn resolve_reply_from_upstream(
         val: &serde_json::Value,
         pending_cleanup_replies: &mut HashMap<u64, oneshot::Sender<Result<(), CdpError>>>,
-        pending_input_replies: &mut HashMap<u64, oneshot::Sender<Result<(), CdpError>>>,
+        pending_input_replies: &mut HashMap<(Option<String>, u64), oneshot::Sender<Result<(), CdpError>>>,
     ) -> bool {
         let Some(id) = val.get("id").and_then(serde_json::Value::as_u64) else {
             return false;
         };
+        let session_id = val
+            .get("sessionId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
         let reply_result = if let Some(err) = val.get("error") {
             let code = err
                 .get("code")
@@ -2899,27 +2960,343 @@ async fn relay_devtools_socket(
             let _ = tx.send(reply_result);
             return true;
         }
-        if let Some(tx) = pending_input_replies.remove(&id) {
+        if let Some(tx) = pending_input_replies.remove(&(session_id, id)) {
             let _ = tx.send(reply_result);
         }
         false
+    }
+
+    enum RevalidateOutcome {
+        Ok,
+        RetiredChildren(Vec<String>),
+        CloseConnection,
+    }
+
+    async fn revalidate_devtools_live_ownership(
+        state: &AppState,
+        lease: &crate::browser_host::devtools::DevToolsLease,
+        input_mgr: &SessionInputManager,
+        ownership_source: &DevToolsOwnershipSource,
+        captured_fence_version: &mut Option<(u64, u64)>,
+        session_filter: &mut DevToolsSessionFilter,
+        pending_attach_deadlines: &mut HashMap<String, tokio::time::Instant>,
+    ) -> RevalidateOutcome {
+        if lease.cancel.is_cancelled()
+            || !state.browser_host.is_instance_live_sync(
+                &lease.admission.principal,
+                lease.admission.is_dev,
+                lease.profile_epoch,
+                &lease.browser_incarnation,
+            )
+            || !input_mgr
+                .is_control_authority_live(lease.control_epoch, &lease.viewer_id)
+                .await
+        {
+            return RevalidateOutcome::CloseConnection;
+        }
+        match ownership_source {
+            DevToolsOwnershipSource::MockUnobserved => RevalidateOutcome::Ok,
+            DevToolsOwnershipSource::Unavailable => RevalidateOutcome::CloseConnection,
+            DevToolsOwnershipSource::LiveFence(fence) => match fence.root_snapshot_status(
+                &lease.admission.principal,
+                lease.admission.is_dev,
+                &lease.browser_incarnation,
+                lease.profile_epoch,
+                &lease.browser_session_id,
+                &lease.native_target_id,
+            ) {
+                DevToolsRootFenceStatus::Retired => RevalidateOutcome::CloseConnection,
+                DevToolsRootFenceStatus::Pending => {
+                    if captured_fence_version.take().is_some() && session_filter.has_active_children() {
+                        pending_attach_deadlines.clear();
+                        match session_filter.retire_active_children() {
+                            Ok(cmds) => RevalidateOutcome::RetiredChildren(cmds),
+                            Err(()) => RevalidateOutcome::CloseConnection,
+                        }
+                    } else {
+                        RevalidateOutcome::Ok
+                    }
+                }
+                DevToolsRootFenceStatus::Available { generation, epoch } => {
+                    let prev = *captured_fence_version;
+                    *captured_fence_version = Some((generation, epoch));
+                    if prev.is_some_and(|p| p != (generation, epoch))
+                        && session_filter.has_active_children()
+                    {
+                        pending_attach_deadlines.clear();
+                        match session_filter.retire_active_children() {
+                            Ok(cmds) => RevalidateOutcome::RetiredChildren(cmds),
+                            Err(()) => RevalidateOutcome::CloseConnection,
+                        }
+                    } else {
+                        let mut detached_cmds = Vec::new();
+                        for (sid, tid) in session_filter.owned_iframe_sessions() {
+                            if fence
+                                .owns_child_target(
+                                    &lease.admission.principal,
+                                    lease.admission.is_dev,
+                                    &lease.browser_incarnation,
+                                    lease.profile_epoch,
+                                    &lease.browser_session_id,
+                                    &lease.native_target_id,
+                                    &tid,
+                                )
+                                .is_none()
+                            {
+                                pending_attach_deadlines.remove(&sid);
+                                match session_filter.retire_owned_child_session(&sid) {
+                                    Ok(cmds) => detached_cmds.extend(cmds),
+                                    Err(()) => return RevalidateOutcome::CloseConnection,
+                                }
+                            }
+                        }
+                        pending_attach_deadlines
+                            .retain(|sid, _| session_filter.is_session_pending(sid));
+                        if detached_cmds.is_empty() {
+                            RevalidateOutcome::Ok
+                        } else {
+                            RevalidateOutcome::RetiredChildren(detached_cmds)
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn resolve_pending_attaches(
+        state: &AppState,
+        lease: &crate::browser_host::devtools::DevToolsLease,
+        ownership_source: &DevToolsOwnershipSource,
+        captured_fence_version: &mut Option<(u64, u64)>,
+        session_filter: &mut DevToolsSessionFilter,
+        pending_attach_deadlines: &mut HashMap<String, tokio::time::Instant>,
+    ) -> Result<(Vec<String>, Vec<String>), ()> {
+        let mut to_client = Vec::new();
+        let mut to_upstream = Vec::new();
+        let now = tokio::time::Instant::now();
+        // Loop so a parent promotion can immediately unblock a child queued behind it.
+        loop {
+            let pending = session_filter.pending_attaches();
+            pending_attach_deadlines
+                .retain(|sid, _| pending.iter().any(|p| p.session_id == *sid));
+            if pending.is_empty() {
+                break;
+            }
+            let mut progressed = false;
+            for item in pending {
+                let expired = pending_attach_deadlines
+                    .get(&item.session_id)
+                    .is_some_and(|deadline| now >= *deadline);
+                let foreign_target = global_session_registry()
+                    .classify_target(&lease.browser_incarnation, &item.target_id)
+                    .await
+                    != TargetClass::Unknown;
+                let parent_ready = match &item.parent_session_id {
+                    None => Some(true),
+                    Some(pid) => {
+                        if session_filter.is_session_owned(pid) {
+                            Some(true)
+                        } else if pending_attach_deadlines.contains_key(pid) {
+                            Some(false)
+                        } else {
+                            None
+                        }
+                    }
+                };
+                if foreign_target || parent_ready.is_none() {
+                    pending_attach_deadlines.remove(&item.session_id);
+                    to_upstream.extend(session_filter.reject_pending_attach(&item.session_id, true)?);
+                    progressed = true;
+                    continue;
+                }
+                if parent_ready == Some(false) {
+                    if expired {
+                        pending_attach_deadlines.remove(&item.session_id);
+                        to_upstream.extend(session_filter.reject_pending_attach(&item.session_id, false)?);
+                        progressed = true;
+                    }
+                    continue;
+                }
+                enum Decision {
+                    Promote,
+                    Wait,
+                    Reject(bool),
+                }
+                let decision = match ownership_source {
+                    DevToolsOwnershipSource::Unavailable => Decision::Reject(false),
+                    DevToolsOwnershipSource::MockUnobserved => {
+                        if state.browser_host.is_instance_live_sync(
+                            &lease.admission.principal,
+                            lease.admission.is_dev,
+                            lease.profile_epoch,
+                            &lease.browser_incarnation,
+                        ) {
+                            Decision::Promote
+                        } else {
+                            Decision::Reject(false)
+                        }
+                    }
+                    DevToolsOwnershipSource::LiveFence(fence) => match fence.root_snapshot_status(
+                        &lease.admission.principal,
+                        lease.admission.is_dev,
+                        &lease.browser_incarnation,
+                        lease.profile_epoch,
+                        &lease.browser_session_id,
+                        &lease.native_target_id,
+                    ) {
+                        DevToolsRootFenceStatus::Retired => Decision::Reject(false),
+                        DevToolsRootFenceStatus::Pending => {
+                            if expired { Decision::Reject(false) } else { Decision::Wait }
+                        }
+                        DevToolsRootFenceStatus::Available { generation, epoch } => {
+                            if captured_fence_version.is_some_and(|p| p != (generation, epoch)) {
+                                Decision::Reject(false)
+                            } else {
+                                *captured_fence_version = Some((generation, epoch));
+                                match item.target_type {
+                                    OwnedTargetKind::DedicatedWorker => Decision::Promote,
+                                    OwnedTargetKind::Iframe => {
+                                        if fence
+                                            .owns_child_target(
+                                                &lease.admission.principal,
+                                                lease.admission.is_dev,
+                                                &lease.browser_incarnation,
+                                                lease.profile_epoch,
+                                                &lease.browser_session_id,
+                                                &lease.native_target_id,
+                                                &item.target_id,
+                                            )
+                                            .is_some()
+                                        {
+                                            Decision::Promote
+                                        } else if expired {
+                                            Decision::Reject(true)
+                                        } else {
+                                            Decision::Wait
+                                        }
+                                    }
+                                    OwnedTargetKind::RootPage => Decision::Reject(true),
+                                }
+                            }
+                        }
+                    },
+                };
+                match decision {
+                    Decision::Promote => {
+                        pending_attach_deadlines.remove(&item.session_id);
+                        if let Some(evt) = session_filter.promote_pending_attach(&item.session_id) {
+                            to_client.push(evt);
+                        }
+                        progressed = true;
+                    }
+                    Decision::Reject(mark_foreign) => {
+                        pending_attach_deadlines.remove(&item.session_id);
+                        to_upstream.extend(
+                            session_filter.reject_pending_attach(&item.session_id, mark_foreign)?,
+                        );
+                        progressed = true;
+                    }
+                    Decision::Wait => {}
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        Ok((to_client, to_upstream))
+    }
+
+    async fn send_upstream_texts<S>(
+        upstream_sink: &mut S,
+        texts: Vec<String>,
+        abort_rx: &mut mpsc::Receiver<()>,
+        deadline_at: Option<tokio::time::Instant>,
+        cancel: &tokio_util::sync::CancellationToken,
+        upstream_alive: &mut bool,
+        upstream_sink_poisoned: &mut bool,
+    ) -> bool
+    where
+        S: futures_util::Sink<UpstreamMessage> + Unpin,
+    {
+        for text in texts {
+            let (outcome, aborted) = write_with_cancel(
+                upstream_sink.send(UpstreamMessage::Text(text.into())),
+                abort_rx,
+                deadline_at,
+                Some(cancel),
+            )
+            .await;
+            if outcome != WriteOutcome::Ok || aborted {
+                *upstream_alive = false;
+                *upstream_sink_poisoned = true;
+                return false;
+            }
+        }
+        true
+    }
+
+    async fn send_client_texts<S>(
+        client_sink: &mut S,
+        texts: Vec<String>,
+        abort_rx: &mut mpsc::Receiver<()>,
+        deadline_at: Option<tokio::time::Instant>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> bool
+    where
+        S: futures_util::Sink<AxumWsMessage> + Unpin,
+    {
+        for text in texts {
+            if write_with_cancel(
+                client_sink.send(AxumWsMessage::Text(text.into())),
+                abort_rx,
+                deadline_at,
+                Some(cancel),
+            )
+            .await
+            .0
+                != WriteOutcome::Ok
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    async fn wait_fence_change(fence_rx: Option<&mut tokio::sync::watch::Receiver<u64>>) {
+        match fence_rx {
+            Some(rx) => {
+                if rx.changed().await.is_err() {
+                    futures_util::future::pending::<()>().await;
+                }
+            }
+            None => futures_util::future::pending::<()>().await,
+        }
     }
 
     let mut upstream_alive = true;
     let mut upstream_sink_poisoned = false;
 
     loop {
+        pending_attach_deadlines.retain(|sid, _| session_filter.is_session_pending(sid));
         if active_cdp_input.is_none() {
-            if let Some((call_id, json, effect)) = queued_cdp_inputs.pop_front() {
+            while let Some((call_id, session_id, json, effect)) = queued_cdp_inputs.pop_front() {
+                if let Some(ref sid) = session_id {
+                    if !session_filter.is_session_owned(sid) {
+                        continue;
+                    }
+                }
                 active_cdp_input = Some(spawn_cdp_input_task(
                     input_mgr.clone(),
                     lease.clone(),
                     proxy_route.clone(),
                     input_write_tx.clone(),
                     call_id,
+                    session_id,
                     json,
                     effect,
                 ));
+                break;
             }
         }
         let has_active_input = active_cdp_input.is_some();
@@ -2929,12 +3306,109 @@ async fn relay_devtools_socket(
                 None => futures_util::future::pending().await,
             }
         };
+        let next_attach_deadline = pending_attach_deadlines.values().copied().min();
+        let attach_sleep = async {
+            match next_attach_deadline {
+                Some(dl) => tokio::time::sleep_until(dl).await,
+                None => futures_util::future::pending().await,
+            }
+        };
+        let watch_fence = session_filter.has_active_children();
 
         tokio::select! {
             biased;
             _ = &mut deadline_sleep, if deadline_at.is_some() => break,
             _ = lease.cancel.cancelled() => break,
             _ = abort_rx.recv() => break,
+            _ = wait_fence_change(fence_rx.as_mut()), if watch_fence => {
+                match revalidate_devtools_live_ownership(
+                    &state,
+                    &lease,
+                    &input_mgr,
+                    &ownership_source,
+                    &mut captured_fence_version,
+                    &mut session_filter,
+                    &mut pending_attach_deadlines,
+                ).await {
+                    RevalidateOutcome::CloseConnection => break,
+                    RevalidateOutcome::RetiredChildren(cmds) => {
+                        if !send_upstream_texts(
+                            &mut upstream_sink,
+                            cmds,
+                            &mut abort_rx,
+                            deadline_at,
+                            &lease.cancel,
+                            &mut upstream_alive,
+                            &mut upstream_sink_poisoned,
+                        ).await {
+                            break;
+                        }
+                    }
+                    RevalidateOutcome::Ok => {}
+                }
+                let Ok((to_client, to_upstream)) = resolve_pending_attaches(
+                    &state,
+                    &lease,
+                    &ownership_source,
+                    &mut captured_fence_version,
+                    &mut session_filter,
+                    &mut pending_attach_deadlines,
+                ).await else { break; };
+                if !send_upstream_texts(
+                    &mut upstream_sink,
+                    to_upstream,
+                    &mut abort_rx,
+                    deadline_at,
+                    &lease.cancel,
+                    &mut upstream_alive,
+                    &mut upstream_sink_poisoned,
+                ).await {
+                    break;
+                }
+                let mut retired_replies = session_filter.take_retired_client_replies();
+                retired_replies.extend(to_client);
+                if !send_client_texts(
+                    &mut client_sink,
+                    retired_replies,
+                    &mut abort_rx,
+                    deadline_at,
+                    &lease.cancel,
+                ).await {
+                    break;
+                }
+            }
+            _ = attach_sleep => {
+                let Ok((to_client, to_upstream)) = resolve_pending_attaches(
+                    &state,
+                    &lease,
+                    &ownership_source,
+                    &mut captured_fence_version,
+                    &mut session_filter,
+                    &mut pending_attach_deadlines,
+                ).await else { break; };
+                if !send_upstream_texts(
+                    &mut upstream_sink,
+                    to_upstream,
+                    &mut abort_rx,
+                    deadline_at,
+                    &lease.cancel,
+                    &mut upstream_alive,
+                    &mut upstream_sink_poisoned,
+                ).await {
+                    break;
+                }
+                let mut retired_replies = session_filter.take_retired_client_replies();
+                retired_replies.extend(to_client);
+                if !send_client_texts(
+                    &mut client_sink,
+                    retired_replies,
+                    &mut abort_rx,
+                    deadline_at,
+                    &lease.cancel,
+                ).await {
+                    break;
+                }
+            }
             cmd = cleanup_rx.recv() => {
                 let Some(cmd) = cmd else { break; };
                 if pending_cleanup_replies.len() >= MAX_PENDING_CDP_REPLIES {
@@ -2946,6 +3420,9 @@ async fn relay_devtools_socket(
                 }
                 let cid = next_cleanup_id;
                 next_cleanup_id = next_cleanup_id.saturating_add(1);
+                if next_cleanup_id >= INTERNAL_FILTER_ID_BASE {
+                    next_cleanup_id = CLIENT_CALL_ID_MAX + 1;
+                }
                 let payload = serde_json::json!({
                     "id": cid,
                     "method": cmd.method,
@@ -2964,14 +3441,21 @@ async fn relay_devtools_socket(
             }
             req = input_write_rx.recv() => {
                 let Some(req) = req else { break; };
+                if let Some(ref sid) = req.session_id {
+                    if !session_filter.is_session_owned(sid) {
+                        let _ = req.write_done.send(ProxyWriteOutcome::NotWrittenChildDetached);
+                        continue;
+                    }
+                }
+                let key = (req.session_id.clone(), req.call_id);
                 if lease.cancel.is_cancelled()
                     || pending_input_replies.len() >= MAX_PENDING_CDP_REPLIES
-                    || pending_input_replies.contains_key(&req.call_id)
+                    || pending_input_replies.contains_key(&key)
                 {
                     let _ = req.write_done.send(ProxyWriteOutcome::NotWritten);
                     continue;
                 }
-                pending_input_replies.insert(req.call_id, req.reply);
+                pending_input_replies.insert(key.clone(), req.reply);
                 let (outcome, aborted) = write_with_cancel(
                     upstream_sink.send(UpstreamMessage::Text(req.json.into())),
                     &mut abort_rx,
@@ -2982,7 +3466,7 @@ async fn relay_devtools_socket(
                 if outcome == WriteOutcome::Ok && !aborted {
                     let _ = req.write_done.send(ProxyWriteOutcome::Written);
                 } else {
-                    pending_input_replies.remove(&req.call_id);
+                    pending_input_replies.remove(&key);
                     let _ = req.write_done.send(ProxyWriteOutcome::Ambiguous);
                     upstream_alive = false;
                     upstream_sink_poisoned = true;
@@ -3001,49 +3485,123 @@ async fn relay_devtools_socket(
                     Some(Ok(AxumWsMessage::Text(t))) => {
                         let Some(memory_bound) = devtools_json_memory_bound(t.as_str()) else { break; };
                         let Ok(_mem) = global_memory_controller().try_reserve(memory_bound) else { break; };
-                        match classify_devtools_client_message(t.as_str(), &lease.native_target_id) {
-                            ClassifiedDevToolsMessage::Forward { json, call_id, input_effect: Some(effect) } => {
-                                if active_cdp_input.is_none() && queued_cdp_inputs.is_empty() {
-                                    active_cdp_input = Some(spawn_cdp_input_task(
-                                        input_mgr.clone(),
-                                        lease.clone(),
-                                        proxy_route.clone(),
-                                        input_write_tx.clone(),
-                                        call_id,
-                                        json,
-                                        effect,
-                                    ));
-                                    true
-                                } else if queued_cdp_inputs.len() < MAX_QUEUED_CDP_INPUT {
-                                    queued_cdp_inputs.push_back((call_id, json, effect));
-                                    true
-                                } else {
-                                    false
+                        match session_filter.classify_client_message(t.as_str()) {
+                            ClassifiedDevToolsMessage::Forward { json, call_id, session_id, input_effect } => {
+                                enum ChildCheck {
+                                    Proceed,
+                                    Retired(Vec<String>),
+                                    Close,
                                 }
-                            }
-                            ClassifiedDevToolsMessage::Forward { json, .. } => {
-                                if let Some(_op_permit) = input_mgr
-                                    .try_acquire_devtools_op_permit(lease.control_epoch, &lease.viewer_id)
-                                    .await
-                                {
-                                    if lease.cancel.is_cancelled() {
-                                        false
-                                    } else {
-                                        let (outcome, aborted) = write_with_cancel(
-                                            upstream_sink.send(UpstreamMessage::Text(json.into())),
-                                            &mut abort_rx,
-                                            deadline_at,
-                                            Some(&lease.cancel),
-                                        )
-                                        .await;
-                                        if outcome != WriteOutcome::Ok || aborted {
-                                            upstream_alive = false;
-                                            upstream_sink_poisoned = true;
+                                let child_check = if let Some(ref sid) = session_id {
+                                    match revalidate_devtools_live_ownership(
+                                        &state,
+                                        &lease,
+                                        &input_mgr,
+                                        &ownership_source,
+                                        &mut captured_fence_version,
+                                        &mut session_filter,
+                                        &mut pending_attach_deadlines,
+                                    ).await {
+                                        RevalidateOutcome::CloseConnection => ChildCheck::Close,
+                                        RevalidateOutcome::RetiredChildren(cmds) => {
+                                            if !send_upstream_texts(
+                                                &mut upstream_sink,
+                                                cmds,
+                                                &mut abort_rx,
+                                                deadline_at,
+                                                &lease.cancel,
+                                                &mut upstream_alive,
+                                                &mut upstream_sink_poisoned,
+                                            ).await {
+                                                ChildCheck::Close
+                                            } else if session_filter.is_session_owned(sid) {
+                                                ChildCheck::Proceed
+                                            } else {
+                                                let mut replies = session_filter.take_retired_client_replies();
+                                                if replies.is_empty() {
+                                                    replies.push(serde_json::json!({
+                                                        "id": call_id,
+                                                        "sessionId": sid,
+                                                        "error": { "code": -32601, "message": "Command disallowed in target-scoped DevTools" }
+                                                    }).to_string());
+                                                }
+                                                ChildCheck::Retired(replies)
+                                            }
                                         }
-                                        outcome == WriteOutcome::Ok && !aborted
+                                        RevalidateOutcome::Ok => {
+                                            if session_filter.is_session_owned(sid) {
+                                                ChildCheck::Proceed
+                                            } else {
+                                                ChildCheck::Close
+                                            }
+                                        }
                                     }
                                 } else {
-                                    false
+                                    ChildCheck::Proceed
+                                };
+                                match child_check {
+                                    ChildCheck::Close => false,
+                                    ChildCheck::Retired(err_replies) => {
+                                        send_client_texts(
+                                            &mut client_sink,
+                                            err_replies,
+                                            &mut abort_rx,
+                                            deadline_at,
+                                            &lease.cancel,
+                                        ).await
+                                    }
+                                    ChildCheck::Proceed => {
+                                        let retired_replies = session_filter.take_retired_client_replies();
+                                        if !retired_replies.is_empty()
+                                            && !send_client_texts(
+                                                &mut client_sink,
+                                                retired_replies,
+                                                &mut abort_rx,
+                                                deadline_at,
+                                                &lease.cancel,
+                                            ).await
+                                        {
+                                            false
+                                        } else if let Some(effect) = input_effect {
+                                            if active_cdp_input.is_none() && queued_cdp_inputs.is_empty() {
+                                                active_cdp_input = Some(spawn_cdp_input_task(
+                                                    input_mgr.clone(),
+                                                    lease.clone(),
+                                                    proxy_route.clone(),
+                                                    input_write_tx.clone(),
+                                                    call_id,
+                                                    session_id,
+                                                    json,
+                                                    effect,
+                                                ));
+                                                true
+                                            } else if queued_cdp_inputs.len() < MAX_QUEUED_CDP_INPUT {
+                                                queued_cdp_inputs.push_back((call_id, session_id, json, effect));
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        } else if let Some(_op_permit) = input_mgr
+                                            .try_acquire_devtools_op_permit(lease.control_epoch, &lease.viewer_id)
+                                            .await
+                                        {
+                                            if lease.cancel.is_cancelled() {
+                                                false
+                                            } else {
+                                                send_upstream_texts(
+                                                    &mut upstream_sink,
+                                                    vec![json],
+                                                    &mut abort_rx,
+                                                    deadline_at,
+                                                    &lease.cancel,
+                                                    &mut upstream_alive,
+                                                    &mut upstream_sink_poisoned,
+                                                ).await
+                                            }
+                                        } else {
+                                            false
+                                        }
+                                    }
                                 }
                             }
                             ClassifiedDevToolsMessage::Reject(Some(err)) => {
@@ -3119,28 +3677,212 @@ async fn relay_devtools_socket(
                             upstream_alive = false;
                             break;
                         };
-                        let consumed_cleanup = serde_json::from_str::<serde_json::Value>(t.as_str())
-                            .ok()
-                            .is_some_and(|val| {
-                                resolve_reply_from_upstream(
-                                    &val,
-                                    &mut pending_cleanup_replies,
-                                    &mut pending_input_replies,
-                                )
-                            });
-                        if consumed_cleanup || !upstream_filter.should_forward(t.as_str(), &lease.native_target_id) {
-                            true
+                        let verdict_ok = match session_filter.process_upstream_message(t.as_str()) {
+                            UpstreamVerdict::PassToInternalReply => {
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                    let _ = resolve_reply_from_upstream(
+                                        &val,
+                                        &mut pending_cleanup_replies,
+                                        &mut pending_input_replies,
+                                    );
+                                }
+                                true
+                            }
+                            UpstreamVerdict::Forward => {
+                                let mut child_sid: Option<String> = None;
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                    child_sid = val
+                                        .get("sessionId")
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(str::to_string);
+                                    let _ = resolve_reply_from_upstream(
+                                        &val,
+                                        &mut pending_cleanup_replies,
+                                        &mut pending_input_replies,
+                                    );
+                                }
+                                if let Some(ref sid) = child_sid {
+                                    match revalidate_devtools_live_ownership(
+                                        &state,
+                                        &lease,
+                                        &input_mgr,
+                                        &ownership_source,
+                                        &mut captured_fence_version,
+                                        &mut session_filter,
+                                        &mut pending_attach_deadlines,
+                                    ).await {
+                                        RevalidateOutcome::CloseConnection => {
+                                            tracing::debug!(target_id = %lease.native_target_id, "DevTools upstream child revalidation closed connection");
+                                            false
+                                        }
+                                        RevalidateOutcome::RetiredChildren(cmds) => {
+                                            send_upstream_texts(
+                                                &mut upstream_sink,
+                                                cmds,
+                                                &mut abort_rx,
+                                                deadline_at,
+                                                &lease.cancel,
+                                                &mut upstream_alive,
+                                                &mut upstream_sink_poisoned,
+                                            ).await && (!session_filter.is_session_owned(sid) || send_client_texts(
+                                                &mut client_sink,
+                                                vec![t.as_str().to_string()],
+                                                &mut abort_rx,
+                                                deadline_at,
+                                                &lease.cancel,
+                                            ).await)
+                                        }
+                                        RevalidateOutcome::Ok => {
+                                            send_client_texts(
+                                                &mut client_sink,
+                                                vec![t.as_str().to_string()],
+                                                &mut abort_rx,
+                                                deadline_at,
+                                                &lease.cancel,
+                                            ).await
+                                        }
+                                    }
+                                } else {
+                                    send_client_texts(
+                                        &mut client_sink,
+                                        vec![t.as_str().to_string()],
+                                        &mut abort_rx,
+                                        deadline_at,
+                                        &lease.cancel,
+                                    ).await
+                                }
+                            }
+                            UpstreamVerdict::ForwardText(payload) => {
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(payload.as_str()) {
+                                    let _ = resolve_reply_from_upstream(
+                                        &val,
+                                        &mut pending_cleanup_replies,
+                                        &mut pending_input_replies,
+                                    );
+                                }
+                                send_client_texts(
+                                    &mut client_sink,
+                                    vec![payload],
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                ).await
+                            }
+                            UpstreamVerdict::Suppress { internal_commands } => {
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                    let _ = resolve_reply_from_upstream(
+                                        &val,
+                                        &mut pending_cleanup_replies,
+                                        &mut pending_input_replies,
+                                    );
+                                }
+                                send_upstream_texts(
+                                    &mut upstream_sink,
+                                    internal_commands,
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                    &mut upstream_alive,
+                                    &mut upstream_sink_poisoned,
+                                ).await
+                            }
+                            UpstreamVerdict::ClientReplyAndDetach {
+                                client_text,
+                                internal_commands,
+                            } => {
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                    let _ = resolve_reply_from_upstream(
+                                        &val,
+                                        &mut pending_cleanup_replies,
+                                        &mut pending_input_replies,
+                                    );
+                                }
+                                send_upstream_texts(
+                                    &mut upstream_sink,
+                                    internal_commands,
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                    &mut upstream_alive,
+                                    &mut upstream_sink_poisoned,
+                                ).await && send_client_texts(
+                                    &mut client_sink,
+                                    vec![client_text],
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                ).await
+                            }
+                            UpstreamVerdict::PendingAttach { session_id, .. } => {
+                                pending_attach_deadlines.insert(
+                                    session_id,
+                                    tokio::time::Instant::now() + PENDING_ATTACH_TIMEOUT,
+                                );
+                                if let Some(rx) = &mut fence_rx {
+                                    let _ = rx.borrow_and_update();
+                                }
+                                match resolve_pending_attaches(
+                                    &state,
+                                    &lease,
+                                    &ownership_source,
+                                    &mut captured_fence_version,
+                                    &mut session_filter,
+                                    &mut pending_attach_deadlines,
+                                ).await {
+                                    Ok((to_client, to_upstream)) => {
+                                        send_upstream_texts(
+                                            &mut upstream_sink,
+                                            to_upstream,
+                                            &mut abort_rx,
+                                            deadline_at,
+                                            &lease.cancel,
+                                            &mut upstream_alive,
+                                            &mut upstream_sink_poisoned,
+                                        ).await && send_client_texts(
+                                            &mut client_sink,
+                                            to_client,
+                                            &mut abort_rx,
+                                            deadline_at,
+                                            &lease.cancel,
+                                        ).await
+                                    }
+                                    Err(()) => {
+                                        tracing::debug!(target_id = %lease.native_target_id, "DevTools PendingAttach resolve returned Err(())");
+                                        false
+                                    }
+                                }
+                            }
+                            UpstreamVerdict::CloseConnection { internal_commands } => {
+                                tracing::debug!(target_id = %lease.native_target_id, upstream_msg = %t, "DevTools upstream verdict CloseConnection");
+                                let _ = send_upstream_texts(
+                                    &mut upstream_sink,
+                                    internal_commands,
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                    &mut upstream_alive,
+                                    &mut upstream_sink_poisoned,
+                                ).await;
+                                false
+                            }
+                        };
+                        let ok = if verdict_ok {
+                            let retired_replies = session_filter.take_retired_client_replies();
+                            if retired_replies.is_empty() {
+                                true
+                            } else {
+                                send_client_texts(
+                                    &mut client_sink,
+                                    retired_replies,
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                ).await
+                            }
                         } else {
-                            write_with_cancel(
-                                client_sink.send(AxumWsMessage::Text(t.as_str().into())),
-                                &mut abort_rx,
-                                deadline_at,
-                                Some(&lease.cancel),
-                            )
-                            .await
-                            .0
-                                == WriteOutcome::Ok
-                        }
+                            false
+                        };
+                        ok
                     }
                     // Native DevTools application messages are text JSON only.
                     Some(Ok(UpstreamMessage::Binary(_))) => {
@@ -3282,6 +4024,9 @@ async fn relay_devtools_socket(
                         }
                         let cid = next_cleanup_id;
                         next_cleanup_id = next_cleanup_id.saturating_add(1);
+                        if next_cleanup_id >= INTERNAL_FILTER_ID_BASE {
+                            next_cleanup_id = CLIENT_CALL_ID_MAX + 1;
+                        }
                         let payload = serde_json::json!({
                             "id": cid,
                             "method": cmd.method,
