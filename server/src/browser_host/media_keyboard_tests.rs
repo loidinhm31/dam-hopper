@@ -194,7 +194,7 @@ async fn keyboard_dispatch_preserves_cdp_payload_and_text_separation() {
     });
     let client = CdpClient::connect(&format!("ws://{address}")).await.unwrap();
     for event in events {
-        dispatch_input_event_to_cdp(&client, "keyboard-page", &geometry(), &event).await;
+        dispatch_input_event_to_cdp(&client, "keyboard-page", &geometry(), &event).await.unwrap();
     }
     server.await.unwrap();
     client.close().await;

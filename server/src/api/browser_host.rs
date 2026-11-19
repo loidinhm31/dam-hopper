@@ -2561,9 +2561,23 @@ async fn relay_devtools_socket(
                     Some(Ok(AxumWsMessage::Pong(p))) => {
                         write_with_cancel(upstream_ws.send(UpstreamMessage::Pong(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
                     }
-                    _ => false,
+                    Some(Ok(AxumWsMessage::Close(frame))) => {
+                        tracing::debug!(target_id = %lease.native_target_id, ?frame, "DevTools client sent close");
+                        false
+                    }
+                    Some(Err(error)) => {
+                        tracing::warn!(target_id = %lease.native_target_id, %error, "DevTools client websocket failed");
+                        false
+                    }
+                    None => {
+                        tracing::debug!(target_id = %lease.native_target_id, "DevTools client websocket ended");
+                        false
+                    }
                 };
-                if !ok { break; }
+                if !ok {
+                    tracing::debug!(target_id = %lease.native_target_id, "DevTools client relay stopped");
+                    break;
+                }
             }
             msg = upstream_ws.next() => {
                 let ok = match msg {
@@ -2585,9 +2599,23 @@ async fn relay_devtools_socket(
                         write_with_cancel(client_ws.send(AxumWsMessage::Pong(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
                     }
                     Some(Ok(UpstreamMessage::Frame(_))) => true,
-                    _ => false,
+                    Some(Ok(UpstreamMessage::Close(frame))) => {
+                        tracing::debug!(target_id = %lease.native_target_id, ?frame, "Chromium DevTools websocket sent close");
+                        false
+                    }
+                    Some(Err(error)) => {
+                        tracing::warn!(target_id = %lease.native_target_id, %error, "Chromium DevTools websocket failed");
+                        false
+                    }
+                    None => {
+                        tracing::debug!(target_id = %lease.native_target_id, "Chromium DevTools websocket ended");
+                        false
+                    }
                 };
-                if !ok { break; }
+                if !ok {
+                    tracing::debug!(target_id = %lease.native_target_id, "Chromium DevTools relay stopped");
+                    break;
+                }
             }
         }
     }

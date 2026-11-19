@@ -701,8 +701,6 @@ pub struct ScreencastProducer {
     /// Application-owned selection authority used during Page-session replacement.
     selection_context: Option<crate::state::AppState>,
     selection_gap: Arc<Mutex<Option<crate::browser_host::selection::PageObservationGap>>>,
-    /// Cancels the previous child-target stealth listener when a Page session is replaced.
-    stealth_listener: Arc<SyncMutex<Option<CancellationToken>>>,
 }
 #[derive(Debug, Clone)]
 pub struct ProvenFrameState {
@@ -848,7 +846,6 @@ impl ScreencastProducer {
             recovery: Arc::new(RecoveryState::new(RecoveryPolicy::default())),
             selection_context: None,
             selection_gap: Arc::new(Mutex::new(None)),
-            stealth_listener: Arc::new(SyncMutex::new(None)),
         }
     }
 
@@ -1907,10 +1904,9 @@ impl ScreencastProducer {
         Ok(session_id)
     }
 
-    /// Applies Chrome identity, focus emulation, document-start anti-detection preload, and
-    /// cross-origin OOPIF (`iframe`) stealth propagation before the first managed navigation.
+    /// Applies Chrome identity, focus emulation, and document-start anti-detection preload
+    /// before the first managed navigation.
     pub async fn apply_stealth_and_focus(&self, session_id: &str) -> Result<(), CdpError> {
-        use super::cdp::CdpTargetEvent;
         use super::stealth::ChromeIdentity;
 
         let version_raw = self
@@ -1928,77 +1924,6 @@ impl ScreencastProducer {
         let ua_params = identity.user_agent_override_params();
         apply_stealth_to_session(&self.cdp_client, session_id, &ua_params).await?;
 
-        let mut target_events = self.cdp_client.subscribe_target_events();
-        self.cdp_client
-            .send_command(
-                "Target.setAutoAttach",
-                Some(serde_json::json!({
-                    "autoAttach": true,
-                    "waitForDebuggerOnStart": false,
-                    "flatten": true,
-                    "filter": [{ "type": "iframe" }, { "exclude": true }],
-                })),
-                Some(session_id),
-            )
-            .await?;
-        let weak_client = Arc::downgrade(&self.cdp_client);
-        // One listener per producer: a replacement Page session retires the previous listener.
-        let listener_cancel = CancellationToken::new();
-        if let Some(previous) = self.stealth_listener.lock().replace(listener_cancel.clone()) {
-            previous.cancel();
-        }
-        tokio::spawn(async move {
-            loop {
-                let received = tokio::select! {
-                    _ = listener_cancel.cancelled() => break,
-                    received = target_events.recv() => received,
-                };
-                match received {
-                    Ok(ev) => {
-                        if let CdpTargetEvent::ChildAttached {
-                            session_id: child_sid,
-                            info,
-                            waiting_for_debugger,
-                            ..
-                        } = &*ev
-                        {
-                            let Some(client) = weak_client.upgrade() else {
-                                break;
-                            };
-                            if info.target_type == "iframe" {
-                                let _ = client
-                                    .send_command("Page.enable", None, Some(child_sid))
-                                    .await;
-                                let _ = apply_stealth_to_session(&client, child_sid, &ua_params).await;
-                                let _ = client
-                                    .send_command(
-                                        "Target.setAutoAttach",
-                                        Some(serde_json::json!({
-                                            "autoAttach": true,
-                                            "waitForDebuggerOnStart": false,
-                                            "flatten": true,
-                                            "filter": [{ "type": "iframe" }, { "exclude": true }],
-                                        })),
-                                        Some(child_sid),
-                                    )
-                                    .await;
-                            }
-                            if *waiting_for_debugger {
-                                let _ = client
-                                    .send_command(
-                                        "Runtime.runIfWaitingForDebugger",
-                                        None,
-                                        Some(child_sid),
-                                    )
-                                    .await;
-                            }
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
         Ok(())
     }
 
@@ -3694,14 +3619,13 @@ impl ScreencastProducer {
             page_setup: self.page_setup.clone(),
             page_session_poisoned: self.page_session_poisoned.clone(),
             recovery: self.recovery.clone(),
-            stealth_listener: self.stealth_listener.clone(),
             selection_context: self.selection_context.clone(),
             selection_gap: self.selection_gap.clone(),
         })
     }
 }
 
-async fn apply_stealth_to_session(
+pub(super) async fn apply_stealth_to_session(
     client: &CdpClient,
     session_id: &str,
     ua_params: &serde_json::Value,
@@ -3732,6 +3656,39 @@ async fn apply_stealth_to_session(
         .send_command(
             "Runtime.evaluate",
             Some(serde_json::json!({ "expression": ANTI_DETECTION_SCRIPT })),
+            Some(session_id),
+        )
+        .await?;
+    Ok(())
+}
+
+pub(super) async fn apply_stealth_before_resume(
+    client: &CdpClient,
+    session_id: &str,
+    ua_params: &serde_json::Value,
+) -> Result<(), CdpError> {
+    use super::stealth::ANTI_DETECTION_SCRIPT;
+    client
+        .send_command(
+            "Emulation.setFocusEmulationEnabled",
+            Some(serde_json::json!({ "enabled": true })),
+            Some(session_id),
+        )
+        .await?;
+    client
+        .send_command(
+            "Emulation.setUserAgentOverride",
+            Some(ua_params.clone()),
+            Some(session_id),
+        )
+        .await?;
+    client
+        .send_command(
+            "Page.addScriptToEvaluateOnNewDocument",
+            Some(serde_json::json!({
+                "source": ANTI_DETECTION_SCRIPT,
+                "runImmediately": true
+            })),
             Some(session_id),
         )
         .await?;
@@ -3883,7 +3840,7 @@ mod request_policy_tests {
                     (InputEvent::PointerMove { u: 0.0, v: 1.0, modifiers: 0 }, "mouseMoved", 0.0, 1.0),
                     (InputEvent::Wheel { u: 1.0, v: 0.0, delta_x: 0.0, delta_y: 120.0, modifiers: 0 }, "mouseWheel", 1.0, 0.0),
                 ] {
-                    dispatch_input_event_to_cdp(&browser.client, &page_session, &current, &event).await;
+                    dispatch_input_event_to_cdp(&browser.client, &page_session, &current, &event).await.unwrap();
                     let command = timeout(Duration::from_secs(1), browser.commands.recv())
                         .await.unwrap().unwrap();
                     assert_eq!(command["method"], "Input.dispatchMouseEvent");
@@ -4062,7 +4019,7 @@ mod request_policy_tests {
     }
 
     #[tokio::test]
-    async fn stealth_setup_applies_to_page_and_attached_oopif_and_sanitizes_worker_headers() {
+    async fn stealth_setup_applies_to_page_and_sanitizes_worker_headers() {
         let mut browser = mock_browser(false).await;
         install(&browser).await;
         assert_eq!(next_command(&mut browser).await["method"], "Fetch.enable");
@@ -4101,44 +4058,12 @@ mod request_policy_tests {
             "Emulation.setUserAgentOverride",
             "Page.addScriptToEvaluateOnNewDocument",
             "Runtime.evaluate",
-            "Target.setAutoAttach",
         ] {
             let cmd = next_command(&mut browser).await;
             assert_eq!(cmd["method"], expected);
             if expected != "Browser.getVersion" {
                 assert_eq!(cmd["sessionId"], page_sid);
             }
-        }
-
-        // Simulate cross-origin Cloudflare Turnstile OOPIF attachment
-        browser
-            .push
-            .send(json!({
-                "method": "Target.attachedToTarget",
-                "sessionId": page_sid,
-                "params": {
-                    "sessionId": "OOPIF-SESSION-1",
-                    "waitingForDebugger": true,
-                    "targetInfo": {
-                        "targetId": "OOPIF-TARGET-1",
-                        "type": "iframe",
-                        "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile"
-                    }
-                }
-            }))
-            .unwrap();
-        for expected in [
-            "Page.enable",
-            "Emulation.setFocusEmulationEnabled",
-            "Emulation.setUserAgentOverride",
-            "Page.addScriptToEvaluateOnNewDocument",
-            "Runtime.evaluate",
-            "Target.setAutoAttach",
-            "Runtime.runIfWaitingForDebugger",
-        ] {
-            let cmd = next_command(&mut browser).await;
-            assert_eq!(cmd["method"], expected);
-            assert_eq!(cmd["sessionId"], "OOPIF-SESSION-1");
         }
 
         // Worker/subresource request carrying HeadlessChrome headers gets sanitized in Fetch.continueRequest

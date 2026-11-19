@@ -430,6 +430,40 @@ async fn resp_json(resp: reqwest::Response) -> Value {
     let bytes = resp.bytes().await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
+async fn wait_cdp_response<S>(
+    ws: &mut tokio_tungstenite::WebSocketStream<S>,
+    id: u64,
+    timeout: std::time::Duration,
+) -> Result<Value, String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!("timed out waiting for CDP response id {id}"));
+        }
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Err(_) => return Err(format!("timed out waiting for CDP response id {id}")),
+            Ok(Some(Ok(WsMsg::Text(text)))) => {
+                let response: Value = serde_json::from_str(&text)
+                    .map_err(|error| format!("invalid CDP JSON while waiting for id {id}: {error}"))?;
+                if response.get("id") == Some(&json!(id)) {
+                    return Ok(response);
+                }
+            }
+            Ok(Some(Ok(WsMsg::Close(frame)))) => {
+                return Err(format!("CDP websocket closed waiting for id {id}: {frame:?}"));
+            }
+            Ok(Some(Err(error))) => {
+                return Err(format!("CDP websocket error waiting for id {id}: {error}"));
+            }
+            Ok(None) => return Err(format!("CDP websocket ended waiting for id {id}")),
+            Ok(Some(Ok(_))) => {}
+        }
+    }
+}
 async fn mint_devtools_probe_token(
     client: &reqwest::Client,
     addr: SocketAddr,
@@ -1199,6 +1233,10 @@ async fn test_devtools_ws_enforces_max_concurrent_connections() {
 #[tokio::test]
 async fn test_real_chromium_devtools_and_native_host_downloads() {
     let _serial = TEST_SERIAL.lock().await;
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::DEBUG)
+        .try_init();
     global_session_registry().reset_for_test().await;
     // The exact filePath assertion below is a real-Chromium qualification lane:
     // CDP permits filePath to be omitted on other platforms.
@@ -1234,6 +1272,10 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
         RestoreXdg(prev)
     };
 
+    let oopif_payload_requests = Arc::new(AtomicUsize::new(0));
+    let oopif_payload_requests_for_route = Arc::clone(&oopif_payload_requests);
+    let same_process_payload_requests = Arc::new(AtomicUsize::new(0));
+    let same_process_payload_requests_for_route = Arc::clone(&same_process_payload_requests);
     let site_router = Router::new()
         .route(
             "/",
@@ -1260,6 +1302,83 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
             }),
         )
         .route(
+            "/same-process-child",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html><script>
+                            const params = new URL(location.href).searchParams;
+                            const nonce = params.get('nonce');
+                            const phase = params.get('phase') || 'initial';
+                            parent.postMessage({ kind: 'same-process-ready', nonce, phase }, '*');
+                            addEventListener('message', event => {
+                                if (event.source === parent && event.data?.kind === 'same-process-download'
+                                    && event.data.nonce === nonce) {
+                                    location.href = '/same-process-payload?phase=' + encodeURIComponent(event.data.phase || phase);
+                                }
+                            });
+                        </script>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/same-process-payload",
+            get(move |axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>| {
+                same_process_payload_requests_for_route.fetch_add(1, Ordering::SeqCst);
+                let filename = if query.get("phase").map(String::as_str) == Some("return") {
+                    "return-same-proc-dl.bin"
+                } else {
+                    "same-proc-dl.bin"
+                };
+                let body = if query.get("phase").map(String::as_str) == Some("return") {
+                    "hello-return-same-process-download"
+                } else {
+                    "hello-same-process-download"
+                };
+                async move {
+                    Response::builder()
+                        .header(CONTENT_TYPE, "application/octet-stream")
+                        .header("content-disposition", format!("attachment; filename=\"{filename}\""))
+                        .body(Body::from(body))
+                        .unwrap()
+                }
+            }),
+        )
+        .route(
+            "/child",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html><script>
+                            const nonce = new URL(location.href).searchParams.get('nonce');
+                            parent.postMessage({ kind: 'oopif-ready', nonce }, '*');
+                            addEventListener('message', event => {
+                                if (event.source === parent && event.data?.kind === 'download' && event.data.nonce === nonce) {
+                                    location.href = '/oopif-payload';
+                                }
+                            });
+                        </script>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/oopif-payload",
+            get(move || {
+                oopif_payload_requests_for_route.fetch_add(1, Ordering::SeqCst);
+                async {
+                    Response::builder()
+                        .header(CONTENT_TYPE, "application/octet-stream")
+                        .header("content-disposition", "attachment; filename=\"oopif-dl.bin\"")
+                        .body(Body::from("hello-oopif-download"))
+                        .unwrap()
+                }
+            }),
+        )
+        .route(
             "/payload.bin",
             get(|| async {
                 Response::builder()
@@ -1275,7 +1394,10 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
     let browser_cfg = BrowserHostConfig {
         enabled: true,
         executable_path: Some(chromium_path),
-        allowed_target_origins: vec![format!("http://127.0.0.1:{site_port}")],
+        allowed_target_origins: vec![
+            format!("http://127.0.0.1:{site_port}"),
+            format!("http://localhost:{site_port}"),
+        ],
         ..BrowserHostConfig::default()
     };
     let (auth_service, tok) = make_user_token("dt-real", UserRole::Admin);
@@ -1423,6 +1545,314 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
         "completed download must report its native host path"
     );
     assert_eq!(final_dto.get("inputAvailable"), Some(&json!(true)));
+    let parent_download_guid = final_dto
+        .pointer("/lastDownload/guid")
+        .and_then(Value::as_str)
+        .expect("parent download GUID")
+        .to_string();
+    // Round-trip a single iframe element across same-process -> cross-origin OOPIF -> same-process -> remove.
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let attach_same_process_eval = format!(
+        r#"(() => {{
+            const nonce = '{nonce}';
+            const sameOrigin = 'http://127.0.0.1:{site_port}';
+            const crossOrigin = 'http://localhost:{site_port}';
+            const frame = document.createElement('iframe');
+            window.__oopifFrame = frame;
+            window.__sameProcPhase = null;
+            window.__oopifReady = false;
+            window.addEventListener('message', event => {{
+                if (event.origin === sameOrigin && event.source === frame.contentWindow
+                    && event.data?.kind === 'same-process-ready' && event.data.nonce === nonce) {{
+                    window.__sameProcPhase = event.data.phase;
+                }}
+                if (event.origin === crossOrigin && event.source === frame.contentWindow
+                    && event.data?.kind === 'oopif-ready' && event.data.nonce === nonce) {{
+                    window.__oopifReady = true;
+                }}
+            }});
+            frame.src = sameOrigin + '/same-process-child?nonce=' + encodeURIComponent(nonce) + '&phase=initial';
+            document.body.appendChild(frame);
+            return true;
+        }})()"#,
+    );
+    ws.send(WsMsg::Text(json!({
+        "id": 20,
+        "method": "Runtime.evaluate",
+        "params": { "expression": attach_same_process_eval, "returnByValue": true }
+    }).to_string().into())).await.unwrap();
+    let attach_response = wait_cdp_response(
+        &mut ws, 20, std::time::Duration::from_secs(3),
+    ).await.expect("receive synchronous same-process iframe attachment evaluation");
+    assert_eq!(attach_response.pointer("/result/result/value"), Some(&json!(true)));
+
+    let mut same_proc_ready = false;
+    for id in 21..=40 {
+        ws.send(WsMsg::Text(json!({
+            "id": id,
+            "method": "Runtime.evaluate",
+            "params": { "expression": "window.__sameProcPhase === 'initial'", "returnByValue": true }
+        }).to_string().into())).await.unwrap();
+        let response = wait_cdp_response(
+            &mut ws, id, std::time::Duration::from_secs(1),
+        ).await.expect("receive same-process readiness poll");
+        if response.pointer("/result/result/value") == Some(&json!(true)) {
+            same_proc_ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(same_proc_ready, "same-process child did not post its readiness message");
+
+    let trigger_same_proc_download = format!(
+        "window.__oopifFrame.contentWindow.postMessage({{kind:'same-process-download',nonce:'{nonce}',phase:'initial'}}, 'http://127.0.0.1:{site_port}')",
+    );
+    ws.send(WsMsg::Text(json!({
+        "id": 41,
+        "method": "Runtime.evaluate",
+        "params": { "expression": trigger_same_proc_download, "returnByValue": true }
+    }).to_string().into())).await.unwrap();
+    wait_cdp_response(
+        &mut ws, 41, std::time::Duration::from_secs(3),
+    ).await.expect("receive same-process download trigger");
+
+    let same_proc_path = dl_dir.join("same-proc-dl.bin");
+    let same_proc_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut same_proc_dto = Value::Null;
+    while tokio::time::Instant::now() < same_proc_deadline {
+        let dto = resp_json(
+            client
+                .get(format!("http://{addr}/api/browser/sessions/{sid}"))
+                .header(AUTHORIZATION, format!("Bearer {tok}"))
+                .send()
+                .await
+                .unwrap(),
+        ).await;
+        same_proc_dto = dto;
+        if std::fs::read_to_string(&same_proc_path).ok().as_deref() == Some("hello-same-process-download")
+            && same_proc_dto.pointer("/lastDownload/state") == Some(&json!("completed"))
+            && same_proc_dto.pointer("/lastDownload/suggestedFilename") == Some(&json!("same-proc-dl.bin"))
+            && same_proc_dto.pointer("/lastDownload/filePath").and_then(Value::as_str) == same_proc_path.to_str()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let same_proc_guid = same_proc_dto.pointer("/lastDownload/guid").and_then(Value::as_str).map(str::to_string);
+    assert!(
+        same_proc_dto.pointer("/lastDownload/state") == Some(&json!("completed"))
+            && same_proc_dto.pointer("/lastDownload/suggestedFilename") == Some(&json!("same-proc-dl.bin"))
+            && same_proc_guid.as_deref().is_some_and(|guid| guid != parent_download_guid),
+        "same-process child download failed: {same_proc_dto}"
+    );
+
+    // Swap the same-process iframe to cross-origin (OOPIF).
+    let navigate_to_oopif = format!(
+        "window.__oopifFrame.src = 'http://localhost:{site_port}/child?nonce=' + encodeURIComponent('{nonce}'); true",
+    );
+    ws.send(WsMsg::Text(json!({
+        "id": 42,
+        "method": "Runtime.evaluate",
+        "params": { "expression": navigate_to_oopif, "returnByValue": true }
+    }).to_string().into())).await.unwrap();
+    wait_cdp_response(
+        &mut ws, 42, std::time::Duration::from_secs(3),
+    ).await.expect("navigate same-process iframe to OOPIF");
+
+    let mut child_ready = false;
+    for id in 43..=62 {
+        ws.send(WsMsg::Text(json!({
+            "id": id,
+            "method": "Runtime.evaluate",
+            "params": { "expression": "window.__oopifReady === true", "returnByValue": true }
+        }).to_string().into())).await.unwrap();
+        let response = wait_cdp_response(
+            &mut ws, id, std::time::Duration::from_secs(1),
+        ).await.expect("receive synchronous OOPIF readiness poll");
+        if response.pointer("/result/result/value") == Some(&json!(true)) {
+            child_ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(child_ready, "cross-origin child did not post its nonce-bound readiness message");
+
+    let sop_check = r#"(() => {
+        try { void window.__oopifFrame.contentWindow.document; return false; }
+        catch (error) { return error.name === 'SecurityError'; }
+    })()"#;
+    ws.send(WsMsg::Text(json!({
+        "id": 63,
+        "method": "Runtime.evaluate",
+        "params": { "expression": sop_check, "returnByValue": true }
+    }).to_string().into())).await.unwrap();
+    let sop_response = wait_cdp_response(
+        &mut ws, 63, std::time::Duration::from_secs(3),
+    ).await.expect("receive synchronous cross-origin policy check");
+    assert_eq!(sop_response.pointer("/result/result/value"), Some(&json!(true)),
+        "localhost iframe must be cross-origin to its 127.0.0.1 parent: {sop_response}");
+
+    let trigger_oopif_download = format!(
+        "window.__oopifFrame.contentWindow.postMessage({{kind:'download',nonce:'{nonce}'}}, 'http://localhost:{site_port}')",
+    );
+    ws.send(WsMsg::Text(json!({
+        "id": 64,
+        "method": "Runtime.evaluate",
+        "params": { "expression": trigger_oopif_download, "returnByValue": true }
+    }).to_string().into())).await.unwrap();
+    let oopif_trigger_response = wait_cdp_response(
+        &mut ws, 64, std::time::Duration::from_secs(3),
+    ).await.expect("receive OOPIF download trigger");
+    assert!(
+        oopif_trigger_response.get("error").is_none()
+            && oopif_trigger_response.pointer("/result/exceptionDetails").is_none(),
+        "OOPIF download trigger failed: {oopif_trigger_response}"
+    );
+
+    let oopif_path = dl_dir.join("oopif-dl.bin");
+    let oopif_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut oopif_dto = Value::Null;
+    while tokio::time::Instant::now() < oopif_deadline {
+        let dto = resp_json(
+            client
+                .get(format!("http://{addr}/api/browser/sessions/{sid}"))
+                .header(AUTHORIZATION, format!("Bearer {tok}"))
+                .send()
+                .await
+                .unwrap(),
+        ).await;
+        oopif_dto = dto;
+        if std::fs::read_to_string(&oopif_path).ok().as_deref() == Some("hello-oopif-download")
+            && oopif_dto.pointer("/lastDownload/state") == Some(&json!("completed"))
+            && oopif_dto.pointer("/lastDownload/suggestedFilename") == Some(&json!("oopif-dl.bin"))
+            && oopif_dto.pointer("/lastDownload/filePath").and_then(Value::as_str) == oopif_path.to_str()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let oopif_file = std::fs::read_to_string(&oopif_path).ok();
+    let child_download_guid = oopif_dto.pointer("/lastDownload/guid").and_then(Value::as_str).map(str::to_string);
+    let payload_request_count = oopif_payload_requests.load(Ordering::SeqCst);
+    assert!(
+        oopif_dto.pointer("/lastDownload/state") == Some(&json!("completed"))
+            && oopif_dto.pointer("/lastDownload/suggestedFilename") == Some(&json!("oopif-dl.bin"))
+            && oopif_dto.pointer("/lastDownload/filePath").and_then(Value::as_str) == oopif_path.to_str()
+            && child_download_guid.as_deref().is_some_and(|guid| Some(guid) != same_proc_guid.as_deref())
+            && oopif_file.as_deref() == Some("hello-oopif-download")
+            && payload_request_count == 1,
+        "OOPIF qualification failed: latest DTO={oopif_dto}, child GUID={child_download_guid:?}, same-process GUID={same_proc_guid:?}, payload requests={payload_request_count}, file contents={oopif_file:?}"
+    );
+
+    // Swap the OOPIF back to same-process and confirm attribution remains live.
+    let return_to_same_process = format!(
+        "window.__oopifFrame.src = 'http://127.0.0.1:{site_port}/same-process-child?nonce=' + encodeURIComponent('{nonce}') + '&phase=return'; true",
+    );
+    ws.send(WsMsg::Text(json!({
+        "id": 65,
+        "method": "Runtime.evaluate",
+        "params": { "expression": return_to_same_process, "returnByValue": true }
+    }).to_string().into())).await.unwrap();
+    wait_cdp_response(
+        &mut ws, 65, std::time::Duration::from_secs(3),
+    ).await.expect("navigate OOPIF back to same-process");
+
+    let mut return_ready = false;
+    for id in 66..=85 {
+        ws.send(WsMsg::Text(json!({
+            "id": id,
+            "method": "Runtime.evaluate",
+            "params": { "expression": "window.__sameProcPhase === 'return'", "returnByValue": true }
+        }).to_string().into())).await.unwrap();
+        let response = wait_cdp_response(
+            &mut ws, id, std::time::Duration::from_secs(1),
+        ).await.expect("receive return same-process readiness poll");
+        if response.pointer("/result/result/value") == Some(&json!(true)) {
+            return_ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(return_ready, "returned same-process child did not post readiness message");
+
+    let trigger_return_download = format!(
+        "window.__oopifFrame.contentWindow.postMessage({{kind:'same-process-download',nonce:'{nonce}',phase:'return'}}, 'http://127.0.0.1:{site_port}')",
+    );
+    ws.send(WsMsg::Text(json!({
+        "id": 86,
+        "method": "Runtime.evaluate",
+        "params": { "expression": trigger_return_download, "returnByValue": true }
+    }).to_string().into())).await.unwrap();
+    wait_cdp_response(
+        &mut ws, 86, std::time::Duration::from_secs(3),
+    ).await.expect("receive return same-process download trigger");
+
+    let return_path = dl_dir.join("return-same-proc-dl.bin");
+    let return_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut return_dto = Value::Null;
+    while tokio::time::Instant::now() < return_deadline {
+        let dto = resp_json(
+            client
+                .get(format!("http://{addr}/api/browser/sessions/{sid}"))
+                .header(AUTHORIZATION, format!("Bearer {tok}"))
+                .send()
+                .await
+                .unwrap(),
+        ).await;
+        return_dto = dto;
+        if std::fs::read_to_string(&return_path).ok().as_deref() == Some("hello-return-same-process-download")
+            && return_dto.pointer("/lastDownload/state") == Some(&json!("completed"))
+            && return_dto.pointer("/lastDownload/suggestedFilename") == Some(&json!("return-same-proc-dl.bin"))
+            && return_dto.pointer("/lastDownload/filePath").and_then(Value::as_str) == return_path.to_str()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(return_dto.pointer("/lastDownload/state"), Some(&json!("completed")));
+    assert_eq!(return_dto.pointer("/lastDownload/suggestedFilename"), Some(&json!("return-same-proc-dl.bin")));
+    assert_eq!(return_dto.pointer("/lastDownload/filePath").and_then(Value::as_str), return_path.to_str());
+    assert_eq!(same_process_payload_requests.load(Ordering::SeqCst), 2);
+
+    ws.send(WsMsg::Text(json!({
+        "id": 87,
+        "method": "Runtime.evaluate",
+        "params": { "expression": r#"(() => {
+            window.__oopifFrame.remove();
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob(["after-oopif"], { type: "text/plain" }));
+            a.download = "after-oopif.txt";
+            a.click();
+        })()"# }
+    }).to_string().into())).await.unwrap();
+    wait_cdp_response(
+        &mut ws, 87, std::time::Duration::from_secs(3),
+    ).await.expect("receive post-OOPIF parent download");
+    let after_oopif_path = dl_dir.join("after-oopif.txt");
+    let after_oopif_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut after_oopif_dto = Value::Null;
+    while tokio::time::Instant::now() < after_oopif_deadline {
+        let dto = resp_json(
+            client
+                .get(format!("http://{addr}/api/browser/sessions/{sid}"))
+                .header(AUTHORIZATION, format!("Bearer {tok}"))
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        if std::fs::read_to_string(&after_oopif_path).ok().as_deref() == Some("after-oopif")
+            && dto.pointer("/lastDownload/state") == Some(&json!("completed"))
+            && dto.pointer("/lastDownload/suggestedFilename") == Some(&json!("after-oopif.txt"))
+        {
+            after_oopif_dto = dto;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(after_oopif_dto.pointer("/lastDownload/state"), Some(&json!("completed")));
+    assert_eq!(after_oopif_dto.pointer("/lastDownload/suggestedFilename"), Some(&json!("after-oopif.txt")));
+    assert_eq!(after_oopif_dto.pointer("/lastDownload/filePath").and_then(Value::as_str), after_oopif_path.to_str());
 
     drop(ws);
     let _ = client
