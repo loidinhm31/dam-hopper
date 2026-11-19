@@ -2162,6 +2162,7 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
 struct ProgrammableCdpBehavior {
     reject_keyup: std::sync::atomic::AtomicBool,
     reject_bad_repeat: std::sync::atomic::AtomicBool,
+    omit_keydown_reply: std::sync::atomic::AtomicBool,
 }
 
 async fn spawn_programmable_cdp_server(
@@ -2213,6 +2214,15 @@ async fn spawn_programmable_cdp_server(
                                         .to_string();
                                     let params = val.get("params").cloned().unwrap_or(Value::Null);
                                     rec.lock().push((method.clone(), params.clone()));
+
+                                    let is_keydown = method == "Input.dispatchKeyEvent"
+                                        && matches!(
+                                            params.get("type").and_then(Value::as_str),
+                                            Some("keyDown" | "rawKeyDown")
+                                        );
+                                    if is_keydown && beh.omit_keydown_reply.load(Ordering::Acquire) {
+                                        continue;
+                                    }
 
                                     let is_keyup = method == "Input.dispatchKeyEvent"
                                         && params.get("type").and_then(Value::as_str)
@@ -2944,9 +2954,19 @@ async fn test_real_chromium_devtools_worker_oopif_and_service_worker_isolation()
     let sw_js = r#"
 const SW_INSTANCE_ID = 'sw-' + Math.random().toString(36).slice(2);
 let swCount = 0;
+let heldPort = null;
 self.addEventListener('install', (e) => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'initHeldPort' && e.ports && e.ports[0]) {
+    heldPort = e.ports[0];
+    heldPort.onmessage = () => {
+      swCount += 1;
+      heldPort.postMessage({ instanceId: SW_INSTANCE_ID, count: swCount });
+    };
+    heldPort.postMessage({ instanceId: SW_INSTANCE_ID, count: swCount, ready: true });
+    return;
+  }
   if (e.data && e.data.type === 'ping' && e.ports && e.ports[0]) {
     swCount += 1;
     e.ports[0].postMessage({ instanceId: SW_INSTANCE_ID, count: swCount });
@@ -3018,17 +3038,29 @@ window.__bReady = (async () => {
     };
     check();
   });
+  document.cookie = 'b_secret=topsecret; path=/';
+  localStorage.setItem('b_key', 'b_val');
   const active = reg.active;
-  const pingSw = () => new Promise((resolve, reject) => {
-    const mc = new MessageChannel();
-    const timer = setTimeout(() => reject(new Error('sw ping timeout')), 3000);
-    mc.port1.onmessage = (ev) => { clearTimeout(timer); resolve(ev.data); };
-    active.postMessage({ type: 'ping' }, [mc.port2]);
+  const heldMc = new MessageChannel();
+  const heldWait = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('held port init timeout')), 3000);
+    heldMc.port1.onmessage = (ev) => {
+      if (ev.data && ev.data.ready) { clearTimeout(timer); resolve(ev.data); }
+    };
+  });
+  active.postMessage({ type: 'initHeldPort' }, [heldMc.port2]);
+  await heldWait;
+  const pingHeldSw = () => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('sw held port timeout')), 3000);
+    heldMc.port1.onmessage = (ev) => { clearTimeout(timer); resolve(ev.data); };
+    heldMc.port1.postMessage({ type: 'pingHeld' });
   });
   window.pingAllBWorkers = async () => ({
     dedicated: await pingDedicated(),
     shared: await pingShared(),
-    sw: await pingSw(),
+    sw: await pingHeldSw(),
+    cookiePresent: document.cookie.includes('b_secret=topsecret'),
+    storageVal: localStorage.getItem('b_key'),
   });
   window.triggerBSwActivity = async () => {
     await navigator.serviceWorker.register('/b-sw.js?extra=2', { scope: '/b-scope-2/' });
@@ -3410,12 +3442,32 @@ parent.postMessage({ kind: 'a-child-ready' }, '*');
 
     for (method, params) in [
         ("ServiceWorker.enable", json!({})),
+        ("ServiceWorker.disable", json!({})),
         ("ServiceWorker.inspectWorker", json!({ "versionId": "0" })),
         ("ServiceWorker.stopAllWorkers", json!({})),
         ("ServiceWorker.stopWorker", json!({ "versionId": "0" })),
         ("ServiceWorker.unregister", json!({ "scopeURL": format!("http://127.0.0.1:{site_port}/b-sw-scope/") })),
         ("ServiceWorker.updateRegistration", json!({ "scopeURL": format!("http://127.0.0.1:{site_port}/b-sw-scope/") })),
         ("ServiceWorker.startWorker", json!({ "scopeURL": format!("http://127.0.0.1:{site_port}/b-sw-scope/") })),
+        ("ServiceWorker.skipWaiting", json!({ "scopeURL": format!("http://127.0.0.1:{site_port}/b-sw-scope/") })),
+        ("ServiceWorker.setForceUpdateOnPageLoad", json!({ "forceUpdateOnPageLoad": true })),
+        ("ServiceWorker.deliverPushMessage", json!({ "origin": format!("http://127.0.0.1:{site_port}"), "registrationId": "0", "data": "x" })),
+        ("ServiceWorker.dispatchSyncEvent", json!({ "origin": format!("http://127.0.0.1:{site_port}"), "registrationId": "0", "tag": "t", "lastChance": false })),
+        ("ServiceWorker.dispatchPeriodicSyncEvent", json!({ "origin": format!("http://127.0.0.1:{site_port}"), "registrationId": "0", "tag": "t" })),
+        ("Storage.getCookies", json!({})),
+        ("Storage.clearDataForOrigin", json!({ "origin": format!("http://127.0.0.1:{site_port}"), "storageTypes": "all" })),
+        ("Storage.getUsageAndQuota", json!({ "origin": format!("http://127.0.0.1:{site_port}") })),
+        ("BackgroundService.startObserving", json!({ "service": "backgroundFetch" })),
+        ("BackgroundService.setRecording", json!({ "service": "backgroundFetch", "shouldRecord": true })),
+        ("Network.getAllCookies", json!({})),
+        ("Network.getCookies", json!({})),
+        ("Network.setCookie", json!({ "name": "b_secret", "value": "tamper", "url": format!("http://127.0.0.1:{site_port}/") })),
+        ("Network.deleteCookies", json!({ "name": "b_secret", "url": format!("http://127.0.0.1:{site_port}/") })),
+        ("Network.clearBrowserCache", json!({})),
+        ("Network.clearBrowserCookies", json!({})),
+        ("Browser.getVersion", json!({})),
+        ("Browser.setDownloadBehavior", json!({ "behavior": "allow", "downloadPath": "/tmp/attacker" })),
+        ("Browser.close", json!({})),
     ] {
         let cid = a_id;
         a_id += 1;
@@ -3430,8 +3482,10 @@ parent.postMessage({ kind: 'a-child-ready' }, '*');
             .await
             .unwrap();
         assert_eq!(reply["error"]["code"], -32601, "expected deny for {method}");
+        let reply_txt = reply.to_string();
+        assert!(!reply_txt.contains("b_secret") && !reply_txt.contains("topsecret"), "leaked B cookie/metadata on {method}");
 
-        // Verify original live B ServiceWorker, SharedWorker, and DedicatedWorker still answer on held channels.
+        // Verify original live B ServiceWorker (via held MessagePort), SharedWorker, DedicatedWorker, cookies, and storage remain intact.
         let ping = raw_cmd(
             &mut raw_ws,
             &mut raw_id,
@@ -3444,8 +3498,10 @@ parent.postMessage({ kind: 'a-child-ready' }, '*');
         assert_eq!(val["sw"]["instanceId"].as_str(), Some(sw_instance_id.as_str()));
         assert_eq!(val["shared"]["instanceId"].as_str(), Some(shared_instance_id.as_str()));
         assert_eq!(val["dedicated"]["instanceId"].as_str(), Some(ded_instance_id.as_str()));
+        assert_eq!(val["cookiePresent"], json!(true), "B cookie modified after {method}");
+        assert_eq!(val["storageVal"], json!("b_val"), "B localStorage modified after {method}");
         let next_count = val["sw"]["count"].as_u64().unwrap();
-        assert!(next_count > last_sw_count, "held B SW channel must increment live instance count");
+        assert!(next_count > last_sw_count, "held B SW channel must increment live instance count after {method}");
         last_sw_count = next_count;
     }
 
@@ -3608,7 +3664,11 @@ parent.postMessage({ kind: 'a-child-ready' }, '*');
     // Nonlocal restrictions still apply on owned child sessions
     for (method, params) in [
         ("ServiceWorker.stopAllWorkers", json!({})),
+        ("ServiceWorker.enable", json!({})),
         ("Page.setDownloadBehavior", json!({ "behavior": "allow", "downloadPath": "/tmp/x" })),
+        ("Storage.getCookies", json!({})),
+        ("Network.getAllCookies", json!({})),
+        ("Browser.getVersion", json!({})),
     ] {
         let cid = a_id;
         a_id += 1;
@@ -3928,5 +3988,1390 @@ async fn test_devtools_child_input_detach_during_inflight_no_uncertain() {
     assert_eq!(rel.status(), StatusCode::OK);
 
     pair_a.release().await;
+    cleanup_test_session_viewers(&sid).await;
+}
+
+type TestWsStream = tokio_tungstenite::WebSocketStream<
+    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+>;
+
+async fn connect_paired_viewer_ws(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    auth_token: &str,
+    session_id: &str,
+    viewer_id: &str,
+    incarnation: &str,
+) -> (TestWsStream, TestWsStream, String) {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let sub_epoch = uuid::Uuid::new_v4().to_string();
+    let connect_one = |purpose: &'static str| {
+        let sub_epoch = sub_epoch.clone();
+        async move {
+            let ticket_resp = client
+                .post(format!("http://{addr}/api/browser/attachments"))
+                .header(AUTHORIZATION, format!("Bearer {auth_token}"))
+                .header(ORIGIN, "http://127.0.0.1:5173")
+                .header(CONTENT_TYPE, "application/json")
+                .body(
+                    json!({
+                        "purpose": purpose,
+                        "browserSessionId": session_id,
+                        "viewerId": viewer_id,
+                        "subscriptionEpoch": sub_epoch,
+                        "browserIncarnation": incarnation,
+                        "profileEpoch": "1",
+                    })
+                    .to_string(),
+                )
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(ticket_resp.status(), StatusCode::OK, "ticket {purpose}");
+            let ticket = resp_json(ticket_resp).await["ticket"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let mut req = format!("ws://{addr}/api/browser/{purpose}")
+                .into_client_request()
+                .unwrap();
+            req.headers_mut().insert(
+                "Origin",
+                HeaderValue::from_static("http://127.0.0.1:5173"),
+            );
+            req.headers_mut().insert(
+                "Sec-WebSocket-Protocol",
+                format!("damhopper.browser.{purpose}.v1, damhopper.ticket.{ticket}")
+                    .parse()
+                    .unwrap(),
+            );
+            let (ws, _) = tokio_tungstenite::connect_async(req)
+                .await
+                .expect("connect attachment ws");
+            ws
+        }
+    };
+
+    let media = connect_one("media").await;
+    let mut control = connect_one("control").await;
+    // Wait until control receives its initial sessionUpdated snapshot so pair is active.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Some(Ok(WsMsg::Text(txt)))) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), control.next()).await
+        {
+            let v: Value = serde_json::from_str(&txt).unwrap();
+            if v.get("kind") == Some(&json!("sessionUpdated")) {
+                break;
+            }
+        }
+    }
+    (media, control, sub_epoch)
+}
+
+async fn drain_session_updated_downloads(
+    control_ws: &mut TestWsStream,
+    timeout: std::time::Duration,
+) -> Vec<Value> {
+    let mut downloads = Vec::new();
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let step = remaining.min(std::time::Duration::from_millis(80));
+        match tokio::time::timeout(step, control_ws.next()).await {
+            Ok(Some(Ok(WsMsg::Text(txt)))) => {
+                if let Ok(v) = serde_json::from_str::<Value>(&txt) {
+                    if v.get("kind") == Some(&json!("sessionUpdated")) {
+                        if let Some(dl) = v.pointer("/session/lastDownload") {
+                            if !dl.is_null() {
+                                downloads.push(dl.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    downloads
+}
+
+#[tokio::test]
+async fn test_real_chromium_f1_confinement_and_two_tab_nested_oopif_attribution() {
+    let _serial = TEST_SERIAL.lock().await;
+    global_session_registry().reset_for_test().await;
+
+    let chromium_path =
+        match dam_hopper_server::browser_host::process::find_browser_executable(None) {
+            Ok(path) => path,
+            Err(error) if std::env::var("DAM_HOPPER_REQUIRE_BROWSER").as_deref() == Ok("1") => {
+                panic!("DAM_HOPPER_REQUIRE_BROWSER=1 is set but no browser was found: {error}");
+            }
+            Err(error) => {
+                eprintln!("SKIP: No configured Chrome/Chromium executable: {error}");
+                return;
+            }
+        };
+
+    let tmp = tempdir().unwrap();
+    let dl_dir = tmp.path().join("native-downloads");
+    let sentinel_dir = tmp.path().join("outside-sentinel");
+    std::fs::create_dir_all(&dl_dir).unwrap();
+    std::fs::create_dir_all(&sentinel_dir).unwrap();
+
+    struct RestoreXdg(Option<std::ffi::OsString>);
+    impl Drop for RestoreXdg {
+        fn drop(&mut self) {
+            let _guard = ENV_LOCK.lock();
+            match self.0.take() {
+                Some(prev) => std::env::set_var("XDG_DOWNLOAD_DIR", prev),
+                None => std::env::remove_var("XDG_DOWNLOAD_DIR"),
+            }
+        }
+    }
+    let _xdg_restore = {
+        let _guard = ENV_LOCK.lock();
+        let prev = std::env::var_os("XDG_DOWNLOAD_DIR");
+        std::env::set_var("XDG_DOWNLOAD_DIR", &dl_dir);
+        RestoreXdg(prev)
+    };
+
+    let slow_release = Arc::new(tokio::sync::Notify::new());
+    let slow_started = Arc::new(tokio::sync::Notify::new());
+    let slow_release_route = slow_release.clone();
+    let slow_started_route = slow_started.clone();
+
+    let site_router = Router::new()
+        .route(
+            "/tab-a",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html>
+                        <a id="a-http" href="/a-http.bin" download="a-http.bin">http</a>
+                        <a id="a-data" href="data:text/plain,bytes-a-data" download="a-data.txt">data</a>
+                        <script>
+                          window.triggerABlob = () => {
+                            const a = document.createElement('a');
+                            a.href = URL.createObjectURL(new Blob(['bytes-a-blob'], { type: 'text/plain' }));
+                            a.download = 'a-blob.txt';
+                            a.click();
+                          };
+                          window.spawnFrames = (sameOrigin, crossOrigin) => {
+                            window.__sameReady = false;
+                            window.__oopifReady = false;
+                            window.__nestedReady = false;
+                            window.addEventListener('message', ev => {
+                              if (ev.data?.kind === 'same-ready') window.__sameReady = true;
+                              if (ev.data?.kind === 'oopif-ready') window.__oopifReady = true;
+                              if (ev.data?.kind === 'nested-ready') window.__nestedReady = true;
+                            });
+                            const fSame = document.createElement('iframe');
+                            fSame.id = 'f-same';
+                            fSame.src = sameOrigin + '/a-same-frame';
+                            document.body.appendChild(fSame);
+                            const fOopif = document.createElement('iframe');
+                            fOopif.id = 'f-oopif';
+                            fOopif.src = crossOrigin + '/a-oopif-frame?same=' + encodeURIComponent(sameOrigin);
+                            document.body.appendChild(fOopif);
+                            return true;
+                          };
+                          window.triggerSameDownload = () => {
+                            document.getElementById('f-same').contentWindow.postMessage({ kind: 'dl-same' }, '*');
+                          };
+                          window.triggerOopifDownload = () => {
+                            document.getElementById('f-oopif').contentWindow.postMessage({ kind: 'dl-oopif' }, '*');
+                          };
+                          window.triggerNestedDownload = () => {
+                            document.getElementById('f-oopif').contentWindow.postMessage({ kind: 'dl-nested' }, '*');
+                          };
+                          window.triggerSlowFromSameFrame = () => {
+                            document.getElementById('f-same').contentWindow.postMessage({ kind: 'dl-slow' }, '*');
+                          };
+                        </script>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/a-http.bin",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .header("content-disposition", "attachment; filename=\"a-http.bin\"")
+                    .body(Body::from("bytes-a-http"))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/a-same-frame",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html><script>
+                        parent.postMessage({ kind: 'same-ready' }, '*');
+                        addEventListener('message', ev => {
+                          if (ev.data?.kind === 'dl-same') location.href = '/a-same-payload';
+                          if (ev.data?.kind === 'dl-slow') location.href = '/a-slow-payload';
+                        });
+                        </script>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/a-same-payload",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .header("content-disposition", "attachment; filename=\"a-same-proc.bin\"")
+                    .body(Body::from("bytes-a-same-proc"))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/a-oopif-frame",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html><body><script>
+                        window.__oopifTag = 'oopif-live';
+                        const sameOrigin = new URL(location.href).searchParams.get('same');
+                        const nested = document.createElement('iframe');
+                        nested.id = 'f-nested';
+                        nested.src = sameOrigin + '/a-nested-frame';
+                        addEventListener('message', ev => {
+                          if (ev.data?.kind === 'nested-ready') parent.postMessage({ kind: 'nested-ready' }, '*');
+                          if (ev.data?.kind === 'dl-oopif') location.href = '/a-oopif-payload';
+                          if (ev.data?.kind === 'dl-nested') nested.contentWindow.postMessage({ kind: 'dl-nested' }, '*');
+                        });
+                        document.body.appendChild(nested);
+                        parent.postMessage({ kind: 'oopif-ready' }, '*');
+                        </script></body>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/a-oopif-payload",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .header("content-disposition", "attachment; filename=\"a-oopif.bin\"")
+                    .body(Body::from("bytes-a-oopif"))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/a-nested-frame",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html><script>
+                        parent.postMessage({ kind: 'nested-ready' }, '*');
+                        addEventListener('message', ev => {
+                          if (ev.data?.kind === 'dl-nested') location.href = '/a-nested-payload';
+                        });
+                        </script>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/a-nested-payload",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .header("content-disposition", "attachment; filename=\"a-nested.bin\"")
+                    .body(Body::from("bytes-a-nested"))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/a-slow-payload",
+            get(move || {
+                let slow_release = slow_release_route.clone();
+                let slow_started = slow_started_route.clone();
+                async move {
+                    let first = futures_util::stream::once(async {
+                        Ok::<_, std::convert::Infallible>(bytes::Bytes::from_static(b"slow-part1-"))
+                    });
+                    let second = futures_util::stream::once(async move {
+                        slow_started.notify_one();
+                        slow_release.notified().await;
+                        Ok::<_, std::convert::Infallible>(bytes::Bytes::from_static(b"part2"))
+                    });
+                    let stream = first.chain(second);
+                    Response::builder()
+                        .header(CONTENT_TYPE, "application/octet-stream")
+                        .header("content-disposition", "attachment; filename=\"a-slow.bin\"")
+                        .header("content-length", "16")
+                        .body(Body::from_stream(stream))
+                        .unwrap()
+                }
+            }),
+        )
+        .route(
+            "/tab-b",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html>
+                        <a id="b-dl" href="/b-payload" download="b-own.bin">b</a>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/b-payload",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .header("content-disposition", "attachment; filename=\"b-own.bin\"")
+                    .body(Body::from("bytes-b-own"))
+                    .unwrap()
+            }),
+        );
+
+    let site_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let site_port = site_listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(site_listener, site_router).await.unwrap(); });
+
+    let browser_cfg = BrowserHostConfig {
+        enabled: true,
+        executable_path: Some(chromium_path),
+        allowed_target_origins: vec![
+            format!("http://127.0.0.1:{site_port}"),
+            format!("http://localhost:{site_port}"),
+        ],
+        ..BrowserHostConfig::default()
+    };
+    let (auth_service, tok) = make_user_token("dt-f1f2", UserRole::Admin);
+    let state = create_test_state(tmp.path().to_path_buf(), None, Some(browser_cfg))
+        .with_auth_service(Arc::new(auth_service));
+    let app = build_router_with_origins(
+        state.clone(),
+        vec![HeaderValue::from_static("http://127.0.0.1:5173")],
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let client = reqwest::Client::new();
+    let create_session = |url: String| {
+        let client = client.clone();
+        let tok = tok.clone();
+        async move {
+            let r = client
+                .post(format!("http://{addr}/api/browser/sessions"))
+                .header(AUTHORIZATION, format!("Bearer {tok}"))
+                .header(ORIGIN, "http://127.0.0.1:5173")
+                .header(CONTENT_TYPE, "application/json")
+                .body(
+                    json!({
+                        "creationKey": uuid::Uuid::new_v4().to_string(),
+                        "url": url,
+                        "viewport": { "width": 1024, "height": 768, "dpr": 1.0 }
+                    })
+                    .to_string(),
+                )
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(r.status(), StatusCode::CREATED);
+            resp_json(r).await
+        }
+    };
+
+    let dto_a = create_session(format!("http://127.0.0.1:{site_port}/tab-a")).await;
+    let dto_b = create_session(format!("http://127.0.0.1:{site_port}/tab-b")).await;
+    let sid_a = dto_a["browserSessionId"].as_str().unwrap().to_string();
+    let inc_a = dto_a["browserIncarnation"].as_str().unwrap().to_string();
+    let sid_b = dto_b["browserSessionId"].as_str().unwrap().to_string();
+    let inc_b = dto_b["browserIncarnation"].as_str().unwrap().to_string();
+
+    let (_media_a, mut ctrl_ws_a, _) =
+        connect_paired_viewer_ws(&client, addr, &tok, &sid_a, "viewer-a", &inc_a).await;
+    let (_media_b, mut ctrl_ws_b, _) =
+        connect_paired_viewer_ws(&client, addr, &tok, &sid_b, "viewer-b", &inc_b).await;
+
+    let lease_a = acquire_control_http(&client, addr, &sid_a, &tok, "viewer-a").await;
+    let dt_tok_a =
+        mint_devtools_probe_token(&client, addr, &sid_a, &tok, "viewer-a", &lease_a).await;
+    let (mut ws_a, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_a}/ws"))
+            .await
+            .unwrap();
+
+    // Enable auto-attach and spawn same-process iframe, cross-site OOPIF, and nested iframe on Tab A.
+    let mut a_id = 1u64;
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": a_id,
+            "method": "Target.setAutoAttach",
+            "params": { "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    wait_cdp_response(&mut ws_a, a_id, std::time::Duration::from_secs(3))
+        .await
+        .unwrap();
+    a_id += 1;
+
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": a_id,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": format!(
+                    "window.spawnFrames('http://127.0.0.1:{site_port}', 'http://localhost:{site_port}')"
+                ),
+                "returnByValue": true
+            }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    wait_cdp_response(&mut ws_a, a_id, std::time::Duration::from_secs(3))
+        .await
+        .unwrap();
+    a_id += 1;
+
+    // Wait for owned OOPIF Target.attachedToTarget and verify all 3 child frames are ready + SOP holds.
+    let mut oopif_sid = None;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(6);
+    while tokio::time::Instant::now() < deadline && oopif_sid.is_none() {
+        if let Ok(Some(Ok(WsMsg::Text(txt)))) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), ws_a.next()).await
+        {
+            let v: Value = serde_json::from_str(&txt).unwrap();
+            if v.get("method") == Some(&json!("Target.attachedToTarget"))
+                && v.pointer("/params/targetInfo/type") == Some(&json!("iframe"))
+            {
+                oopif_sid = v
+                    .pointer("/params/sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+        }
+    }
+    let oopif_sid = oopif_sid.expect("Tab A must attach owned OOPIF");
+
+    let mut ready = false;
+    for _ in 0..30 {
+        let cid = a_id;
+        a_id += 1;
+        ws_a.send(WsMsg::Text(
+            json!({
+                "id": cid,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": "window.__sameReady && window.__oopifReady && window.__nestedReady && (() => { try { void document.getElementById('f-oopif').contentWindow.document; return false; } catch (e) { return e.name === 'SecurityError'; } })()",
+                    "returnByValue": true
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        let r = wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        if r.pointer("/result/result/value") == Some(&json!(true)) {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(ready, "same-proc + verified cross-site OOPIF + nested iframe did not become ready");
+
+    // F1 destination confinement attacks (root, Browser.*, nested Target.sendMessageToTarget, flattened owned child)
+    let sentinel_str = sentinel_dir.to_str().unwrap().to_string();
+    for (method, params, session_opt) in [
+        ("Page.setDownloadBehavior", json!({ "behavior": "allow", "downloadPath": sentinel_str }), None),
+        ("Browser.setDownloadBehavior", json!({ "behavior": "allow", "downloadPath": sentinel_str }), None),
+        ("Target.sendMessageToTarget", json!({ "sessionId": oopif_sid, "message": json!({ "id": 999, "method": "Page.setDownloadBehavior", "params": { "behavior": "allow", "downloadPath": sentinel_str } }).to_string() }), None),
+        ("Page.setDownloadBehavior", json!({ "behavior": "allow", "downloadPath": sentinel_str }), Some(oopif_sid.as_str())),
+    ] {
+        let cid = a_id;
+        a_id += 1;
+        let mut msg = json!({ "id": cid, "method": method, "params": params });
+        if let Some(csid) = session_opt {
+            msg["sessionId"] = json!(csid);
+        }
+        ws_a.send(WsMsg::Text(msg.to_string().into())).await.unwrap();
+        let reply = wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(reply["error"]["code"], -32601, "F1 attack {method} must be rejected");
+    }
+
+    // Legitimate HTTP/data/blob downloads on Tab A must succeed into XDG_DOWNLOAD_DIR, sentinel must stay empty
+    for (expr, fname, expected_bytes) in [
+        ("document.getElementById('a-http').click()", "a-http.bin", "bytes-a-http"),
+        ("document.getElementById('a-data').click()", "a-data.txt", "bytes-a-data"),
+        ("window.triggerABlob()", "a-blob.txt", "bytes-a-blob"),
+    ] {
+        let cid = a_id;
+        a_id += 1;
+        ws_a.send(WsMsg::Text(
+            json!({ "id": cid, "method": "Runtime.evaluate", "params": { "expression": expr } })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(3))
+            .await
+            .unwrap();
+        let path = dl_dir.join(fname);
+        let dl_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(6);
+        while tokio::time::Instant::now() < dl_deadline {
+            if std::fs::read_to_string(&path).ok().as_deref() == Some(expected_bytes) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected_bytes);
+    }
+    assert_eq!(
+        std::fs::read_dir(&sentinel_dir).unwrap().count(),
+        0,
+        "outside sentinel directory must remain completely empty"
+    );
+
+    // Clear initial stream events before F2 two-tab attribution checks
+    let _ = drain_session_updated_downloads(&mut ctrl_ws_a, std::time::Duration::from_millis(150)).await;
+    let _ = drain_session_updated_downloads(&mut ctrl_ws_b, std::time::Duration::from_millis(150)).await;
+
+    // Helper to wait for a completed download on owner REST DTO AND owner WS stream while asserting foreign WS stream stays clean.
+    for (expr, fname, expected_bytes) in [
+        ("window.triggerSameDownload()", "a-same-proc.bin", "bytes-a-same-proc"),
+        ("window.triggerOopifDownload()", "a-oopif.bin", "bytes-a-oopif"),
+        ("window.triggerNestedDownload()", "a-nested.bin", "bytes-a-nested"),
+    ] {
+        let cid = a_id;
+        a_id += 1;
+        ws_a.send(WsMsg::Text(
+            json!({ "id": cid, "method": "Runtime.evaluate", "params": { "expression": expr } })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(3))
+            .await
+            .unwrap();
+
+        let path = dl_dir.join(fname);
+        let wait_dl = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+        let mut a_dto_done = Value::Null;
+        while tokio::time::Instant::now() < wait_dl {
+            let dto = resp_json(
+                client
+                    .get(format!("http://{addr}/api/browser/sessions/{sid_a}"))
+                    .header(AUTHORIZATION, format!("Bearer {tok}"))
+                    .send()
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            if std::fs::read_to_string(&path).ok().as_deref() == Some(expected_bytes)
+                && dto.pointer("/lastDownload/state") == Some(&json!("completed"))
+                && dto.pointer("/lastDownload/suggestedFilename") == Some(&json!(fname))
+            {
+                a_dto_done = dto;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        }
+        assert_eq!(a_dto_done.pointer("/lastDownload/suggestedFilename"), Some(&json!(fname)));
+        let a_events = drain_session_updated_downloads(&mut ctrl_ws_a, std::time::Duration::from_millis(300)).await;
+        assert!(
+            a_events.iter().any(|d| d.get("suggestedFilename") == Some(&json!(fname))),
+            "owner A stream must receive sessionUpdated for {fname}; got {a_events:?}"
+        );
+        let b_events = drain_session_updated_downloads(&mut ctrl_ws_b, std::time::Duration::from_millis(200)).await;
+        assert!(
+            !b_events.iter().any(|d| d.get("suggestedFilename") == Some(&json!(fname))),
+            "Tab B stream must NEVER receive Tab A download {fname}: {b_events:?}"
+        );
+        let b_dto = resp_json(
+            client
+                .get(format!("http://{addr}/api/browser/sessions/{sid_b}"))
+                .header(AUTHORIZATION, format!("Bearer {tok}"))
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(b_dto["lastDownload"].is_null(), "Tab B DTO must remain untouched: {b_dto}");
+    }
+
+    // Now Tab B initiates its own download and must appear ONLY on Tab B
+    let lease_b = acquire_control_http(&client, addr, &sid_b, &tok, "viewer-b").await;
+    let dt_tok_b =
+        mint_devtools_probe_token(&client, addr, &sid_b, &tok, "viewer-b", &lease_b).await;
+    let (mut ws_b, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_b}/ws"))
+            .await
+            .unwrap();
+    ws_b.send(WsMsg::Text(
+        json!({ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "document.getElementById('b-dl').click()" } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    wait_cdp_response(&mut ws_b, 1, std::time::Duration::from_secs(3))
+        .await
+        .unwrap();
+    let b_path = dl_dir.join("b-own.bin");
+    let wait_b = tokio::time::Instant::now() + std::time::Duration::from_secs(6);
+    while tokio::time::Instant::now() < wait_b {
+        if std::fs::read_to_string(&b_path).ok().as_deref() == Some("bytes-b-own") {
+            let dto_b_now = resp_json(
+                client
+                    .get(format!("http://{addr}/api/browser/sessions/{sid_b}"))
+                    .header(AUTHORIZATION, format!("Bearer {tok}"))
+                    .send()
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            if dto_b_now.pointer("/lastDownload/state") == Some(&json!("completed"))
+                && dto_b_now.pointer("/lastDownload/suggestedFilename") == Some(&json!("b-own.bin"))
+            {
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    }
+    assert_eq!(std::fs::read_to_string(&b_path).unwrap(), "bytes-b-own");
+    let b_events = drain_session_updated_downloads(&mut ctrl_ws_b, std::time::Duration::from_millis(300)).await;
+    assert!(b_events.iter().any(|d| d.get("suggestedFilename") == Some(&json!("b-own.bin"))));
+    let a_leaked_b = drain_session_updated_downloads(&mut ctrl_ws_a, std::time::Duration::from_millis(200)).await;
+    assert!(!a_leaked_b.iter().any(|d| d.get("suggestedFilename") == Some(&json!("b-own.bin"))));
+
+    // F2 lifecycle: delayed progress across iframe detach while A root target stays live
+    let slow_cid = a_id;
+    a_id += 1;
+    ws_a.send(WsMsg::Text(
+        json!({ "id": slow_cid, "method": "Runtime.evaluate", "params": { "expression": "window.triggerSlowFromSameFrame()" } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    wait_cdp_response(&mut ws_a, slow_cid, std::time::Duration::from_secs(3))
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), slow_started.notified())
+        .await
+        .expect("slow download must start");
+
+    // Wait until Tab A sees a-slow.bin inProgress, then detach the initiating iframe and complete the body!
+    let slow_wait = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let dto = resp_json(
+            client
+                .get(format!("http://{addr}/api/browser/sessions/{sid_a}"))
+                .header(AUTHORIZATION, format!("Bearer {tok}"))
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        if dto.pointer("/lastDownload/suggestedFilename") == Some(&json!("a-slow.bin")) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < slow_wait, "a-slow.bin did not register on Tab A");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let rm_cid = a_id;
+    ws_a.send(WsMsg::Text(
+        json!({ "id": rm_cid, "method": "Runtime.evaluate", "params": { "expression": "document.getElementById('f-same').remove(); true" } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    wait_cdp_response(&mut ws_a, rm_cid, std::time::Duration::from_secs(3))
+        .await
+        .unwrap();
+    slow_release.notify_one();
+
+    let slow_path = dl_dir.join("a-slow.bin");
+    let slow_done = tokio::time::Instant::now() + std::time::Duration::from_secs(6);
+    let mut slow_dto = Value::Null;
+    while tokio::time::Instant::now() < slow_done {
+        let dto = resp_json(
+            client
+                .get(format!("http://{addr}/api/browser/sessions/{sid_a}"))
+                .header(AUTHORIZATION, format!("Bearer {tok}"))
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        if std::fs::read_to_string(&slow_path).ok().as_deref() == Some("slow-part1-part2")
+            && dto.pointer("/lastDownload/state") == Some(&json!("completed"))
+            && dto.pointer("/lastDownload/suggestedFilename") == Some(&json!("a-slow.bin"))
+        {
+            slow_dto = dto;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    }
+    assert_eq!(slow_dto.pointer("/lastDownload/state"), Some(&json!("completed")));
+    let b_after_slow = resp_json(
+        client
+            .get(format!("http://{addr}/api/browser/sessions/{sid_b}"))
+            .header(AUTHORIZATION, format!("Bearer {tok}"))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(b_after_slow.pointer("/lastDownload/suggestedFilename"), Some(&json!("b-own.bin")));
+
+    // Closing Tab A and creating replacement session A2 must have clean None lastDownload
+    drop(ws_a);
+    drop(ws_b);
+    let _ = client
+        .delete(format!("http://{addr}/api/browser/sessions/{sid_a}"))
+        .header(AUTHORIZATION, format!("Bearer {tok}"))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .send()
+        .await;
+    let dto_a2 = create_session(format!("http://127.0.0.1:{site_port}/tab-a")).await;
+    assert!(dto_a2["lastDownload"].is_null());
+    let sid_a2 = dto_a2["browserSessionId"].as_str().unwrap().to_string();
+
+    for sid in [&sid_a2, &sid_b] {
+        cleanup_test_session_viewers(sid).await;
+        let _ = client
+            .delete(format!("http://{addr}/api/browser/sessions/{sid}"))
+            .header(AUTHORIZATION, format!("Bearer {tok}"))
+            .header(ORIGIN, "http://127.0.0.1:5173")
+            .send()
+            .await;
+    }
+    cleanup_test_session_viewers(&sid_a).await;
+    state.browser_host.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn test_real_chromium_two_viewer_devtools_transfer_and_native_held_input_release() {
+    let _serial = TEST_SERIAL.lock().await;
+    global_session_registry().reset_for_test().await;
+
+    let chromium_path =
+        match dam_hopper_server::browser_host::process::find_browser_executable(None) {
+            Ok(path) => path,
+            Err(error) if std::env::var("DAM_HOPPER_REQUIRE_BROWSER").as_deref() == Ok("1") => {
+                panic!("DAM_HOPPER_REQUIRE_BROWSER=1 is set but no browser was found: {error}");
+            }
+            Err(error) => {
+                eprintln!("SKIP: No configured Chrome/Chromium executable: {error}");
+                return;
+            }
+        };
+
+    let tmp = tempdir().unwrap();
+    let site_router = Router::new()
+        .route(
+            "/input-page",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html>
+                        <body style="margin:0;min-height:100vh">
+                        <input id="main-inp" autofocus style="width:200px;height:40px" />
+                        <button id="main-btn" style="width:120px;height:40px">Click</button>
+                        <div id="dom-marker">initial</div>
+                        <script>
+                          window.__evLog = [];
+                          for (const t of ['keydown','keyup','mousedown','mouseup']) {
+                            window.addEventListener(t, e => {
+                              window.__evLog.push({
+                                type: t,
+                                key: e.key ?? null,
+                                code: e.code ?? null,
+                                button: e.button ?? null,
+                                buttons: e.buttons ?? 0,
+                                shiftKey: Boolean(e.shiftKey),
+                              });
+                            }, true);
+                          }
+                          window.spawnChild = (crossOrigin) => {
+                            window.__childReady = false;
+                            window.addEventListener('message', ev => {
+                              if (ev.data?.kind === 'child-ready') window.__childReady = true;
+                            });
+                            const f = document.createElement('iframe');
+                            f.id = 'child-f';
+                            f.src = crossOrigin + '/input-child';
+                            document.body.appendChild(f);
+                            return true;
+                          };
+                        </script>
+                        </body>"#,
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/input-child",
+            get(|| async {
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(
+                        r#"<!doctype html><div id="child-marker">child-init</div><script>
+                        window.__childEvLog = [];
+                        for (const t of ['keydown','keyup']) {
+                          window.addEventListener(t, e => window.__childEvLog.push(t + ':' + e.code), true);
+                        }
+                        parent.postMessage({ kind: 'child-ready' }, '*');
+                        </script>"#,
+                    ))
+                    .unwrap()
+            }),
+        );
+
+    let site_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let site_port = site_listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(site_listener, site_router).await.unwrap(); });
+
+    let browser_cfg = BrowserHostConfig {
+        enabled: true,
+        executable_path: Some(chromium_path),
+        allowed_target_origins: vec![
+            format!("http://127.0.0.1:{site_port}"),
+            format!("http://localhost:{site_port}"),
+        ],
+        ..BrowserHostConfig::default()
+    };
+    let (store, auth_service, tokens) =
+        setup_sqlite_multi_session(tmp.path(), "dt-f3r2", &["auth-a", "auth-b"]).await;
+    let state = create_test_state(tmp.path().to_path_buf(), Some(store), Some(browser_cfg))
+        .with_auth_service(auth_service);
+    let app = build_router_with_origins(
+        state.clone(),
+        vec![HeaderValue::from_static("http://127.0.0.1:5173")],
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let client = reqwest::Client::new();
+    let create_resp = client
+        .post(format!("http://{addr}/api/browser/sessions"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(
+            json!({
+                "creationKey": uuid::Uuid::new_v4().to_string(),
+                "url": format!("http://127.0.0.1:{site_port}/input-page"),
+                "viewport": { "width": 1024, "height": 768, "dpr": 1.0 }
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    let created = resp_json(create_resp).await;
+    let sid = created["browserSessionId"].as_str().unwrap().to_string();
+    let inc = created["browserIncarnation"].as_str().unwrap().to_string();
+    let viewport_epoch = created["viewportEpoch"].as_str().unwrap().to_string();
+
+    let (_media_a, _ctrl_a, _sub_a) =
+        connect_paired_viewer_ws(&client, addr, &tokens[0], &sid, "viewer-a", &inc).await;
+    let (_media_b, mut ctrl_b, sub_b) =
+        connect_paired_viewer_ws(&client, addr, &tokens[1], &sid, "viewer-b", &inc).await;
+
+    // Raw CDP oracle handle to read DOM event log independently of viewer proxy
+    let target_id = global_session_registry()
+        .get_native_target_id(&sid)
+        .await
+        .expect("native target id");
+    let handle = state.browser_host.ensure_running("dt-f3r2", false).await.unwrap();
+    let (mut raw_ws, _) = tokio_tungstenite::connect_async(&handle.ws_endpoint)
+        .await
+        .unwrap();
+    let mut raw_id = 1u64;
+    let attach = {
+        raw_ws
+            .send(WsMsg::Text(
+                json!({ "id": raw_id, "method": "Target.attachToTarget", "params": { "targetId": target_id, "flatten": true } })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let r = wait_cdp_response(&mut raw_ws, raw_id, std::time::Duration::from_secs(3))
+            .await
+            .unwrap();
+        raw_id += 1;
+        r["result"]["sessionId"].as_str().unwrap().to_string()
+    };
+    async fn read_dom_log(raw_ws: &mut TestWsStream, raw_id: &mut u64, attach: &str) -> Vec<Value> {
+        let my_id = *raw_id;
+        *raw_id += 1;
+        raw_ws
+            .send(WsMsg::Text(
+                json!({
+                    "id": my_id,
+                    "sessionId": attach,
+                    "method": "Runtime.evaluate",
+                    "params": { "expression": "window.__evLog", "returnByValue": true }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let r = wait_cdp_response(raw_ws, my_id, std::time::Duration::from_secs(3))
+            .await
+            .unwrap();
+        r["result"]["result"]["value"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    // 1. viewer-a acquires control; viewer-b cannot steal or mint DevTools while A holds
+    let lease_a = acquire_control_http(&client, addr, &sid, &tokens[0], "viewer-a").await;
+    let b_steal = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/acquire"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[1]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "viewerId": "viewer-b", "holderKind": "human" }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(b_steal.status(), StatusCode::CONFLICT);
+    let b_mint_denied = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[1]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "viewerId": "viewer-b", "leaseToken": lease_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(b_mint_denied.status(), StatusCode::FORBIDDEN);
+
+    let dt_tok_a =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_a).await;
+    let (mut ws_a, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_a}/ws"))
+            .await
+            .unwrap();
+
+    // Commit pre-fence JS and spawn owned cross-origin OOPIF
+    let mut a_id = 1u64;
+    for (method, params) in [
+        ("Target.setAutoAttach", json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true })),
+        ("Runtime.evaluate", json!({ "expression": format!("window.__preFence='committed-by-a'; window.spawnChild('http://localhost:{site_port}')"), "returnByValue": true })),
+    ] {
+        let cid = a_id;
+        a_id += 1;
+        ws_a.send(WsMsg::Text(json!({ "id": cid, "method": method, "params": params }).to_string().into())).await.unwrap();
+        wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(3)).await.unwrap();
+    }
+    let mut child_sid = None;
+    let c_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tokio::time::Instant::now() < c_deadline && child_sid.is_none() {
+        if let Ok(Some(Ok(WsMsg::Text(txt)))) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), ws_a.next()).await
+        {
+            let v: Value = serde_json::from_str(&txt).unwrap();
+            if v.get("method") == Some(&json!("Target.attachedToTarget"))
+                && v.pointer("/params/targetInfo/type") == Some(&json!("iframe"))
+            {
+                child_sid = v.pointer("/params/sessionId").and_then(Value::as_str).map(str::to_string);
+            }
+        }
+    }
+    let child_sid = child_sid.expect("owned OOPIF attached");
+
+    // Unsupported stateful Input.* denied on root and owned child
+    for (method, params, sopt) in [
+        ("Input.dispatchTouchEvent", json!({ "type": "touchStart", "touchPoints": [] }), None),
+        ("Input.dispatchDragEvent", json!({ "type": "dragEnter", "x": 10, "y": 10, "data": { "items": [], "dragOperationsMask": 1 } }), None),
+        ("Input.synthesizeTapGesture", json!({ "x": 10, "y": 10 }), Some(child_sid.as_str())),
+        ("Input.imeSetComposition", json!({ "text": "x", "selectionStart": 0, "selectionEnd": 1 }), None),
+    ] {
+        let cid = a_id;
+        a_id += 1;
+        let mut msg = json!({ "id": cid, "method": method, "params": params });
+        if let Some(s) = sopt { msg["sessionId"] = json!(s); }
+        ws_a.send(WsMsg::Text(msg.to_string().into())).await.unwrap();
+        let err = wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(2)).await.unwrap();
+        assert_eq!(err["error"]["code"], -32601, "unsupported {method} must deny");
+    }
+
+    // 2. viewer-a sends keyDown (ShiftLeft), rawKeyDown (KeyA), and mousePressed (left) via DevTools WS
+    for (method, params) in [
+        ("Input.dispatchKeyEvent", json!({ "type": "keyDown", "key": "Shift", "code": "ShiftLeft", "windowsVirtualKeyCode": 16, "nativeVirtualKeyCode": 16, "modifiers": 8 })),
+        ("Input.dispatchKeyEvent", json!({ "type": "rawKeyDown", "key": "a", "code": "KeyA", "windowsVirtualKeyCode": 65, "nativeVirtualKeyCode": 65, "modifiers": 8 })),
+        ("Input.dispatchMouseEvent", json!({ "type": "mousePressed", "x": 50, "y": 20, "button": "left", "clickCount": 1, "modifiers": 8 })),
+    ] {
+        let cid = a_id;
+        a_id += 1;
+        ws_a.send(WsMsg::Text(json!({ "id": cid, "method": method, "params": params }).to_string().into())).await.unwrap();
+        let r = wait_cdp_response(&mut ws_a, cid, std::time::Duration::from_secs(2)).await.unwrap();
+        assert!(r.get("error").is_none(), "expected hold success for {method}: {r}");
+    }
+
+    // Verify independent Chromium DOM observed keydown + mousedown BEFORE release
+    let held_log = read_dom_log(&mut raw_ws, &mut raw_id, &attach).await;
+    assert!(held_log.iter().any(|e| e["type"] == "keydown" && e["code"] == "ShiftLeft"), "{held_log:?}");
+    assert!(held_log.iter().any(|e| e["type"] == "keydown" && e["code"] == "KeyA"), "{held_log:?}");
+    assert!(held_log.iter().any(|e| e["type"] == "mousedown" && e["button"] == 0), "{held_log:?}");
+
+    // 3. Control transfer (release A -> acquire B): native keyup/mouseup must fire BEFORE B acquires!
+    let rel_a = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/release"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "leaseToken": lease_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rel_a.status(), StatusCode::OK);
+
+    let after_release_log = read_dom_log(&mut raw_ws, &mut raw_id, &attach).await;
+    assert!(after_release_log.iter().any(|e| e["type"] == "keyup" && e["code"] == "ShiftLeft"), "{after_release_log:?}");
+    assert!(after_release_log.iter().any(|e| e["type"] == "keyup" && e["code"] == "KeyA"), "{after_release_log:?}");
+    assert!(after_release_log.iter().any(|e| e["type"] == "mouseup" && e["button"] == 0), "{after_release_log:?}");
+
+    // Old viewer-a asset fetch & WS reconnect & re-mint are all denied
+    let old_asset = client
+        .get(format!("http://{addr}/api/browser/devtools/{dt_tok_a}/devtools_app.html"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(old_asset.status(), StatusCode::UNAUTHORIZED);
+    let old_remint = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "viewerId": "viewer-a", "leaseToken": lease_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(old_remint.status(), StatusCode::FORBIDDEN);
+
+    // viewer-b acquires control and mints fresh DevTools capability
+    let lease_b = acquire_control_http(&client, addr, &sid, &tokens[1], "viewer-b").await;
+    let dt_tok_b =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[1], "viewer-b", &lease_b).await;
+    let (mut ws_b, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_b}/ws"))
+            .await
+            .unwrap();
+    let mut b_id = 1u64;
+
+    // Pre-fence JS remained and B's fresh key sees clean shiftKey=false while mutating root DOM
+    ws_b.send(WsMsg::Text(json!({
+        "id": b_id,
+        "method": "Runtime.evaluate",
+        "params": { "expression": "document.getElementById('dom-marker').textContent='by-b'; window.__preFence", "returnByValue": true }
+    }).to_string().into())).await.unwrap();
+    let pre_check = wait_cdp_response(&mut ws_b, b_id, std::time::Duration::from_secs(3)).await.unwrap();
+    b_id += 1;
+    assert_eq!(pre_check["result"]["result"]["value"], "committed-by-a");
+
+    // 4. Mixed UI/CDP channels: UI keyDown KeyM -> CDP keyUp KeyM; then CDP keyDown KeyN -> UI keyUp KeyN
+    ctrl_b
+        .send(WsMsg::Text(
+            json!({
+                "browserSessionId": sid,
+                "browserIncarnation": inc,
+                "profileEpoch": "1",
+                "subscriptionEpoch": sub_b,
+                "leaseToken": lease_b,
+                "inputSeq": "1",
+                "viewportEpoch": viewport_epoch,
+                "event": { "kind": "keyDown", "key": "m", "code": "KeyM", "modifiers": 0 }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let deadline_m = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline_m {
+        if read_dom_log(&mut raw_ws, &mut raw_id, &attach)
+            .await
+            .iter()
+            .any(|e| e["type"] == "keydown" && e["code"] == "KeyM" && e["shiftKey"] == false)
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+    assert!(read_dom_log(&mut raw_ws, &mut raw_id, &attach)
+        .await
+        .iter()
+        .any(|e| e["type"] == "keydown" && e["code"] == "KeyM" && e["shiftKey"] == false));
+
+    ws_b.send(WsMsg::Text(json!({
+        "id": b_id,
+        "method": "Input.dispatchKeyEvent",
+        "params": { "type": "keyUp", "key": "m", "code": "KeyM", "windowsVirtualKeyCode": 77, "nativeVirtualKeyCode": 77 }
+    }).to_string().into())).await.unwrap();
+    wait_cdp_response(&mut ws_b, b_id, std::time::Duration::from_secs(2)).await.unwrap();
+    b_id += 1;
+    assert!(read_dom_log(&mut raw_ws, &mut raw_id, &attach)
+        .await
+        .iter()
+        .any(|e| e["type"] == "keyup" && e["code"] == "KeyM"));
+
+    // CDP keyDown KeyN -> UI keyUp KeyN
+    ws_b.send(WsMsg::Text(json!({
+        "id": b_id,
+        "method": "Input.dispatchKeyEvent",
+        "params": { "type": "keyDown", "key": "n", "code": "KeyN", "windowsVirtualKeyCode": 78, "nativeVirtualKeyCode": 78 }
+    }).to_string().into())).await.unwrap();
+    wait_cdp_response(&mut ws_b, b_id, std::time::Duration::from_secs(2)).await.unwrap();
+    b_id += 1;
+    ctrl_b
+        .send(WsMsg::Text(
+            json!({
+                "browserSessionId": sid,
+                "browserIncarnation": inc,
+                "profileEpoch": "1",
+                "subscriptionEpoch": sub_b,
+                "leaseToken": lease_b,
+                "inputSeq": "2",
+                "viewportEpoch": viewport_epoch,
+                "event": { "kind": "keyUp", "key": "n", "code": "KeyN", "modifiers": 0 }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let deadline_n = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut saw_n_up = false;
+    while tokio::time::Instant::now() < deadline_n {
+        if read_dom_log(&mut raw_ws, &mut raw_id, &attach)
+            .await
+            .iter()
+            .any(|e| e["type"] == "keyup" && e["code"] == "KeyN")
+        {
+            saw_n_up = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+    assert!(saw_n_up, "mixed CDP keyDown + UI keyUp must release KeyN in Chromium DOM");
+
+    // 5. DevTools WS close while holding KeyC releases KeyC natively in Chromium DOM
+    ws_b.send(WsMsg::Text(json!({
+        "id": b_id,
+        "method": "Input.dispatchKeyEvent",
+        "params": { "type": "keyDown", "key": "c", "code": "KeyC", "windowsVirtualKeyCode": 67, "nativeVirtualKeyCode": 67 }
+    }).to_string().into())).await.unwrap();
+    wait_cdp_response(&mut ws_b, b_id, std::time::Duration::from_secs(2)).await.unwrap();
+    drop(ws_b);
+    let deadline_c = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut saw_c_up = false;
+    while tokio::time::Instant::now() < deadline_c {
+        if read_dom_log(&mut raw_ws, &mut raw_id, &attach)
+            .await
+            .iter()
+            .any(|e| e["type"] == "keyup" && e["code"] == "KeyC")
+        {
+            saw_c_up = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+    assert!(saw_c_up, "closing DevTools WS with held KeyC must natively release KeyC");
+
+    // 6. Same-viewer reacquire releases held KeyD and revokes old epoch DevTools token
+    let lease_b_reacq = acquire_control_http(&client, addr, &sid, &tokens[1], "viewer-b").await;
+    let dt_tok_b2 =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[1], "viewer-b", &lease_b_reacq).await;
+    let (mut ws_b2, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_b2}/ws"))
+            .await
+            .unwrap();
+    ws_b2.send(WsMsg::Text(json!({
+        "id": 1,
+        "method": "Input.dispatchKeyEvent",
+        "params": { "type": "keyDown", "key": "d", "code": "KeyD", "windowsVirtualKeyCode": 68, "nativeVirtualKeyCode": 68 }
+    }).to_string().into())).await.unwrap();
+    wait_cdp_response(&mut ws_b2, 1, std::time::Duration::from_secs(2)).await.unwrap();
+
+    let lease_b2 = acquire_control_http(&client, addr, &sid, &tokens[1], "viewer-b").await;
+    assert_ne!(lease_b_reacq, lease_b2);
+    assert!(read_dom_log(&mut raw_ws, &mut raw_id, &attach)
+        .await
+        .iter()
+        .any(|e| e["type"] == "keyup" && e["code"] == "KeyD"));
+    let b2_asset = client
+        .get(format!("http://{addr}/api/browser/devtools/{dt_tok_b2}/devtools_app.html"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(b2_asset.status(), StatusCode::UNAUTHORIZED);
+
+    // 7. Auth session revocation closes active DevTools WS
+    let dt_tok_b3 =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[1], "viewer-b", &lease_b2).await;
+    let (mut ws_b3, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_b3}/ws"))
+            .await
+            .unwrap();
+    let rev = client
+        .delete(format!("http://{addr}/api/auth/sessions/auth-b"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rev.status(), StatusCode::NO_CONTENT);
+    let closed_b3 = tokio::time::timeout(std::time::Duration::from_secs(2), ws_b3.next())
+        .await
+        .unwrap();
+    assert!(matches!(closed_b3, None | Some(Ok(WsMsg::Close(_))) | Some(Err(_))));
+
+    drop(ws_a);
+    drop(raw_ws);
+    cleanup_test_session_viewers(&sid).await;
+    let _ = client
+        .delete(format!("http://{addr}/api/browser/sessions/{sid}"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .send()
+        .await;
+    state.browser_host.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn test_devtools_stalled_write_omits_reply_keeps_control_unavailable() {
+    let _serial = TEST_SERIAL.lock().await;
+    global_session_registry().reset_for_test().await;
+    let tmp = tempdir().unwrap();
+    let (mock_port, recorded_cmds, behavior) =
+        spawn_programmable_cdp_server("TARGET-OMIT".into()).await;
+    behavior.omit_keydown_reply.store(true, Ordering::Release);
+
+    let (store, auth_service, tokens) =
+        setup_sqlite_multi_session(tmp.path(), "dt-omit", &["auth-a", "auth-b"]).await;
+    let state = create_test_state(
+        tmp.path().to_path_buf(),
+        Some(store),
+        Some(BrowserHostConfig {
+            enabled: true,
+            ..BrowserHostConfig::default()
+        }),
+    )
+    .with_auth_service(auth_service);
+    *state.browser_host._test_mock_handle.write() = Some(BrowserInstanceHandle {
+        subject: "dt-omit".into(),
+        is_dev: false,
+        pid: 1,
+        ws_endpoint: format!("ws://127.0.0.1:{mock_port}/devtools/browser/mock"),
+        browser_incarnation: "inc-omit".into(),
+        profile_epoch: 1,
+        user_data_dir: tmp.path().to_path_buf(),
+    });
+    let app = build_router_with_origins(
+        state,
+        vec![HeaderValue::from_static("http://127.0.0.1:5173")],
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let sid = insert_running_session("dt-omit", false, "inc-omit", "TARGET-OMIT").await;
+    let client = reqwest::Client::new();
+    let pair_a = admit_paired_viewer("dt-omit", "auth-a", &sid, "viewer-a", "inc-omit").await;
+    let pair_b = admit_paired_viewer("dt-omit", "auth-b", &sid, "viewer-b", "inc-omit").await;
+
+    let lease_a = acquire_control_http(&client, addr, &sid, &tokens[0], "viewer-a").await;
+    let dt_tok_a =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_a).await;
+    let (mut ws_a, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_a}/ws"))
+            .await
+            .unwrap();
+
+    // Send keyDown where peer accepts write and omits reply; then drop ws_a while write is ambiguous.
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": 1,
+            "method": "Input.dispatchKeyEvent",
+            "params": { "type": "keyDown", "key": "j", "code": "KeyJ", "windowsVirtualKeyCode": 74, "nativeVirtualKeyCode": 74 }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let rec_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while tokio::time::Instant::now() < rec_deadline {
+        if recorded_cmds.lock().iter().any(|(m, _)| m == "Input.dispatchKeyEvent") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(recorded_cmds.lock().iter().any(|(m, _)| m == "Input.dispatchKeyEvent"));
+
+    // Simulate stalled reply + keyUp rejection on cleanup so native outcome remains uncertain.
+    behavior.reject_keyup.store(true, Ordering::Release);
+    drop(ws_a);
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    // Control acquisition for successor viewer-b must fail closed with 503 inputUnavailable while uncertain!
+    let b_acq = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/acquire"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[1]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "viewerId": "viewer-b", "holderKind": "human" }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(b_acq.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    pair_a.release().await;
+    pair_b.release().await;
     cleanup_test_session_viewers(&sid).await;
 }

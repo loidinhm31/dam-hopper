@@ -23,7 +23,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | [WebSocket](./api/websocket.md) | WebSocket endpoint and event/message contract |
 | [Session changes review](#session-changes-review-api) | Read-only session changes status, files, file diff, and private tool-event capture endpoints |
 | [Terminal inventory and termination](#terminal-inventory-and-guarded-termination-api) | Additive inventory headers/fields and guarded termination protocol |
-| [Host browser CDP streaming](./api/browser-host.md) | Admission security model, REST routes (/api/browser/*), capability tickets, leased input |
+| [Host browser CDP streaming](./api/browser-host.md) | Admission security model, REST routes (/api/browser/*), capability tickets, leased input, target-scoped DevTools confinement & downloads |
 
 ## Authentication
 

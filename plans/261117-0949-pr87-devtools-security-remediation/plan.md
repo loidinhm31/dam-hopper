@@ -1,7 +1,7 @@
 ---
 title: "PR #87 DevTools security and isolation remediation"
 description: "Confine DevTools download effects, attribute frame downloads correctly, bind control authority and suppress foreign targets."
-status: in-progress
+status: completed
 priority: P1
 effort: 40h
 branch: feat/browser-enhancement
@@ -22,7 +22,7 @@ Close four findings end-to-end: F1 client download-directory override; F2 iframe
 | [02](phase-02-frame-download-ownership.md) | Positive frame ownership and GUID-pinned download routing | DONE (2026-11-19 01:23:01 EST) | 8h |
 | [03](phase-03-control-capability-lifecycle.md) | Control binding, ordered revocation and shared UI/CDP held-input accounting, all UI callers | DONE (2026-11-19 03:45 EST) | 10h |
 | [04](phase-04-target-session-isolation.md) | Positive target/session filtering plus non-Target worker metadata/control closure | DONE (2026-11-19 EST) | 10h |
-| [05](phase-05-regressions-qualification-docs.md) | Real-Chromium attacks/input-release/compatibility matrix and canonical API docs | pending | 7h |
+| [05](phase-05-regressions-qualification-docs.md) | Real-Chromium attacks/input-release/compatibility matrix and canonical API docs | DONE (2026-11-19 12:55:14 EST) | 7h |
 Nine durable tasks; strictly sequential graph. Estimates exclude unavailable environment waits. Main is integration/scheduling owner; assign one writer at a time for overlapping sources/tests.
 ## Phase 01 completion receipt
 - **Status:** DONE (2026-11-17 12:44:55 EST), explicitly approved by the user with noted limitations.
@@ -49,6 +49,14 @@ Nine durable tasks; strictly sequential graph. Estimates exclude unavailable env
 - **Validation reported PASS (99/99):** `browser_host::devtools_filter` 11/11, `browser_host::target_ownership` 27/27, `browser_host_devtools` 10/10 (`DAM_HOPPER_BROWSER_EXECUTABLE=/usr/bin/chromium DAM_HOPPER_REQUIRE_BROWSER=1`), `browser_host_adapter` 21/21, `browser_host_selection` 30/30 (`0` failed, `0` ignored).
 - **Review:** Initial 7/10 (`Request changes`) -> Follow-up 9/10 (`Approve with minor notes`); remaining Medium note (`notify_state_changed()` on failure paths) and test/consistency notes fixed and re-verified before user approval.
 - **Remaining scope:** Phase 05 (`phase-05-regressions-qualification-docs.md`) full qualification matrix & UI frontend acceptance gates remain pending.
+
+## Phase 05 completion receipt
+- **Status:** DONE (2026-11-19 12:55:14 EST), user-approved at Step 4 gate.
+- **Scope:** `qualify-devtools-security` and `reconcile-security-docs` (`server/tests/browser_host_devtools.rs`, `packages/ui/e2e/fixtures/{host-browser-app,host-browser-journey-target}.ts`, `packages/ui/e2e/os-host-browser/devtools-security.spec.ts`, `plans/261117-0949-pr87-devtools-security-remediation/reports/phase-05-qualification.md`, `docs/{api/browser-host.md,api-reference.md,architecture/host-browser-cdp-streaming.md,system-architecture.md,project-roadmap.md,CHANGELOG.md}`).
+- **Post-review re-verified runs (after 2 review warnings resolved):** `browser_host_devtools` `13/13` (`DAM_HOPPER_BROWSER_EXECUTABLE=/usr/bin/chromium DAM_HOPPER_REQUIRE_BROWSER=1`), `tsc -p tsconfig.e2e.json` exit `0`, `NODE_OPTIONS="--max-old-space-size=4096" ... e2e/os-host-browser/devtools-security.spec.ts --project=chromium --workers=1` `2 passed (51.1s)`.
+- **Phase 05 baseline runs:** `browser_host::` lib `230/230`, integration `166/166` across 7 passing suites (`adapter` 21, `auth` 12, `devtools` 13, `gateway` 19, `input` 59, `logout` 12, `selection` 30), `browser_host_media` `31/32` (pre-existing unrelated `test_real_chromium_media_stealth_and_pcm_audio_bridge` timeout at `tests/browser_host_media.rs:1337:10`), UI DevTools unit `56/56` across 3 files, and `@dam-hopper/ui` build exit `0`.
+- **Review:** `evc-code-reviewer` `8.5 / 10` (`APPROVED WITH NOTES`; 0 critical, 2 warnings resolved & re-verified).
+- **Explicit limits:** Qualified on Linux x86_64 against Chromium `156.0.8078.79` only; Windows fail-closed, no Windows/Android/performance parity claims; `/api/browser/cdp/*` remains an explicit privileged exception outside cooperative viewer control.
 
 
 ## Settled design
@@ -81,7 +89,7 @@ All four attacks denied or correctly isolated through DamHopper routes; owned co
 - Initial challenge and [targeted follow-up](reports/independent-plan-review-followup.md) complete: R1–R3 consistently propagated; no residual material planning finding established on reviewed surfaces. This is not implementation finding closure.
 - Final `prompt` validation **complete** (2026-11-17): user selected all three existing defaults—raw CDP `retain-privileged` (authenticated instance-wide exception, no cooperative viewer-control coverage); stateful Input `tracked-core` (shared UI/CDP key/mouse ledger, unsupported touch/drag/gesture denied unless cleanup proven); worker scope `deny-ambiguous` (positive target-scoped proof only).
 - No material decision changed; existing review/follow-up receipts remain applicable. No repeat review or phase/task changes required.
-Phases 01–04 are DONE as recorded above. Phase 05 remains pending; full real-Chromium frontend/matrix qualification remains outside Phase 04 completion. Shared-file handoff, full deployed-engine evidence, and eventual implementation/release qualification remain separate gates; no full-plan completion or security-closure claim.
+Phases 01–05 are DONE as recorded above on Linux x86_64 / Chromium `156.0.8078.79`. Unrelated `browser_host_media::test_real_chromium_media_stealth_and_pcm_audio_bridge` failed by timeout; `/api/browser/cdp/*` remains an explicit privileged admin/automation exception, and Windows/physical Android/performance gates remain outside this plan's qualification scope.
 
 ## Unresolved questions / blockers
 - Active-plan setter was invoked from the published harness; `EVCRATE_SESSION_ID` is unset, so session persistence is unavailable. Carry this explicit selected path; no activation claimed.

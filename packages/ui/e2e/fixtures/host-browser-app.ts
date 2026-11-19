@@ -31,6 +31,8 @@ export interface HostBrowserAppServer {
   readonly cleanup: () => Promise<void>;
   readonly browserExec: string;
   readonly tempRoot: string;
+  readonly downloadDir: string;
+  readonly sentinelDir: string;
   readonly deniedRequestCount: () => number;
   readonly serverLog: () => string;
   readonly restartApi: () => Promise<void>;
@@ -40,6 +42,7 @@ export interface HostBrowserAppOptions {
   allowedOrigins?: string[];
   maxTargets?: number;
   allowAppOrigin?: boolean;
+  allowLocalhostTarget?: boolean;
 }
 
 export function getFreePort(): Promise<number> {
@@ -367,11 +370,15 @@ async function startHostBrowserAppServerOnce(
   const workspaceDir = path.join(tempRoot, "workspace");
   const projectDir = path.join(workspaceDir, "test-project");
   const browserProfileRoot = path.join(tempRoot, "browser-profiles");
+  const downloadDir = path.join(tempRoot, "downloads");
+  const sentinelDir = path.join(tempRoot, "outside-sentinel");
 
   await fsp.mkdir(configDir, { recursive: true });
   await fsp.mkdir(projectDir, { recursive: true });
   await fsp.mkdir(browserProfileRoot, { recursive: true, mode: 0o700 });
   await fsp.chmod(browserProfileRoot, 0o700);
+  await fsp.mkdir(downloadDir, { recursive: true, mode: 0o700 });
+  await fsp.mkdir(sentinelDir, { recursive: true, mode: 0o700 });
 
   const serverToken = randomUUID().replace(/-/g, "");
   const mfaKeyHex = randomBytes(32).toString("hex");
@@ -387,6 +394,7 @@ async function startHostBrowserAppServerOnce(
 
   const allowedOrigins = [
     `http://127.0.0.1:${targetPort}`,
+    ...(options.allowLocalhostTarget ? [`http://localhost:${targetPort}`] : []),
     ...(options.allowAppOrigin ? [appOrigin] : []),
     ...(options.allowedOrigins ?? []),
   ];
@@ -422,6 +430,7 @@ type = "custom"
     XDG_CONFIG_HOME: path.join(homeDir, ".config"),
     XDG_DATA_HOME: path.join(homeDir, ".local", "share"),
     XDG_STATE_HOME: path.join(homeDir, ".local", "state"),
+    XDG_DOWNLOAD_DIR: downloadDir,
     DAM_HOPPER_LITE_MODE: "true",
     DAM_HOPPER_AUTH_SQLITE_PATH: sqlitePath,
     DAM_HOPPER_MFA_KEY_FILE: path.join(homeDir, "mfa.key"),
@@ -608,6 +617,8 @@ type = "custom"
     cleanup,
     browserExec,
     tempRoot,
+    downloadDir,
+    sentinelDir,
     deniedRequestCount: () => deniedRequests,
     serverLog: () => serverOutput,
     restartApi,

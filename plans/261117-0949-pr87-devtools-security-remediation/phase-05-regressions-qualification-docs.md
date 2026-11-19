@@ -1,7 +1,7 @@
 # Phase 05 — Regression evidence, native qualification and documentation
 
 ## Context / overview
-[Plan](plan.md) · [Evidence/gates](reports/evidence-and-design.md) · [Target isolation prerequisite](phase-04-target-session-isolation.md). P1; pending; 7h. Main coordinates a single coherent verification run after all shared edits land, then independent implementation review and exact evidence reconciliation. No build/test/browser execution in this authoring assignment. Two tasks: permanent regression/qualification deliverable, then final actual-contract docs. Planning review/interview are Main-owned prerequisites, not deferred into implementation approval.
+[Plan](plan.md) · [Evidence/gates](reports/evidence-and-design.md) · [Target isolation prerequisite](phase-04-target-session-isolation.md) · [Qualification report](reports/phase-05-qualification.md). P1; **DONE (2026-11-19 12:55:14 EST)**; 7h. Both Phase 05 deliverables (`qualify-devtools-security`, `reconcile-security-docs`), independent `evc-code-reviewer` (`8.5/10`, 2 warnings resolved & re-verified), and user Step 4 approval completed.
 
 ## Test design and existing evidence
 Read test principles before executing. Current `server/tests/browser_host_devtools.rs` includes mock lease/assets/filter/revocation/capacity tests AND `test_real_chromium_devtools_and_native_host_downloads` (lines 843–1078); the latter covers root Console, geometry rejection and data/http/blob files/DTO but not four adversarial cross-boundary scenarios. It may skip without executable unless DAM_HOPPER_REQUIRE_BROWSER=1. Existing browser_host input/adapter/selection/gateway tests support lifecycle regression; no prior passing counts claimed.
@@ -81,8 +81,8 @@ Prefix `/home/loidinh/WS/dam-hopper/`; create new E2E spec, modify existing fixt
   }
 ]
 ```
-- [ ] <!-- evcrate-task:qualify-devtools-security --> Qualify four findings and native compatibility
-- [ ] <!-- evcrate-task:reconcile-security-docs --> Reconcile actual contracts and security change record
+- [x] <!-- evcrate-task:qualify-devtools-security --> Qualify four findings and native compatibility
+- [x] <!-- evcrate-task:reconcile-security-docs --> Reconcile actual contracts and security change record
 
 ## Success / risk / security / rollback / next
 Closure requires negatives plus positive capability/native release. Missing worker target/liveness or required panel/input outcome never becomes pass; original worker registration persistence alone insufficient. Failed/uncertain release blocks successor; fail/blocked required native cases or severe review findings block release. Rollback fences/drains DevTools and confirms held-input cleanup or reconciles/retires before matched server/SPA revert, preserving profiles/downloads and foreign workers. No undo of files/scripts, Git/deploy authorization or overlapping-plan completion claim.

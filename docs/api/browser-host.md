@@ -331,7 +331,12 @@ Explicitly surrenders the control lease.
 - Generates synthetic release events for any currently held mouse buttons and keyboard keys to prevent stuck state in Chromium.
 - Revokes the lease in the input manager and session registry.
 
-**Response:** 204 No Content.
+**Response:** 200 OK (`Cache-Control: no-store`):
+```json
+{
+  "status": "released"
+}
+```
 
 ### POST /api/browser/sessions/{id}/dialog
 
@@ -844,4 +849,4 @@ The Host Browser API and streaming transport are qualified by integrated test ha
 - **Tuning Grid & Zero-Polling (`packages/ui/e2e/os-host-browser/performance.spec.ts`):** Evaluates 12 candidate configurations against protocol safety caps; release profile requires `everyNthFrame = 1` (setting #7 q65 1280x900 default); static pages emit zero periodic `Page.captureScreenshot` calls.
 - **Security Matrix Integration (`server/tests/browser_host_security.rs`):** Validates role denial, single-use ticket replay/purpose/Origin fencing, `--no-auth` loopback socket enforcement, URL network policy, multi-target/multi-viewer concurrency limits, and live role demotion termination.
 - **Platform Containment & Reset (`server/tests/browser_host_platform.rs`):** Validates Chromium launch argument security allowlisting, Unix supervisor death-pipe architecture, advisory OS locking (`flock`), and `reset.json` restart fencing.
-- **Target-Scoped DevTools & Native Downloads (`server/tests/browser_host_devtools.rs`):** Validates DevTools lease capacity/revocation, asset proxy CSP rewriting & path traversal rejection, WS single-claim/concurrency cap (`4`), client/upstream CDP filtering, per-auth-session revocation, and real-Chromium `data:`/`http:`/`blob:` native host downloads into `XDG_DOWNLOAD_DIR` updating `lastDownload`.
+- **Target-Scoped DevTools & Native Downloads (`server/tests/browser_host_devtools.rs`, `packages/ui/e2e/os-host-browser/devtools-security.spec.ts`):** Validates DevTools lease capacity/revocation, asset proxy CSP rewriting & path traversal rejection, WS single-claim/concurrency cap (`4`), control-epoch binding (`viewerId` + `leaseToken`), client/upstream CDP filtering (`DevToolsSessionFilter`), positive `OwnershipFence` F1 confinement (`Target.*` / `ServiceWorker.*` / nonlocal `Storage.*` / `BackgroundService.*` / `Browser.*` / cookie-cache `Network.*` denial & suppression across root and owned child sessions), real-Chromium two-tab nested-worker & OOPIF GUID download attribution into `XDG_DOWNLOAD_DIR` (`lastDownload`), two-viewer DevTools transfer & native held-input release, `test_devtools_stalled_write_omits_reply_keeps_control_unavailable`, per-auth-session revocation, and full OS Web UI (`BrowserDevToolsDock`, Cognito privacy, minimize/restore, tab switch, logout). Raw `/api/browser/cdp/*` remains an explicit privileged admin/automation exception outside cooperative viewer control.
