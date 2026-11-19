@@ -65,6 +65,8 @@ All errors return JSON with HTTP status $\ge 400$:
 | 403 Forbidden | `leaseNotFound` | No active control lease held for this session |
 | 403 Forbidden | `leaseExpired` | Control lease has expired (30s TTL elapsed) |
 | 403 Forbidden | `notLeaseHolder` | Caller lease token does not match active lease holder |
+| 403 Forbidden | `viewerNotAdmitted` | Viewer lacks an active admitted attachment pair matching caller admission |
+| 403 Forbidden | `controlAuthorityLost` | DevTools capability control epoch/viewer authority expired or transferred |
 | 404 Not Found | `sessionNotFound` | Browser session ID does not exist |
 | 404 Not Found | `assetNotFound` | Upstream Chromium DevTools asset returned non-2xx |
 | 409 Conflict | `sessionConflict` | Conflicting session operation or state mismatch |
@@ -526,7 +528,7 @@ Mints a target-scoped Chromium DevTools capability lease for an owned `running` 
 - **TTL & Capacity:** `300` seconds (`DEVTOOLS_LEASE_TTL`), clipped to caller auth `effective_deadline`. Capped at `8` active leases per principal (`MAX_LEASES_PER_PRINCIPAL`) and `32` globally (`MAX_LEASES_GLOBAL`); excess returns HTTP 429 `kind: "tooManyDevToolsLeases"`.
 - **Errors:** Foreign session returns HTTP 404 `sessionNotFound`; non-running session returns HTTP 409 `sessionConflict`; stale browser incarnation returns HTTP 409 `staleIncarnation`.
 
-No request body is required. The capability permits DOM, JavaScript, and network inspection of the bound target; treat the token-bearing URL as sensitive and do not persist it.
+**Request Body (`CreateDevToolsLeaseRequest`, `deny_unknown_fields`):** `{ "viewerId": "...", "leaseToken": "..." }` (bounded non-empty identifiers: `viewerId <= 128`, `leaseToken <= 256`). Validates existing `SessionInputManager` control authority (`verify_control_authority_for_mint` with `subtle::ConstantTimeEq`, returning `403 leaseNotFound` if absent or `503 inputUnavailable` during recovery/uncertain state), `has_admitted_viewer_pair` (`403 viewerNotAdmitted`), links `DevToolsLease::cancel` to epoch cancellation, and rechecks post-insert. Stores only SHA-256 hash + `(viewer_id, control_epoch)`, never `leaseToken`.
 
 **Response (200 OK, `Cache-Control: no-store`):**
 ```json
@@ -534,6 +536,8 @@ No request body is required. The capability permits DOM, JavaScript, and network
   "token": "43-character-url-safe-base64-token",
   "expiresAtUnixMs": 1794143100000,
   "browserSessionId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "viewerId": "viewer-uuid-or-id",
+  "controlEpoch": "1",
   "browserIncarnation": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
   "profileEpoch": "1"
 }
@@ -555,16 +559,16 @@ Revokes a DevTools capability lease owned by the calling principal for session `
 Proxies Chromium's bundled DevTools frontend assets from `http://127.0.0.1:{chrome_port}/devtools/{path}` using the minted capability `{token}` (path token acts as capability credential; no `Authorization` header required).
 
 - **Path Validation (`validate_devtools_asset_path`):** Rejects empty paths, leading/trailing `/`, `\`, `..`, `?`, `#`, empty/dot segments, or characters outside `[A-Za-z0-9._/-]` with HTTP 400 `invalidPath`.
-- **Authority & TTL Refresh:** Validates token, live auth (`verify_live_admission`), live incarnation/epoch, and matching `native_target_id` (stale/revoked/expired returns HTTP 401 `invalidDevToolsToken`, `invalidSession`, `staleIncarnation`, or `staleTarget`), refreshing the 300s sliding TTL clipped to auth deadline.
+- **Authority & TTL Refresh:** Validates token, live auth (`verify_live_admission`), live control authority (`is_control_authority_live` -> `403 controlAuthorityLost`), live admitted viewer pair (`has_admitted_viewer_pair` -> `403 viewerNotAdmitted`), live incarnation/epoch, and matching `native_target_id` (stale/revoked/expired returns HTTP 401 `invalidDevToolsToken`, `invalidSession`, `staleIncarnation`, or `staleTarget`; failures revoke the lease), refreshing the 300s sliding TTL clipped to auth deadline.
 - **Bounds & Headers:** 2s upstream timeout (`DEVTOOLS_ASSET_TIMEOUT`), redirects disabled, 4 MiB ceiling (`MAX_DEVTOOLS_ASSET_BYTES`). `text/html*` responses rewrite `ws://127.0.0.1:*` in CSP to `'self' ws: wss: ws://127.0.0.1:*` with `Cache-Control: no-store`; non-HTML assets return `Cache-Control: private, max-age=300`. All responses set `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`.
 
 ### GET /api/browser/devtools/{token}/ws
 
 Target-scoped WebSocket relay connecting to `ws://127.0.0.1:{chrome_port}/devtools/page/{native_target_id}` (`UPSTREAM_CONNECT_TIMEOUT = 5s`, `MAX_WS_MESSAGE_BYTES = 4 MiB`).
 
-- **Single Claim & Concurrency:** Each lease token admits at most one active WebSocket (`ws_active = true`; duplicate upgrade returns HTTP 409 `leaseInUse`). Global concurrent DevTools WebSockets are capped at `4` (`MAX_DEVTOOLS_CONNECTIONS`; excess returns HTTP 429 `tooManyConnections`).
-- **Live Auth & Revocation:** Runs 5s periodic `verify_live_admission` + `refresh_ws`, global payload memory reservation (`global_memory_controller`), and `write_with_cancel`. Auth session revocation (`revoke_by_auth_session`), principal fencing (`revoke_all_for_principal`), and browser session viewer release/retirement (`revoke_by_browser_session`) cancel active sockets immediately.
-- **Client->Upstream Filter (`inspect_devtools_client_message`):** Rejects JSON-RPC batch arrays, `Browser.*`, cross-target/management `Target.*` (`createTarget`, `closeTarget`, `activateTarget`, `exposeDevToolsProtocol`, `disposeBrowserContext`, `createBrowserContext`, `getTargets`, `sendMessageToTarget`), `Target.attachToTarget` / `Target.autoAttachRelated` with foreign `targetId`, and viewport-mutating `Emulation.*` (`setDeviceMetricsOverride`, `clearDeviceMetricsOverride`, `setPageScaleFactor`, `setVisibleSize`), replying with JSON-RPC error `-32601` while keeping `inputAvailable` intact.
+- **Single Claim & Concurrency:** Each lease token admits at most one active WebSocket (`ws_active = true`; duplicate upgrade returns HTTP 409 `leaseInUse`), rechecks control authority & viewer pair post-upstream-connect, and caps global concurrent DevTools WebSockets at `4` (`MAX_DEVTOOLS_CONNECTIONS` -> `429 tooManyConnections`).
+- **Live Auth & Revocation:** Runs 5s periodic `verify_live_admission`, `refresh_ws`, `is_control_authority_live`, and `has_admitted_viewer_pair` checks, global payload reservation (`global_memory_controller`), and `write_with_cancel(..., Some(&lease.cancel))` (raw CDP gateway retains `None`). Auth session revocation, control transfer/reacquire (`revoke_by_control_epoch`), viewer revocation (`revoke_by_viewer`), principal fencing, and session retirement cancel active sockets immediately.
+- **Client->Upstream Filter & Shared `Input.*` Ledger (`classify_devtools_client_message`):** Rejects batch arrays, `Browser.*`, cross-target `Target.*`, forbidden `Network.*`/`ServiceWorker.*`/`BackgroundService.*`/`Storage.*`, `Page.setDownloadBehavior`, and viewport-mutating `Emulation.*` with `-32601`. Admits `Input.dispatchKeyEvent` (`keyDown`/`rawKeyDown`/`keyUp`/`char`), `Input.dispatchMouseEvent` (`mousePressed`/`mouseReleased`/`mouseMoved`/`mouseWheel`, `pointerType: "mouse"`), and `Input.insertText` (`<= 4096` bytes) under `MAX_INFLIGHT_DEVTOOLS_OPS = 64` into shared `HeldInputState` (`prepare_cdp_input_op` -> `confirm`/`reject`/`mark_ambiguous`); touch/drag/gesture/IME/`setIgnoreInputEvents`/unknown `Input.*` return `-32601`. Unresolved DevTools WS close triggers `fence_devtools_authority` and releases held inputs via `DevToolsProxyReleaseRoute` / `NativeInputTarget`.
 - **Upstream->Client Filter (`DevToolsUpstreamFilter`):** Suppresses `Target.targetCreated` and `Target.targetInfoChanged` for foreign `page` / `browser_ui` targets (tracking up to `256` foreign IDs) and their matching `Target.targetDestroyed` events, while forwarding worker/child targets.
 
 ---
@@ -617,7 +621,7 @@ User input is routed exclusively through the active control lease holder:
 - **Lease Duration:** 30 seconds (`LEASE_TTL = Duration::from_secs(30)`).
 - **Renewal Window:** 5 seconds (`LEASE_RENEWAL_WINDOW = Duration::from_secs(5)`).
 - **Single Active Holder:** Only one viewer (`holderKind: "human" | "agent"`) may hold control per session.
-- **Fail-Safe Release:** When a lease is released, expires, or drops due to connection loss, `HeldInputState::generate_release_events` automatically generates synthetic `PointerUp` and `KeyUp` events for all currently held buttons and keys, preventing stuck input in the browser.
+- **Fail-Safe Release & Ordered Transitions:** Control lease transitions (`acquire_lease`, `end_lease_owned`, `suspend_for_recovery_owned`, `fail_native_dispatch_owned`) fence old authority & revoke epoch DevTools capabilities, drain bounded DevTools ops (`DEVTOOLS_OP_DRAIN_TIMEOUT = 5s`), release pending + confirmed holds in shared `HeldInputState` (`CapturedNativeIdentity`), run `lease_end_hook`, and confirm before publishing a successor (`BrowserApp` / `BrowserDevToolsDock` show `browser-devtools-control-required` without auto-stealing).
 
 ### Reliable Input Queue
 
@@ -811,6 +815,7 @@ Frontend client API and stream controller exports (`packages/ui/src/api/browser-
 - `navigateBrowser(owner, sessionId, req)` / `historyBrowser(...)` / `reloadBrowser(...)`: Controls navigation state.
 - `setBrowserViewport(owner, sessionId, req)`: Sets CSS layout viewport and DPR under lease.
 - `acquireBrowserControl(owner, sessionId, req)` / `renewBrowserControl(...)` / `releaseBrowserControl(...)`: Manages 30s cooperative input lease.
+- `createBrowserDevToolsLease(owner, sessionId, req: CreateDevToolsLeaseRequest, signal?)` / `revokeBrowserDevToolsLease(...)` / `buildBrowserDevToolsUrl(...)`: Mints control-bound DevTools lease (`viewerId`, `leaseToken`, `controlEpoch`), revokes cleanly, and builds asset/WS URLs (`BrowserApp` / `BrowserDevToolsDock` require active control without auto-steal).
 - `respondBrowserDialog(owner, sessionId, req)`: Dismisses or confirms native JavaScript dialog.
 - `findInBrowserPage(owner, sessionId, req)`: Searches text in page ($\le 256$ chars).
 - `getBrowserSelectedText(owner, sessionId, leaseToken, signal?)`: Retrieves currently selected text ($\le 64$ KiB).

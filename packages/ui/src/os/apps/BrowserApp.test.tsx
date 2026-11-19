@@ -276,6 +276,8 @@ beforeEach(async () => {
     browserSessionId: "session-1",
     browserIncarnation: live.browserIncarnation,
     profileEpoch: live.profileEpoch,
+    viewerId: "viewer-1",
+    controlEpoch: "1",
   });
   api.revokeBrowserDevToolsLease.mockReset().mockResolvedValue(undefined);
   api.listBrowserSessions.mockReset().mockResolvedValue([live]);
@@ -1459,15 +1461,51 @@ describe("BrowserApp native chrome & tab continuity", () => {
     expect(loadBrowserRecoveryDisk().operations.map((o) => o.operationId)).toEqual(["op-win"]);
   });
 
-  it("mounts docked DevTools iframe from toolbar/tools, preserves slotRef DOM identity across dock-side switches, and revokes on privacy/lock/tab-switch/close", async () => {
+  it("requires active controller authority for DevTools, refuses automatic control stealing, mounts when controlling, and revokes on privacy/lock/tab-switch/loss", async () => {
     const initialSlot = container.querySelector('[data-testid="browser-slot-window-1"]');
     expect(initialSlot).toBeTruthy();
 
-    // Open via toolbar toggle button
+    // Non-controller clicking DevTools toggle shows explicit control requirement and never steals control or mints
     await act(async () => {
       (container.querySelector('[data-testid="browser-devtools-toggle-btn"]') as HTMLButtonElement).click();
     });
-    expect(api.createBrowserDevToolsLease).toHaveBeenCalledWith(owner, "session-1", expect.any(AbortSignal));
+    expect(api.acquireBrowserControl).not.toHaveBeenCalled();
+    expect(api.createBrowserDevToolsLease).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+    expect(container.querySelector('[data-testid="browser-devtools-control-required"]')).toBeTruthy();
+
+    // Grant controller authority on tab-1 (as viewer-1 with lease-1), then open via toolbar toggle
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-1",
+          kind: "ordinary",
+          committedUrl: live.url,
+          sessionId: "session-1",
+          viewerId: "viewer-1",
+          isController: true,
+          leaseToken: "lease-1",
+          title: "Page",
+          phase: "live",
+          draft: { value: live.url, dirty: false },
+          actionSequence: 0,
+          snapshot: live,
+        },
+      ],
+      activeTabId: "tab-1",
+    });
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-devtools-control-required"]')).toBeNull();
+
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-devtools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    expect(api.createBrowserDevToolsLease).toHaveBeenCalledWith(
+      owner,
+      "session-1",
+      { viewerId: "viewer-1", leaseToken: "lease-1" },
+      expect.any(AbortSignal),
+    );
     const iframe = container.querySelector<HTMLIFrameElement>('[data-testid="browser-devtools-iframe"]');
     expect(iframe).toBeTruthy();
     expect(iframe?.getAttribute("src")).toContain("/api/browser/devtools/dt-tok-1/devtools_app.html");
@@ -1488,13 +1526,15 @@ describe("BrowserApp native chrome & tab continuity", () => {
     expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "session-1", "dt-tok-1");
     expect(container.querySelector<HTMLButtonElement>('[data-testid="browser-devtools-toggle-btn"]')?.disabled).toBe(true);
 
-    // Restoring Cognito re-mints; Lock Screen unmounts & revokes again
+    // Restoring Cognito re-mints while controller; Lock Screen unmounts & revokes again
     api.createBrowserDevToolsLease.mockResolvedValueOnce({
       token: "dt-tok-2",
       expiresAtUnixMs: Date.now() + 300_000,
       browserSessionId: "session-1",
       browserIncarnation: live.browserIncarnation,
       profileEpoch: live.profileEpoch,
+      viewerId: "viewer-1",
+      controlEpoch: "1",
     });
     cognitoState.active = false;
     await rerender();
@@ -1513,6 +1553,8 @@ describe("BrowserApp native chrome & tab continuity", () => {
       browserSessionId: "session-1",
       browserIncarnation: live.browserIncarnation,
       profileEpoch: live.profileEpoch,
+      viewerId: "viewer-1",
+      controlEpoch: "1",
     });
     store.session.windows["window-1"].appState = canonicalAppState({
       tabs: [
@@ -1521,6 +1563,9 @@ describe("BrowserApp native chrome & tab continuity", () => {
           kind: "ordinary",
           committedUrl: live.url,
           sessionId: "session-1",
+          viewerId: "viewer-1",
+          isController: true,
+          leaseToken: "lease-1",
           title: "Page 1",
           phase: "live",
           draft: { value: live.url, dirty: false },
@@ -1532,6 +1577,9 @@ describe("BrowserApp native chrome & tab continuity", () => {
           kind: "ordinary",
           committedUrl: "https://other.example.com",
           sessionId: "session-2",
+          viewerId: "viewer-2",
+          isController: true,
+          leaseToken: "lease-2",
           title: "Page 2",
           phase: "live",
           draft: { value: "https://other.example.com", dirty: false },
@@ -1559,6 +1607,8 @@ describe("BrowserApp native chrome & tab continuity", () => {
       browserSessionId: "session-2",
       browserIncarnation: live.browserIncarnation,
       profileEpoch: live.profileEpoch,
+      viewerId: "viewer-2",
+      controlEpoch: "2",
     });
     await act(async () => {
       (container.querySelector('[data-testid="browser-tools-toggle-btn"]') as HTMLButtonElement).click();
@@ -1574,18 +1624,139 @@ describe("BrowserApp native chrome & tab continuity", () => {
     expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
     expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "session-2", "dt-tok-4");
 
-    // Re-open on tab-2, then disconnect connection -> DevTools iframe unmounts immediately
+    // Re-open on tab-2, then lose controller authority -> unmounts, revokes, and stays closed if control later returns
     api.createBrowserDevToolsLease.mockResolvedValueOnce({
       token: "dt-tok-5",
       expiresAtUnixMs: Date.now() + 300_000,
       browserSessionId: "session-2",
       browserIncarnation: live.browserIncarnation,
       profileEpoch: live.profileEpoch,
+      viewerId: "viewer-2",
+      controlEpoch: "2",
     });
     await act(async () => {
       (container.querySelector('[data-testid="browser-devtools-toggle-btn"]') as HTMLButtonElement).click();
     });
     expect(container.querySelector('[data-testid="browser-devtools-iframe"]')?.getAttribute("src")).toContain("dt-tok-5");
+
+    const tab2LostControl = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-2",
+          kind: "ordinary",
+          committedUrl: "https://other.example.com",
+          sessionId: "session-2",
+          viewerId: "viewer-2",
+          isController: false,
+          leaseToken: undefined,
+          title: "Page 2",
+          phase: "live",
+          draft: { value: "https://other.example.com", dirty: false },
+          actionSequence: 0,
+          snapshot: { ...live, browserSessionId: "session-2" },
+        },
+      ],
+      activeTabId: "tab-2",
+    });
+    store.session.windows["window-1"].appState = tab2LostControl;
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+    expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "session-2", "dt-tok-5");
+
+    // Re-acquiring control does not silently pop DevTools open without user toggle
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-2",
+          kind: "ordinary",
+          committedUrl: "https://other.example.com",
+          sessionId: "session-2",
+          viewerId: "viewer-2",
+          isController: true,
+          leaseToken: "lease-2-new",
+          title: "Page 2",
+          phase: "live",
+          draft: { value: "https://other.example.com", dirty: false },
+          actionSequence: 0,
+          snapshot: { ...live, browserSessionId: "session-2" },
+        },
+      ],
+      activeTabId: "tab-2",
+    });
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+
+    // Control/media socket loss (inputAvailable=false) unmounts DevTools immediately
+    api.createBrowserDevToolsLease.mockResolvedValueOnce({
+      token: "dt-tok-6",
+      expiresAtUnixMs: Date.now() + 300_000,
+      browserSessionId: "session-2",
+      browserIncarnation: live.browserIncarnation,
+      profileEpoch: live.profileEpoch,
+      viewerId: "viewer-2",
+      controlEpoch: "3",
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-devtools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')?.getAttribute("src")).toContain("dt-tok-6");
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-2",
+          kind: "ordinary",
+          committedUrl: "https://other.example.com",
+          sessionId: "session-2",
+          viewerId: "viewer-2",
+          isController: true,
+          leaseToken: "lease-2-new",
+          title: "Page 2",
+          phase: "live",
+          draft: { value: "https://other.example.com", dirty: false },
+          actionSequence: 0,
+          snapshot: { ...live, browserSessionId: "session-2", inputAvailable: false },
+        },
+      ],
+      activeTabId: "tab-2",
+    });
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+    expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "session-2", "dt-tok-6");
+
+    // Re-open on tab-2 with healthy stream, then disconnect connection -> DevTools iframe unmounts immediately
+    api.createBrowserDevToolsLease.mockResolvedValueOnce({
+      token: "dt-tok-7",
+      expiresAtUnixMs: Date.now() + 300_000,
+      browserSessionId: "session-2",
+      browserIncarnation: live.browserIncarnation,
+      profileEpoch: live.profileEpoch,
+      viewerId: "viewer-2",
+      controlEpoch: "3",
+    });
+    store.session.windows["window-1"].appState = canonicalAppState({
+      tabs: [
+        {
+          tabId: "tab-2",
+          kind: "ordinary",
+          committedUrl: "https://other.example.com",
+          sessionId: "session-2",
+          viewerId: "viewer-2",
+          isController: true,
+          leaseToken: "lease-2-new",
+          title: "Page 2",
+          phase: "live",
+          draft: { value: "https://other.example.com", dirty: false },
+          actionSequence: 0,
+          snapshot: { ...live, browserSessionId: "session-2", inputAvailable: true },
+        },
+      ],
+      activeTabId: "tab-2",
+    });
+    await rerender();
+    await act(async () => {
+      (container.querySelector('[data-testid="browser-devtools-toggle-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="browser-devtools-iframe"]')?.getAttribute("src")).toContain("dt-tok-7");
     connState.status = "disconnected" as unknown as typeof connState.status;
     await rerender();
     expect(container.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();

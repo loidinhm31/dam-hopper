@@ -1,7 +1,9 @@
 # Phase 03 — Control-bound DevTools capability lifecycle
 
 ## Context / overview
-[Plan](plan.md) · [Evidence F3 and authority transactions](reports/evidence-and-design.md). P1; pending; 10h. Sequential after Phase 02, same integration owner. Three bounded tasks: capability binding, ordered command/revocation boundary, client cutover. All required for F3 closure; an API-only or UI-only guard is insufficient.
+[Plan](plan.md) · [Evidence F3 and authority transactions](reports/evidence-and-design.md). P1; DONE (2026-11-19 03:45 EST); 10h. Sequential after Phase 02, same integration owner. Three bounded tasks: capability binding, ordered command/revocation boundary, client cutover. All required for F3 closure; an API-only or UI-only guard is insufficient.
+
+**Completion & verification (2026-11-19 03:45 EST):** Reported PASS across `225` Rust lib tests, `97` integration tests with Chromium, UI build + `56` Vitest tests, and `pnpm lint` (0 errors). PM status update did not rerun checks.
 
 ## Requirements / architecture
 Full native DevTools mutates via Input/Runtime/DOM/navigation/children; gate entire capability. Download/geometry/target/ServiceWorker restrictions remain independent of control. Reuse SessionInputManager token/viewer/epoch/ending, authority generation/native gate, cancellation AND pending/confirmed held-input accounting. UI/native dispatch currently records key/button holds; direct DevTools relay does not (R2). No shadow lease manager or separate CDP ledger. DevToolsLeaseManager retains hashed bearer tokens/capacity/TTL with immutable control binding.
@@ -65,9 +67,9 @@ All task paths use prefix `/home/loidinh/WS/dam-hopper/`. Modify existing listed
   }
 ]
 ```
-- [ ] <!-- evcrate-task:bind-devtools-control-epoch --> Bind capability control identity
-- [ ] <!-- evcrate-task:fence-devtools-command-admission --> Fence ordered native writes
-- [ ] <!-- evcrate-task:migrate-devtools-control-ui --> Migrate every UI/client caller
+- [x] <!-- evcrate-task:bind-devtools-control-epoch --> Bind capability control identity
+- [x] <!-- evcrate-task:fence-devtools-command-admission --> Fence ordered native writes
+- [x] <!-- evcrate-task:migrate-devtools-control-ui --> Migrate every UI/client caller
 
 ## Success / risks / security / rollback / next
 Avoid lock inversion between transition/lease/native transport; one bounded operation/cleanup ordering. Shared ledger is physical state under captured epoch/native identity, not independent UI/CDP refcounts. Cleanup permit cannot be revoked by the authority it is retiring; failures keep unavailable/reconcile/retire. No per-command unbounded auth call; local fence remains authoritative with live-auth deadlines/post-await checks. Capability URL secret and bound. Holder can mutate owned target only, never download/context-wide ServiceWorker policy. Rollback disables/drains DevTools and completes hold cleanup before matched server/SPA revert; do not bypass uncertain release or restore permissive mint/raw Input relay. Next Phase 04 applies every child/metadata policy under this same authority and accounting.

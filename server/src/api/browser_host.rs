@@ -85,9 +85,16 @@ pub fn global_input_managers(
 
 pub async fn get_or_create_input_manager(session_id: &str) -> Arc<SessionInputManager> {
     let mut map = global_input_managers().write().await;
-    map.entry(session_id.to_string())
+    let mgr = map
+        .entry(session_id.to_string())
         .or_insert_with(|| SessionInputManager::new_shared(crate::browser_host::input::LEASE_TTL))
-        .clone()
+        .clone();
+    mgr.set_session_id(session_id);
+    mgr
+}
+
+pub async fn get_existing_input_manager(session_id: &str) -> Option<Arc<SessionInputManager>> {
+    global_input_managers().read().await.get(session_id).cloned()
 }
 fn register_selection_lease_end_hook(
     input_mgr: &SessionInputManager,
@@ -2138,6 +2145,17 @@ static DEVTOOLS_ASSET_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .expect("build devtools asset http client")
 });
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateDevToolsLeaseRequest {
+    pub viewer_id: String,
+    pub lease_token: String,
+}
+
+fn is_valid_bounded_identifier(value: &str, max_len: usize) -> bool {
+    !value.is_empty() && value.len() <= max_len && value.bytes().all(|b| b.is_ascii_graphic())
+}
+
 /// POST /api/browser/sessions/{id}/devtools
 pub async fn create_devtools_lease(
     State(state): State<AppState>,
@@ -2145,6 +2163,7 @@ pub async fn create_devtools_lease(
     connect: Option<Extension<ConnectInfo<SocketAddr>>>,
     actor: Option<Extension<AuthenticatedActor>>,
     Path(id): Path<String>,
+    Json(body): Json<CreateDevToolsLeaseRequest>,
 ) -> Response {
     let admission = match authenticate_browser_caller(
         &state,
@@ -2157,6 +2176,16 @@ pub async fn create_devtools_lease(
         Ok(adm) => adm,
         Err(resp) => return resp,
     };
+
+    if !is_valid_bounded_identifier(&body.viewer_id, 128)
+        || !is_valid_bounded_identifier(&body.lease_token, 256)
+    {
+        return browser_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalidInput",
+            "viewerId and leaseToken must be bounded non-empty identifiers",
+        );
+    }
 
     let (dto, target_id) = match global_session_registry()
         .owned_running_target(&id, &admission.principal, admission.is_dev)
@@ -2182,20 +2211,72 @@ pub async fn create_devtools_lease(
         );
     }
 
+    let Some(input_mgr) = get_existing_input_manager(&id).await else {
+        return crate::browser_host::input::InputError::LeaseNotFound.into();
+    };
+    let (control_epoch, epoch_cancel) = match input_mgr
+        .verify_control_authority_for_mint(&body.viewer_id, &body.lease_token)
+        .await
+    {
+        Ok(verified) => verified,
+        Err(err) => return err.into(),
+    };
+
+    if !global_attachment_manager()
+        .has_admitted_viewer_pair(
+            &admission,
+            &id,
+            &body.viewer_id,
+            profile_epoch,
+            &dto.browser_incarnation,
+        )
+        .await
+    {
+        return browser_error_response(
+            StatusCode::FORBIDDEN,
+            "viewerNotAdmitted",
+            "viewer does not have an active admitted attachment pair",
+        );
+    }
+
     match crate::browser_host::devtools::global_devtools_leases()
         .mint(
             &admission,
+            &body.viewer_id,
+            control_epoch,
             &id,
             &target_id,
             &dto.browser_incarnation,
             profile_epoch,
+            Some(&epoch_cancel),
         )
         .await
     {
-        Ok(lease) => no_store_response(
-            StatusCode::OK,
-            serde_json::to_value(&lease).unwrap_or_default(),
-        ),
+        Ok(lease) => {
+            // Close mint-vs-transfer race: recheck live authority & admission after inserting.
+            let still_live = input_mgr
+                .is_control_authority_live(control_epoch, &body.viewer_id)
+                .await
+                && global_attachment_manager()
+                    .has_admitted_viewer_pair(
+                        &admission,
+                        &id,
+                        &body.viewer_id,
+                        profile_epoch,
+                        &dto.browser_incarnation,
+                    )
+                    .await;
+            if !still_live {
+                let _ = crate::browser_host::devtools::global_devtools_leases()
+                    .revoke_by_token(&admission.principal, &id, &lease.token)
+                    .await;
+                return crate::browser_host::input::InputError::LeaseNotFound.into();
+            }
+            no_store_response(
+                StatusCode::OK,
+                serde_json::to_value(&lease).unwrap_or_default(),
+            )
+        }
         Err(resp) => resp,
     }
 }
@@ -2241,6 +2322,13 @@ async fn resolve_devtools_chrome_port(
     state: &AppState,
     lease: &crate::browser_host::devtools::DevToolsLease,
 ) -> Result<u16, Response> {
+    if lease.cancel.is_cancelled() {
+        return Err(browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidDevToolsToken",
+            "devtools capability revoked",
+        ));
+    }
     if crate::browser_host::auth::verify_live_admission(state, &lease.admission)
         .await
         .is_err()
@@ -2276,6 +2364,39 @@ async fn resolve_devtools_chrome_port(
             StatusCode::UNAUTHORIZED,
             "staleTarget",
             "browser target rotated",
+        ));
+    }
+    let Some(input_mgr) = get_existing_input_manager(&lease.browser_session_id).await else {
+        return Err(browser_error_response(
+            StatusCode::FORBIDDEN,
+            "controlAuthorityLost",
+            "control authority is not active",
+        ));
+    };
+    if !input_mgr
+        .is_control_authority_live(lease.control_epoch, &lease.viewer_id)
+        .await
+    {
+        return Err(browser_error_response(
+            StatusCode::FORBIDDEN,
+            "controlAuthorityLost",
+            "control authority is no longer live",
+        ));
+    }
+    if !global_attachment_manager()
+        .has_admitted_viewer_pair(
+            &lease.admission,
+            &lease.browser_session_id,
+            &lease.viewer_id,
+            lease.profile_epoch,
+            &lease.browser_incarnation,
+        )
+        .await
+    {
+        return Err(browser_error_response(
+            StatusCode::FORBIDDEN,
+            "viewerNotAdmitted",
+            "viewer attachment pair is no longer active",
         ));
     }
     let handle = state
@@ -2334,7 +2455,12 @@ pub async fn proxy_devtools_asset(
     };
     let chrome_port = match resolve_devtools_chrome_port(&state, &lease).await {
         Ok(port) => port,
-        Err(resp) => return resp,
+        Err(resp) => {
+            let _ = crate::browser_host::devtools::global_devtools_leases()
+                .revoke_by_token(&lease.admission.principal, &lease.browser_session_id, &token)
+                .await;
+            return resp;
+        }
     };
     let Ok(resp) = DEVTOOLS_ASSET_CLIENT
         .get(format!("http://127.0.0.1:{chrome_port}/devtools/{path}"))
@@ -2459,22 +2585,47 @@ async fn relay_devtools_socket(
     chrome_port: u16,
     permit: crate::browser_host::cdp_gateway::CdpGatewayPermit,
 ) {
+    use std::collections::{HashMap, VecDeque};
     use axum::extract::ws::Message as AxumWsMessage;
     use futures_util::{SinkExt, StreamExt};
+    use tokio::sync::{mpsc, oneshot};
     use tokio::time::timeout;
     use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
     use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
+    use crate::browser_host::cdp::CdpError;
     use crate::browser_host::cdp_gateway::{
-        write_with_cancel, AbortOnDrop, WriteOutcome, UPSTREAM_CONNECT_TIMEOUT,
+        write_with_cancel, write_with_outcome, AbortOnDrop, WriteOutcome, UPSTREAM_CONNECT_TIMEOUT,
     };
     use crate::browser_host::devtools::global_devtools_leases;
     use crate::browser_host::devtools_filter::{
-        devtools_json_memory_bound, inspect_devtools_client_message, ClientMessageVerdict,
-        DevToolsUpstreamFilter,
+        classify_devtools_client_message, devtools_json_memory_bound, CdpInputEffect,
+        ClassifiedDevToolsMessage, DevToolsUpstreamFilter,
     };
     use crate::browser_host::diagnostics::global_memory_controller;
-    use crate::browser_host::protocol::MAX_WS_MESSAGE_BYTES;
+    use crate::browser_host::input::{SessionInputManager, DEVTOOLS_OP_DRAIN_TIMEOUT};
+    use crate::browser_host::input_native_release::{
+        CapturedNativeIdentity, DevToolsProxyReleaseRoute, NativeInputTarget, ProxyCleanupCommand,
+    };
+    use crate::browser_host::protocol::{COMMAND_TIMEOUT_SECS, MAX_WS_MESSAGE_BYTES};
+    use uuid::Uuid;
+
+    const MAX_QUEUED_CDP_INPUT: usize = 32;
+    const MAX_PENDING_CDP_REPLIES: usize = 64;
+
+    #[derive(Debug, Clone, Copy)]
+    enum ProxyWriteOutcome {
+        Written,
+        NotWritten,
+        Ambiguous,
+    }
+
+    struct ProxyInputWriteRequest {
+        json: String,
+        call_id: u64,
+        write_done: oneshot::Sender<ProxyWriteOutcome>,
+        reply: oneshot::Sender<Result<(), CdpError>>,
+    }
 
     let mut cfg = WebSocketConfig::default();
     cfg.max_message_size = Some(MAX_WS_MESSAGE_BYTES);
@@ -2498,19 +2649,63 @@ async fn relay_devtools_socket(
         return;
     };
 
-    let (abort_tx, mut abort_rx) = tokio::sync::mpsc::channel::<()>(1);
+    // Recheck all bindings after upstream setup before activating relay or forwarding anything.
+    let post_setup_input_mgr = if !lease.cancel.is_cancelled()
+        && global_devtools_leases().is_lease_active(&hash).await
+        && resolve_devtools_chrome_port(&state, &lease).await.is_ok()
+    {
+        get_existing_input_manager(&lease.browser_session_id).await
+    } else {
+        None
+    };
+    let Some(input_mgr) = post_setup_input_mgr else {
+        let _ = timeout(std::time::Duration::from_millis(250), upstream_ws.close(None)).await;
+        let _ = timeout(
+            std::time::Duration::from_millis(250),
+            client_ws.send(AxumWsMessage::Close(None)),
+        )
+        .await;
+        global_devtools_leases().revoke_by_hash(&hash).await;
+        return;
+    };
+
+    let epoch_tracker = input_mgr.epoch_tracker(lease.control_epoch);
+    let (mut client_sink, mut client_stream) = client_ws.split();
+    let (mut upstream_sink, mut upstream_stream) = upstream_ws.split();
+
+    let (abort_tx, mut abort_rx) = mpsc::channel::<()>(1);
     let admission = lease.admission.clone();
     let state_auth = state.clone();
+    let watcher_input_mgr = input_mgr.clone();
+    let watcher_viewer_id = lease.viewer_id.clone();
+    let watcher_session_id = lease.browser_session_id.clone();
+    let watcher_incarnation = lease.browser_incarnation.clone();
+    let watcher_control_epoch = lease.control_epoch;
+    let watcher_profile_epoch = lease.profile_epoch;
+    let watcher_cancel = lease.cancel.clone();
     let watcher = tokio::spawn(async move {
         let mut tick = tokio::time::interval(crate::browser_host::auth::LIVE_CHECK_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tick.tick().await;
         loop {
             tick.tick().await;
-            if crate::browser_host::auth::verify_live_admission(&state_auth, &admission)
-                .await
-                .is_err()
+            if watcher_cancel.is_cancelled()
+                || crate::browser_host::auth::verify_live_admission(&state_auth, &admission)
+                    .await
+                    .is_err()
                 || !global_devtools_leases().refresh_ws(&hash).await
+                || !watcher_input_mgr
+                    .is_control_authority_live(watcher_control_epoch, &watcher_viewer_id)
+                    .await
+                || !global_attachment_manager()
+                    .has_admitted_viewer_pair(
+                        &admission,
+                        &watcher_session_id,
+                        &watcher_viewer_id,
+                        watcher_profile_epoch,
+                        &watcher_incarnation,
+                    )
+                    .await
             {
                 let _ = abort_tx.send(()).await;
                 break;
@@ -2533,33 +2728,367 @@ async fn relay_devtools_socket(
     tokio::pin!(deadline_sleep);
     let mut upstream_filter = DevToolsUpstreamFilter::default();
 
+    let (cleanup_tx, mut cleanup_rx) = mpsc::channel::<ProxyCleanupCommand>(128);
+    let proxy_conn_id = Uuid::new_v4();
+    let proxy_route = DevToolsProxyReleaseRoute {
+        conn_id: proxy_conn_id,
+        sender: cleanup_tx,
+    };
+    let (input_write_tx, mut input_write_rx) = mpsc::channel::<ProxyInputWriteRequest>(8);
+    let mut pending_input_replies: HashMap<u64, oneshot::Sender<Result<(), CdpError>>> =
+        HashMap::new();
+    let mut pending_cleanup_replies: HashMap<u64, oneshot::Sender<Result<(), CdpError>>> =
+        HashMap::new();
+    let mut next_cleanup_id: u64 = (u32::MAX as u64) + 1;
+
+    let mut queued_cdp_inputs: VecDeque<(u64, String, CdpInputEffect)> = VecDeque::new();
+    let mut active_cdp_input: Option<tokio::task::JoinHandle<bool>> = None;
+
+    fn spawn_cdp_input_task(
+        input_mgr: Arc<SessionInputManager>,
+        lease: crate::browser_host::devtools::DevToolsLease,
+        proxy_route: DevToolsProxyReleaseRoute,
+        input_write_tx: mpsc::Sender<ProxyInputWriteRequest>,
+        call_id: u64,
+        json: String,
+        effect: CdpInputEffect,
+    ) -> tokio::task::JoinHandle<bool> {
+        tokio::spawn(async move {
+            let Some(_op_permit) = input_mgr
+                .try_acquire_devtools_op_permit(lease.control_epoch, &lease.viewer_id)
+                .await
+            else {
+                return false;
+            };
+            let Some(gate) = input_mgr
+                .begin_devtools_input_dispatch(lease.control_epoch, &lease.viewer_id, &lease.cancel)
+                .await
+            else {
+                return false;
+            };
+            let cdp_target = match get_producer(&lease.browser_session_id).await {
+                Some(producer)
+                    if producer.target_id() == lease.native_target_id
+                        && producer.browser_incarnation() == lease.browser_incarnation =>
+                {
+                    match producer.ensure_page_session().await {
+                        Ok(page_session_id) => Some(NativeInputTarget {
+                            client: producer.cdp_client.clone(),
+                            page_session_id,
+                            geometry: producer.geometry().await,
+                        }),
+                        Err(_) => None,
+                    }
+                }
+                _ => None,
+            };
+            let identity = CapturedNativeIdentity {
+                native_target_id: lease.native_target_id.clone(),
+                browser_incarnation: lease.browser_incarnation.clone(),
+                profile_epoch: lease.profile_epoch,
+                cdp_target,
+                proxy_route: Some(proxy_route),
+            };
+            let pending_op = match input_mgr
+                .prepare_cdp_input_op(
+                    &gate,
+                    lease.control_epoch,
+                    &lease.viewer_id,
+                    identity,
+                    &effect,
+                )
+                .await
+            {
+                Ok(op) => op,
+                Err(_) => return false,
+            };
+            if lease.cancel.is_cancelled() {
+                if let Some(op) = pending_op {
+                    input_mgr.reject_native_op(&gate, op).await;
+                }
+                return false;
+            }
+            let (write_done_tx, write_done_rx) = oneshot::channel();
+            let (reply_tx, reply_rx) = oneshot::channel();
+            if input_write_tx
+                .send(ProxyInputWriteRequest {
+                    json,
+                    call_id,
+                    write_done: write_done_tx,
+                    reply: reply_tx,
+                })
+                .await
+                .is_err()
+            {
+                if let Some(op) = pending_op {
+                    input_mgr.reject_native_op(&gate, op).await;
+                }
+                return false;
+            }
+            match write_done_rx.await {
+                Ok(ProxyWriteOutcome::Written) => {}
+                Ok(ProxyWriteOutcome::NotWritten) => {
+                    if let Some(op) = pending_op {
+                        input_mgr.reject_native_op(&gate, op).await;
+                    }
+                    return false;
+                }
+                Ok(ProxyWriteOutcome::Ambiguous) | Err(_) => {
+                    if let Some(op) = pending_op {
+                        input_mgr.mark_native_op_ambiguous(&gate, op).await;
+                    } else {
+                        input_mgr.mark_native_outcome_uncertain();
+                    }
+                    return false;
+                }
+            }
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(COMMAND_TIMEOUT_SECS),
+                reply_rx,
+            )
+            .await;
+            match outcome {
+                Ok(Ok(Ok(()))) => {
+                    if let Some(op) = pending_op {
+                        input_mgr.confirm_native_op(&gate, op).await;
+                    }
+                    true
+                }
+                Ok(Ok(Err(err @ CdpError::Protocol { .. }))) => {
+                    tracing::debug!(call_id, %err, "DevTools CDP input rejected by native target");
+                    if let Some(op) = pending_op {
+                        input_mgr.reject_native_op(&gate, op).await;
+                    }
+                    true
+                }
+                Ok(Ok(Err(_))) | Ok(Err(_)) | Err(_) => {
+                    if let Some(op) = pending_op {
+                        input_mgr.mark_native_op_ambiguous(&gate, op).await;
+                    } else {
+                        input_mgr.mark_native_outcome_uncertain();
+                    }
+                    false
+                }
+            }
+        })
+    }
+
+    fn resolve_reply_from_upstream(
+        val: &serde_json::Value,
+        pending_cleanup_replies: &mut HashMap<u64, oneshot::Sender<Result<(), CdpError>>>,
+        pending_input_replies: &mut HashMap<u64, oneshot::Sender<Result<(), CdpError>>>,
+    ) -> bool {
+        let Some(id) = val.get("id").and_then(serde_json::Value::as_u64) else {
+            return false;
+        };
+        let reply_result = if let Some(err) = val.get("error") {
+            let code = err
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(-32000);
+            let message = err
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("CDP error")
+                .to_string();
+            Err(CdpError::Protocol { code, message })
+        } else {
+            Ok(())
+        };
+        if let Some(tx) = pending_cleanup_replies.remove(&id) {
+            let _ = tx.send(reply_result);
+            return true;
+        }
+        if let Some(tx) = pending_input_replies.remove(&id) {
+            let _ = tx.send(reply_result);
+        }
+        false
+    }
+
+    let mut upstream_alive = true;
+    let mut upstream_sink_poisoned = false;
+
     loop {
+        if active_cdp_input.is_none() {
+            if let Some((call_id, json, effect)) = queued_cdp_inputs.pop_front() {
+                active_cdp_input = Some(spawn_cdp_input_task(
+                    input_mgr.clone(),
+                    lease.clone(),
+                    proxy_route.clone(),
+                    input_write_tx.clone(),
+                    call_id,
+                    json,
+                    effect,
+                ));
+            }
+        }
+        let has_active_input = active_cdp_input.is_some();
+        let active_input_fut = async {
+            match active_cdp_input.as_mut() {
+                Some(handle) => handle.await,
+                None => futures_util::future::pending().await,
+            }
+        };
+
         tokio::select! {
+            biased;
             _ = &mut deadline_sleep, if deadline_at.is_some() => break,
             _ = lease.cancel.cancelled() => break,
             _ = abort_rx.recv() => break,
-            msg = client_ws.next() => {
+            cmd = cleanup_rx.recv() => {
+                let Some(cmd) = cmd else { break; };
+                if pending_cleanup_replies.len() >= MAX_PENDING_CDP_REPLIES {
+                    let _ = cmd.reply.send(Err(CdpError::TooManyPendingCommands {
+                        current: pending_cleanup_replies.len(),
+                        max: MAX_PENDING_CDP_REPLIES,
+                    }));
+                    continue;
+                }
+                let cid = next_cleanup_id;
+                next_cleanup_id = next_cleanup_id.saturating_add(1);
+                let payload = serde_json::json!({
+                    "id": cid,
+                    "method": cmd.method,
+                    "params": cmd.params,
+                })
+                .to_string();
+                pending_cleanup_replies.insert(cid, cmd.reply);
+                if write_with_outcome(upstream_sink.send(UpstreamMessage::Text(payload.into()))).await != WriteOutcome::Ok {
+                    if let Some(tx) = pending_cleanup_replies.remove(&cid) {
+                        let _ = tx.send(Err(CdpError::ConnectionClosed));
+                    }
+                    upstream_alive = false;
+                    upstream_sink_poisoned = true;
+                    break;
+                }
+            }
+            req = input_write_rx.recv() => {
+                let Some(req) = req else { break; };
+                if lease.cancel.is_cancelled()
+                    || pending_input_replies.len() >= MAX_PENDING_CDP_REPLIES
+                    || pending_input_replies.contains_key(&req.call_id)
+                {
+                    let _ = req.write_done.send(ProxyWriteOutcome::NotWritten);
+                    continue;
+                }
+                pending_input_replies.insert(req.call_id, req.reply);
+                let (outcome, aborted) = write_with_cancel(
+                    upstream_sink.send(UpstreamMessage::Text(req.json.into())),
+                    &mut abort_rx,
+                    deadline_at,
+                    Some(&lease.cancel),
+                )
+                .await;
+                if outcome == WriteOutcome::Ok && !aborted {
+                    let _ = req.write_done.send(ProxyWriteOutcome::Written);
+                } else {
+                    pending_input_replies.remove(&req.call_id);
+                    let _ = req.write_done.send(ProxyWriteOutcome::Ambiguous);
+                    upstream_alive = false;
+                    upstream_sink_poisoned = true;
+                    break;
+                }
+            }
+            joined = active_input_fut, if has_active_input => {
+                active_cdp_input = None;
+                let ok = matches!(joined, Ok(true));
+                if !ok {
+                    break;
+                }
+            }
+            msg = client_stream.next() => {
                 let ok = match msg {
                     Some(Ok(AxumWsMessage::Text(t))) => {
                         let Some(memory_bound) = devtools_json_memory_bound(t.as_str()) else { break; };
                         let Ok(_mem) = global_memory_controller().try_reserve(memory_bound) else { break; };
-                        match inspect_devtools_client_message(t.as_str(), &lease.native_target_id) {
-                            ClientMessageVerdict::Forward(message) => {
-                                write_with_cancel(upstream_ws.send(UpstreamMessage::Text(message.into())), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                        match classify_devtools_client_message(t.as_str(), &lease.native_target_id) {
+                            ClassifiedDevToolsMessage::Forward { json, call_id, input_effect: Some(effect) } => {
+                                if active_cdp_input.is_none() && queued_cdp_inputs.is_empty() {
+                                    active_cdp_input = Some(spawn_cdp_input_task(
+                                        input_mgr.clone(),
+                                        lease.clone(),
+                                        proxy_route.clone(),
+                                        input_write_tx.clone(),
+                                        call_id,
+                                        json,
+                                        effect,
+                                    ));
+                                    true
+                                } else if queued_cdp_inputs.len() < MAX_QUEUED_CDP_INPUT {
+                                    queued_cdp_inputs.push_back((call_id, json, effect));
+                                    true
+                                } else {
+                                    false
+                                }
                             }
-                            ClientMessageVerdict::Reject(Some(err)) => {
-                                write_with_cancel(client_ws.send(AxumWsMessage::Text(err.into())), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                            ClassifiedDevToolsMessage::Forward { json, .. } => {
+                                if let Some(_op_permit) = input_mgr
+                                    .try_acquire_devtools_op_permit(lease.control_epoch, &lease.viewer_id)
+                                    .await
+                                {
+                                    if lease.cancel.is_cancelled() {
+                                        false
+                                    } else {
+                                        let (outcome, aborted) = write_with_cancel(
+                                            upstream_sink.send(UpstreamMessage::Text(json.into())),
+                                            &mut abort_rx,
+                                            deadline_at,
+                                            Some(&lease.cancel),
+                                        )
+                                        .await;
+                                        if outcome != WriteOutcome::Ok || aborted {
+                                            upstream_alive = false;
+                                            upstream_sink_poisoned = true;
+                                        }
+                                        outcome == WriteOutcome::Ok && !aborted
+                                    }
+                                } else {
+                                    false
+                                }
                             }
-                            ClientMessageVerdict::Reject(None) => false,
+                            ClassifiedDevToolsMessage::Reject(Some(err)) => {
+                                write_with_cancel(
+                                    client_sink.send(AxumWsMessage::Text(err.into())),
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    Some(&lease.cancel),
+                                )
+                                .await
+                                .0
+                                    == WriteOutcome::Ok
+                            }
+                            ClassifiedDevToolsMessage::Reject(None) => false,
                         }
                     }
                     // CDP commands are text JSON envelopes; binary input is never relayed.
                     Some(Ok(AxumWsMessage::Binary(_))) => false,
                     Some(Ok(AxumWsMessage::Ping(p))) => {
-                        write_with_cancel(upstream_ws.send(UpstreamMessage::Ping(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                        let (outcome, aborted) = write_with_cancel(
+                            upstream_sink.send(UpstreamMessage::Ping(p)),
+                            &mut abort_rx,
+                            deadline_at,
+                            Some(&lease.cancel),
+                        )
+                        .await;
+                        if outcome != WriteOutcome::Ok || aborted {
+                            upstream_alive = false;
+                            upstream_sink_poisoned = true;
+                        }
+                        outcome == WriteOutcome::Ok && !aborted
                     }
                     Some(Ok(AxumWsMessage::Pong(p))) => {
-                        write_with_cancel(upstream_ws.send(UpstreamMessage::Pong(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                        let (outcome, aborted) = write_with_cancel(
+                            upstream_sink.send(UpstreamMessage::Pong(p)),
+                            &mut abort_rx,
+                            deadline_at,
+                            Some(&lease.cancel),
+                        )
+                        .await;
+                        if outcome != WriteOutcome::Ok || aborted {
+                            upstream_alive = false;
+                            upstream_sink_poisoned = true;
+                        }
+                        outcome == WriteOutcome::Ok && !aborted
                     }
                     Some(Ok(AxumWsMessage::Close(frame))) => {
                         tracing::debug!(target_id = %lease.native_target_id, ?frame, "DevTools client sent close");
@@ -2579,36 +3108,81 @@ async fn relay_devtools_socket(
                     break;
                 }
             }
-            msg = upstream_ws.next() => {
+            msg = upstream_stream.next() => {
                 let ok = match msg {
                     Some(Ok(UpstreamMessage::Text(t))) => {
-                        let Some(memory_bound) = devtools_json_memory_bound(t.as_str()) else { break; };
-                        let Ok(_mem) = global_memory_controller().try_reserve(memory_bound) else { break; };
-                        if !upstream_filter.should_forward(t.as_str(), &lease.native_target_id) {
+                        let Some(memory_bound) = devtools_json_memory_bound(t.as_str()) else {
+                            upstream_alive = false;
+                            break;
+                        };
+                        let Ok(_mem) = global_memory_controller().try_reserve(memory_bound) else {
+                            upstream_alive = false;
+                            break;
+                        };
+                        let consumed_cleanup = serde_json::from_str::<serde_json::Value>(t.as_str())
+                            .ok()
+                            .is_some_and(|val| {
+                                resolve_reply_from_upstream(
+                                    &val,
+                                    &mut pending_cleanup_replies,
+                                    &mut pending_input_replies,
+                                )
+                            });
+                        if consumed_cleanup || !upstream_filter.should_forward(t.as_str(), &lease.native_target_id) {
                             true
                         } else {
-                            write_with_cancel(client_ws.send(AxumWsMessage::Text(t.as_str().into())), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                            write_with_cancel(
+                                client_sink.send(AxumWsMessage::Text(t.as_str().into())),
+                                &mut abort_rx,
+                                deadline_at,
+                                Some(&lease.cancel),
+                            )
+                            .await
+                            .0
+                                == WriteOutcome::Ok
                         }
                     }
                     // Native DevTools application messages are text JSON only.
-                    Some(Ok(UpstreamMessage::Binary(_))) => false,
+                    Some(Ok(UpstreamMessage::Binary(_))) => {
+                        upstream_alive = false;
+                        false
+                    }
                     Some(Ok(UpstreamMessage::Ping(p))) => {
-                        write_with_cancel(client_ws.send(AxumWsMessage::Ping(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                        write_with_cancel(
+                            client_sink.send(AxumWsMessage::Ping(p)),
+                            &mut abort_rx,
+                            deadline_at,
+                            Some(&lease.cancel),
+                        )
+                        .await
+                        .0
+                            == WriteOutcome::Ok
                     }
                     Some(Ok(UpstreamMessage::Pong(p))) => {
-                        write_with_cancel(client_ws.send(AxumWsMessage::Pong(p)), &mut abort_rx, deadline_at).await.0 == WriteOutcome::Ok
+                        write_with_cancel(
+                            client_sink.send(AxumWsMessage::Pong(p)),
+                            &mut abort_rx,
+                            deadline_at,
+                            Some(&lease.cancel),
+                        )
+                        .await
+                        .0
+                            == WriteOutcome::Ok
                     }
                     Some(Ok(UpstreamMessage::Frame(_))) => true,
                     Some(Ok(UpstreamMessage::Close(frame))) => {
                         tracing::debug!(target_id = %lease.native_target_id, ?frame, "Chromium DevTools websocket sent close");
+                        upstream_alive = false;
                         false
                     }
                     Some(Err(error)) => {
                         tracing::warn!(target_id = %lease.native_target_id, %error, "Chromium DevTools websocket failed");
+                        upstream_alive = false;
                         false
                     }
                     None => {
                         tracing::debug!(target_id = %lease.native_target_id, "Chromium DevTools websocket ended");
+                        upstream_alive = false;
                         false
                     }
                 };
@@ -2621,18 +3195,159 @@ async fn relay_devtools_socket(
     }
 
     drop(_watcher_guard);
+    drop(client_stream);
     let _ = timeout(
-        std::time::Duration::from_millis(500),
-        upstream_ws.close(None),
+        std::time::Duration::from_millis(250),
+        client_sink.send(AxumWsMessage::Close(None)),
     )
     .await;
-    let _ = timeout(
-        std::time::Duration::from_millis(500),
-        client_ws.send(AxumWsMessage::Close(None)),
-    )
-    .await;
-    drop(permit);
+    drop(client_sink);
+
+    queued_cdp_inputs.clear();
     global_devtools_leases().revoke_by_hash(&hash).await;
+
+    if !upstream_alive {
+        input_write_rx.close();
+        while let Ok(req) = input_write_rx.try_recv() {
+            let _ = req.write_done.send(ProxyWriteOutcome::NotWritten);
+        }
+        for (_, tx) in pending_input_replies.drain() {
+            let _ = tx.send(Err(CdpError::ConnectionClosed));
+        }
+        for (_, tx) in pending_cleanup_replies.drain() {
+            let _ = tx.send(Err(CdpError::ConnectionClosed));
+        }
+        if let Some(handle) = active_cdp_input.take() {
+            let _ = handle.await;
+        }
+        if input_mgr
+            .has_unresolved_devtools_activity(lease.control_epoch)
+            .await
+        {
+            if let Some(handle) = input_mgr
+                .fence_devtools_authority(lease.control_epoch, &lease.viewer_id)
+                .await
+            {
+                let _ = handle.await;
+            }
+        }
+    } else {
+        let has_unresolved = input_mgr
+            .has_unresolved_devtools_activity(lease.control_epoch)
+            .await
+            || active_cdp_input.is_some();
+        let authority_still_live = input_mgr
+            .is_control_authority_live(lease.control_epoch, &lease.viewer_id)
+            .await;
+        let own_fence = if has_unresolved && authority_still_live {
+            input_mgr
+                .fence_devtools_authority(lease.control_epoch, &lease.viewer_id)
+                .await
+        } else {
+            None
+        };
+        let needs_cleanup_service = has_unresolved || !authority_still_live;
+        if needs_cleanup_service {
+            let cleanup_timeout = DEVTOOLS_OP_DRAIN_TIMEOUT
+                + std::time::Duration::from_secs(COMMAND_TIMEOUT_SECS + 2);
+            let cleanup_deadline = tokio::time::sleep(cleanup_timeout);
+            tokio::pin!(cleanup_deadline);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = epoch_tracker.wait_cleanup_done() => break,
+                    _ = &mut cleanup_deadline => break,
+                    joined = async {
+                        match active_cdp_input.as_mut() {
+                            Some(handle) => handle.await,
+                            None => futures_util::future::pending().await,
+                        }
+                    }, if active_cdp_input.is_some() => {
+                        let _ = joined;
+                        active_cdp_input = None;
+                    }
+                    req = input_write_rx.recv() => {
+                        if let Some(req) = req {
+                            let _ = req.write_done.send(ProxyWriteOutcome::NotWritten);
+                        }
+                    }
+                    cmd = cleanup_rx.recv() => {
+                        let Some(cmd) = cmd else { break; };
+                        if pending_cleanup_replies.len() >= MAX_PENDING_CDP_REPLIES {
+                            let _ = cmd.reply.send(Err(CdpError::TooManyPendingCommands {
+                                current: pending_cleanup_replies.len(),
+                                max: MAX_PENDING_CDP_REPLIES,
+                            }));
+                            continue;
+                        }
+                        let cid = next_cleanup_id;
+                        next_cleanup_id = next_cleanup_id.saturating_add(1);
+                        let payload = serde_json::json!({
+                            "id": cid,
+                            "method": cmd.method,
+                            "params": cmd.params,
+                        })
+                        .to_string();
+                        pending_cleanup_replies.insert(cid, cmd.reply);
+                        if write_with_outcome(upstream_sink.send(UpstreamMessage::Text(payload.into()))).await != WriteOutcome::Ok {
+                            if let Some(tx) = pending_cleanup_replies.remove(&cid) {
+                                let _ = tx.send(Err(CdpError::ConnectionClosed));
+                            }
+                            upstream_sink_poisoned = true;
+                            break;
+                        }
+                    }
+                    msg = upstream_stream.next() => {
+                        match msg {
+                            Some(Ok(UpstreamMessage::Text(t))) => {
+                                if let Some(memory_bound) = devtools_json_memory_bound(t.as_str()) {
+                                    if global_memory_controller().try_reserve(memory_bound).is_ok() {
+                                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                            resolve_reply_from_upstream(
+                                                &val,
+                                                &mut pending_cleanup_replies,
+                                                &mut pending_input_replies,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Some(Ok(UpstreamMessage::Binary(_)))
+                            | Some(Ok(UpstreamMessage::Close(_)))
+                            | Some(Err(_))
+                            | None => break,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            input_write_rx.close();
+            while let Ok(req) = input_write_rx.try_recv() {
+                let _ = req.write_done.send(ProxyWriteOutcome::NotWritten);
+            }
+            for (_, tx) in pending_input_replies.drain() {
+                let _ = tx.send(Err(CdpError::ConnectionClosed));
+            }
+            for (_, tx) in pending_cleanup_replies.drain() {
+                let _ = tx.send(Err(CdpError::ConnectionClosed));
+            }
+            if let Some(handle) = active_cdp_input.take() {
+                let _ = handle.await;
+            }
+            if let Some(handle) = own_fence {
+                let _ = handle.await;
+            }
+        }
+    }
+
+    if !upstream_sink_poisoned {
+        let _ = timeout(
+            std::time::Duration::from_millis(500),
+            upstream_sink.close(),
+        )
+        .await;
+    }
+    drop(permit);
 }
 
 pub use crate::browser_host::cdp_gateway::{

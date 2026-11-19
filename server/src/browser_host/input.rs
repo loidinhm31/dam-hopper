@@ -2,16 +2,21 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{watch, Mutex, MutexGuard, OwnedMutexGuard};
+use subtle::ConstantTimeEq;
+use tokio::sync::{watch, Mutex, MutexGuard, Notify, OwnedMutexGuard};
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::input_native_release::{spawn_expiry_watcher, NativeInputTarget};
+use super::input_native_release::{
+    spawn_expiry_watcher, CapturedNativeIdentity, NativeInputTarget,
+    NativePointerPosition, ReleaseInputEvent,
+};
 use super::protocol::TargetGeometry;
 
 pub const LEASE_TTL: Duration = Duration::from_secs(30);
@@ -22,6 +27,8 @@ pub const MAX_INSERT_TEXT_BYTES: usize = 4096;
 pub const MAX_FIND_QUERY_CHARS: usize = 256;
 pub const MAX_SELECTED_TEXT_BYTES: usize = 64 * 1024; // 64 KiB
 pub const MAX_HELD_KEYS: usize = 64;
+pub const MAX_INFLIGHT_DEVTOOLS_OPS: usize = 64;
+pub const DEVTOOLS_OP_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub type LeaseEndHook =
     Arc<dyn Fn(u64) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
@@ -265,43 +272,130 @@ pub struct LeaseState {
     ending: bool,
 }
 
-/// Everything natively held on behalf of the lease, captured at press time so a release can
-/// replay exactly what is down (key + code, button + last pointer position) on the original
-/// native identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputChannel {
+    UiControl,
+    DevToolsProxy,
+}
+
+#[derive(Debug, Clone)]
+pub struct HeldKeyEntry {
+    pub key: String,
+    pub code: String,
+    pub confirmed: bool,
+    pub pending_down: usize,
+    pub pending_up: usize,
+    pub uncertain: bool,
+    pub last_channel: InputChannel,
+}
+
+impl HeldKeyEntry {
+    fn is_held_or_pending(&self) -> bool {
+        self.confirmed || self.pending_down > 0 || self.uncertain
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.confirmed && self.pending_down == 0 && self.pending_up == 0 && !self.uncertain
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HeldButtonEntry {
+    pub confirmed: bool,
+    pub pending_down: usize,
+    pub pending_up: usize,
+    pub uncertain: bool,
+    pub last_channel: InputChannel,
+}
+
+impl HeldButtonEntry {
+    fn is_held_or_pending(&self) -> bool {
+        self.confirmed || self.pending_down > 0 || self.uncertain
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.confirmed && self.pending_down == 0 && self.pending_up == 0 && !self.uncertain
+    }
+}
+
+#[derive(Debug, Clone)]
+enum PendingOpTarget {
+    KeyDown((bool, String)),
+    KeyUp((bool, String)),
+    ButtonDown(MouseButton),
+    ButtonUp(MouseButton),
+}
+
+#[derive(Debug, Clone)]
+struct PendingOpRecord {
+    lease_epoch: u64,
+    target: PendingOpTarget,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PendingLedgerOp {
+    pub op_id: u64,
+    pub lease_epoch: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum MouseLedgerDelta {
+    Down(MouseButton),
+    Up(MouseButton),
+}
+
+/// Everything natively held (confirmed or pending) on behalf of the active control epoch,
+/// captured at press time so a release can replay exactly what is down on the original native
+/// identity across both UI control and DevTools proxy channels.
 #[derive(Debug, Clone, Default)]
 pub struct HeldInputState {
+    epoch: Option<u64>,
     /// Physical code when present; empty-code events use their logical key as fallback.
-    held_keys: HashMap<(bool, String), (String, String)>,
-    pub held_buttons: HashSet<MouseButton>,
-    /// Last pointer position (image fractions): buttons are released where the pointer is.
-    pub pointer: (f64, f64),
+    held_keys: HashMap<(bool, String), HeldKeyEntry>,
+    pub held_buttons: HashMap<MouseButton, HeldButtonEntry>,
+    /// Last pointer position (UI fractions or CDP CSS coordinates).
+    pub pointer: NativePointerPosition,
     pub modifiers: u32,
     /// Native identity the held input was dispatched on.
-    target: Option<NativeInputTarget>,
+    identity: Option<CapturedNativeIdentity>,
     /// Set while a failed release left native input held (input unavailable).
     release_failed: Option<String>,
     /// Bumped on every change to the held keys/buttons: a release only forgets what it
     /// snapshotted while this generation is unchanged (compare-and-clear).
     generation: u64,
+    next_op_id: u64,
+    pending_ops: HashMap<u64, PendingOpRecord>,
 }
 
 impl HeldInputState {
-    pub fn button_release_events(&self) -> Vec<InputEvent> {
-        let (u, v) = self.pointer;
+    fn key_identity(key: &str, code: &str) -> (bool, String) {
+        (code.is_empty(), if code.is_empty() { key.to_string() } else { code.to_string() })
+    }
+
+    pub fn button_release_events(&self) -> Vec<ReleaseInputEvent> {
+        let position = self.pointer;
         self.held_buttons
             .iter()
-            .map(|button| InputEvent::PointerUp { button: *button, u, v, modifiers: 0 })
+            .filter(|(_, entry)| entry.is_held_or_pending())
+            .map(|(button, _)| ReleaseInputEvent::PointerUp {
+                button: *button,
+                position,
+            })
             .collect()
     }
 
-    /// Release events for every held button and key, in that order.
-    pub fn generate_release_events(&self) -> Vec<InputEvent> {
+    /// Release events for every pending or confirmed held button and key, in that order.
+    pub fn generate_release_events(&self) -> Vec<ReleaseInputEvent> {
         let mut releases = self.button_release_events();
-        releases.extend(self.held_keys.values().map(|(key, code)| InputEvent::KeyUp {
-            key: key.clone(),
-            code: code.clone(),
-            modifiers: 0,
-        }));
+        releases.extend(
+            self.held_keys
+                .values()
+                .filter(|entry| entry.is_held_or_pending())
+                .map(|entry| ReleaseInputEvent::KeyUp {
+                    key: entry.key.clone(),
+                    code: entry.code.clone(),
+                }),
+        );
         releases
     }
 
@@ -309,22 +403,131 @@ impl HeldInputState {
         self.held_keys.is_empty() && self.held_buttons.is_empty()
     }
 
+    fn clear_metadata_if_empty(&mut self) {
+        if self.is_empty() && self.pending_ops.is_empty() {
+            self.modifiers = 0;
+            self.identity = None;
+            self.epoch = None;
+        }
+    }
+
     /// Forgets exactly what a successful release dispatched (later holds stay tracked).
-    fn forget_released(&mut self, released: &[InputEvent]) {
+    fn forget_released(&mut self, released: &[ReleaseInputEvent]) {
         for event in released {
             match event {
-                InputEvent::PointerUp { button, .. } => {
+                ReleaseInputEvent::PointerUp { button, .. } => {
                     self.held_buttons.remove(button);
                 }
-                InputEvent::KeyUp { key, code, .. } => {
-                    self.held_keys.remove(&(code.is_empty(), if code.is_empty() { key.clone() } else { code.clone() }));
+                ReleaseInputEvent::KeyUp { key, code } => {
+                    self.held_keys.remove(&Self::key_identity(key, code));
                 }
-                _ => {}
             }
         }
-        if self.is_empty() {
-            self.modifiers = 0;
-            self.target = None;
+        self.pending_ops.clear();
+        self.clear_metadata_if_empty();
+    }
+}
+
+pub(crate) struct EpochOpTracker {
+    cancel: CancellationToken,
+    in_flight: AtomicUsize,
+    drained: Notify,
+    fenced: AtomicBool,
+    cleanup_finished: AtomicBool,
+    cleanup_done: Notify,
+}
+
+impl EpochOpTracker {
+    fn new() -> Self {
+        Self {
+            cancel: CancellationToken::new(),
+            in_flight: AtomicUsize::new(0),
+            drained: Notify::new(),
+            fenced: AtomicBool::new(false),
+            cleanup_finished: AtomicBool::new(false),
+            cleanup_done: Notify::new(),
+        }
+    }
+
+    fn fence(&self) {
+        self.fenced.store(true, Ordering::Release);
+        self.cancel.cancel();
+        if self.in_flight.load(Ordering::Acquire) == 0 {
+            self.drained.notify_waiters();
+        }
+    }
+
+    pub(crate) fn mark_cleanup_done(&self) {
+        self.cleanup_finished.store(true, Ordering::Release);
+        self.cleanup_done.notify_waiters();
+    }
+
+    pub(crate) async fn wait_cleanup_done(&self) {
+        loop {
+            let notified = self.cleanup_done.notified();
+            if self.cleanup_finished.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<DevToolsOpPermit> {
+        if self.fenced.load(Ordering::Acquire) || self.cancel.is_cancelled() {
+            return None;
+        }
+        let mut current = self.in_flight.load(Ordering::Acquire);
+        loop {
+            if current >= MAX_INFLIGHT_DEVTOOLS_OPS {
+                return None;
+            }
+            match self.in_flight.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+        if self.fenced.load(Ordering::Acquire) || self.cancel.is_cancelled() {
+            if self.in_flight.fetch_sub(1, Ordering::AcqRel) == 1 {
+                self.drained.notify_waiters();
+            }
+            return None;
+        }
+        Some(DevToolsOpPermit {
+            tracker: self.clone(),
+        })
+    }
+
+    async fn drain_bounded(&self, max_wait: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + max_wait;
+        loop {
+            let notified = self.drained.notified();
+            if self.in_flight.load(Ordering::Acquire) == 0 {
+                return true;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            if tokio::time::timeout(deadline - now, notified).await.is_err() {
+                return self.in_flight.load(Ordering::Acquire) == 0;
+            }
+        }
+    }
+}
+
+pub(crate) struct DevToolsOpPermit {
+    tracker: Arc<EpochOpTracker>,
+}
+
+impl Drop for DevToolsOpPermit {
+    fn drop(&mut self) {
+        if self.tracker.in_flight.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.tracker.drained.notify_waiters();
         }
     }
 }
@@ -401,6 +604,9 @@ pub struct SessionInputManagerState {
     expiry: watch::Sender<Option<Instant>>,
     expiry_watcher_started: AtomicBool,
     lease_end_hook: std::sync::Mutex<Option<LeaseEndHook>>,
+    /// Per-epoch DevTools operation tracking and cancellation tokens.
+    epoch_ops: std::sync::Mutex<HashMap<u64, Arc<EpochOpTracker>>>,
+    session_id: std::sync::Mutex<Option<String>>,
 }
 
 impl Default for SessionInputManager {
@@ -437,6 +643,8 @@ impl SessionInputManager {
             expiry: watch::channel(None).0,
             expiry_watcher_started: AtomicBool::new(false),
             lease_end_hook: std::sync::Mutex::new(None),
+            epoch_ops: std::sync::Mutex::new(HashMap::new()),
+            session_id: std::sync::Mutex::new(None),
         }))
     }
 
@@ -455,6 +663,242 @@ impl SessionInputManager {
     }
     pub fn set_lease_end_hook(&self, hook: LeaseEndHook) {
         *self.lease_end_hook.lock().unwrap() = Some(hook);
+    }
+
+    pub fn set_session_id(&self, session_id: &str) {
+        let mut guard = self.session_id.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(session_id.to_string());
+        }
+    }
+
+    pub(crate) fn epoch_tracker(&self, epoch: u64) -> Arc<EpochOpTracker> {
+        self.get_or_insert_epoch_tracker(epoch)
+    }
+
+    fn get_or_insert_epoch_tracker(&self, epoch: u64) -> Arc<EpochOpTracker> {
+        let mut map = self.epoch_ops.lock().unwrap();
+        map.entry(epoch)
+            .or_insert_with(|| Arc::new(EpochOpTracker::new()))
+            .clone()
+    }
+
+    fn fence_epoch_ops(&self, epoch: u64) -> Option<Arc<EpochOpTracker>> {
+        let tracker = self.epoch_ops.lock().unwrap().get(&epoch).cloned();
+        if let Some(t) = &tracker {
+            t.fence();
+        }
+        tracker
+    }
+
+    fn take_epoch_tracker(&self, epoch: u64) -> Option<Arc<EpochOpTracker>> {
+        let tracker = self.epoch_ops.lock().unwrap().remove(&epoch);
+        if let Some(t) = &tracker {
+            t.fence();
+        }
+        tracker
+    }
+
+    async fn drain_and_revoke_epoch_devtools(
+        &self,
+        epoch: u64,
+        tracker: Option<Arc<EpochOpTracker>>,
+    ) -> Result<(), InputError> {
+        let session_id = self.session_id.lock().unwrap().clone();
+        if let Some(sid) = session_id {
+            super::devtools::global_devtools_leases()
+                .revoke_by_control_epoch(&sid, epoch)
+                .await;
+        }
+        if let Some(tracker) = tracker {
+            if !tracker.drain_bounded(DEVTOOLS_OP_DRAIN_TIMEOUT).await {
+                self.mark_native_outcome_uncertain();
+                return Err(InputError::ReleaseFailed(
+                    "in-flight DevTools operation did not settle before timeout".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validates control authority for DevTools lease minting, returning `(control_epoch, epoch_cancel)`.
+    pub async fn verify_control_authority_for_mint(
+        &self,
+        viewer_id: &str,
+        lease_token: &str,
+    ) -> Result<(u64, CancellationToken), InputError> {
+        if self.native_outcome_uncertain.load(Ordering::Acquire)
+            || self.recovery_suspended.load(Ordering::Acquire)
+        {
+            return Err(InputError::GeometryUnavailable);
+        }
+        if self.held_state.lock().await.release_failed.is_some() {
+            return Err(InputError::GeometryUnavailable);
+        }
+        let now = Instant::now();
+        let lease_guard = self.lease.lock().await;
+        let lease = lease_guard.as_ref().ok_or(InputError::LeaseNotFound)?;
+        if lease.ending {
+            return Err(InputError::LeaseNotFound);
+        }
+        if lease.expires_at <= now {
+            return Err(InputError::LeaseExpired);
+        }
+        if lease.viewer_id != viewer_id {
+            return Err(InputError::NotLeaseHolder);
+        }
+        let token_matches = lease.lease_token.len() == lease_token.len()
+            && bool::from(lease.lease_token.as_bytes().ct_eq(lease_token.as_bytes()));
+        if !token_matches {
+            return Err(InputError::NotLeaseHolder);
+        }
+        let tracker = self.get_or_insert_epoch_tracker(lease.lease_epoch);
+        if tracker.fenced.load(Ordering::Acquire) || tracker.cancel.is_cancelled() {
+            return Err(InputError::LeaseNotFound);
+        }
+        Ok((lease.lease_epoch, tracker.cancel.clone()))
+    }
+
+    /// Checks whether `(control_epoch, viewer_id)` is still the current live non-ending authority.
+    pub async fn is_control_authority_live(&self, control_epoch: u64, viewer_id: &str) -> bool {
+        if self.native_outcome_uncertain.load(Ordering::Acquire)
+            || self.recovery_suspended.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let now = Instant::now();
+        let lease_guard = self.lease.lock().await;
+        let Some(lease) = lease_guard.as_ref() else {
+            return false;
+        };
+        if lease.ending
+            || lease.lease_epoch != control_epoch
+            || lease.viewer_id != viewer_id
+            || lease.expires_at <= now
+        {
+            return false;
+        }
+        let tracker = self.epoch_ops.lock().unwrap().get(&control_epoch).cloned();
+        tracker.is_none_or(|t| !t.fenced.load(Ordering::Acquire) && !t.cancel.is_cancelled())
+    }
+
+    pub(crate) async fn try_acquire_devtools_op_permit(
+        &self,
+        control_epoch: u64,
+        viewer_id: &str,
+    ) -> Option<DevToolsOpPermit> {
+        if self.native_outcome_uncertain.load(Ordering::Acquire)
+            || self.recovery_suspended.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let now = Instant::now();
+        let lease_guard = self.lease.lock().await;
+        let lease = lease_guard.as_ref()?;
+        if lease.ending
+            || lease.lease_epoch != control_epoch
+            || lease.viewer_id != viewer_id
+            || lease.expires_at <= now
+        {
+            return None;
+        }
+        let tracker = self.get_or_insert_epoch_tracker(control_epoch);
+        tracker.try_acquire()
+    }
+
+    pub(crate) async fn begin_devtools_input_dispatch(
+        &self,
+        control_epoch: u64,
+        viewer_id: &str,
+        cancel: &CancellationToken,
+    ) -> Option<OwnedMutexGuard<()>> {
+        let mut changed = self.queue_changed.subscribe();
+        loop {
+            changed.borrow_and_update();
+            let gate = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return None,
+                gate = self.native_gate.clone().lock_owned() => gate,
+            };
+            if cancel.is_cancelled() || self.native_outcome_uncertain.load(Ordering::Acquire) {
+                return None;
+            }
+            if self.dispatch_abandoned.load(Ordering::Acquire) != 0 {
+                drop(gate);
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return None,
+                    res = changed.changed() => {
+                        res.ok()?;
+                        continue;
+                    }
+                }
+            }
+            if !self.is_control_authority_live(control_epoch, viewer_id).await {
+                return None;
+            }
+            if self.held_state.lock().await.release_failed.is_some() {
+                return None;
+            }
+            return Some(gate);
+        }
+    }
+
+    /// Checks whether DevTools-originated ops/holds (or ambiguous failure state) remain unresolved.
+    /// UI-only held keys/buttons do not mark DevTools cleanup as needed on clean dock close.
+    pub async fn has_unresolved_devtools_activity(&self, control_epoch: u64) -> bool {
+        let has_ops = self
+            .epoch_ops
+            .lock()
+            .unwrap()
+            .get(&control_epoch)
+            .is_some_and(|t| t.in_flight.load(Ordering::Acquire) > 0);
+        if has_ops || self.native_outcome_uncertain.load(Ordering::Acquire) {
+            return true;
+        }
+        let held = self.held_state.lock().await;
+        held.release_failed.is_some()
+            || held
+                .held_keys
+                .values()
+                .any(|entry| entry.last_channel == InputChannel::DevToolsProxy && entry.is_held_or_pending())
+            || held
+                .held_buttons
+                .values()
+                .any(|entry| entry.last_channel == InputChannel::DevToolsProxy && entry.is_held_or_pending())
+    }
+
+    pub(crate) async fn fence_devtools_authority(
+        self: &Arc<Self>,
+        control_epoch: u64,
+        viewer_id: &str,
+    ) -> Option<tokio::task::JoinHandle<Result<Option<u64>, InputError>>> {
+        let tracker = {
+            let mut lease = self.lease.lock().await;
+            let current = lease.as_mut()?;
+            if current.lease_epoch != control_epoch || current.viewer_id != viewer_id {
+                return None;
+            }
+            self.advance_authority_generation();
+            current.ending = true;
+            self.cancel_registered_input(&current.lease_token);
+            self.fence_epoch_ops(control_epoch)
+        };
+        drop(tracker);
+        let viewer_owned = viewer_id.to_string();
+        let manager = self.clone();
+        Some(tokio::spawn(async move {
+            manager
+                .end_lease_owned(
+                    move |current| {
+                        Ok(current.is_some_and(|l| {
+                            l.lease_epoch == control_epoch && l.viewer_id == viewer_owned
+                        }))
+                    },
+                    true,
+                )
+                .await
+        }))
     }
 
 
@@ -493,8 +937,9 @@ impl SessionInputManager {
 
     /// Acquires cooperative control lease.
     ///
-    /// Returns lease token and expires_at unix ms. A release that failed earlier (native input
-    /// still held) is retried first; the lease is only granted once native state is clean.
+    /// Returns lease token and expires_at unix ms. Any prior authority is fenced, its DevTools
+    /// capabilities/ops are cancelled and drained, held native input (pending + confirmed) and
+    /// selection hooks are released and confirmed BEFORE the successor lease is published.
     pub async fn acquire_lease(
         &self,
         viewer_id: &str,
@@ -512,9 +957,19 @@ impl SessionInputManager {
         {
             return Err(InputError::GeometryUnavailable);
         }
-        let predecessor = {
-            let lease = self.lease.lock().await;
-            if let Some(existing) = lease.as_ref() {
+        if self.native_outcome_uncertain.load(Ordering::Acquire) {
+            let reason = self
+                .held_state
+                .lock()
+                .await
+                .release_failed
+                .clone()
+                .unwrap_or_else(|| "native input outcome is unresolved; close the browser session".into());
+            return Err(InputError::ReleaseFailed(reason));
+        }
+        let (ended_epoch, ended_token, predecessor_tracker, fenced_authority) = {
+            let lease_guard = self.lease.lock().await;
+            if let Some(existing) = lease_guard.as_ref() {
                 if existing.ending {
                     return Err(InputError::GeometryUnavailable);
                 }
@@ -524,47 +979,95 @@ impl SessionInputManager {
                         existing.viewer_id
                     )));
                 }
+                let epoch = existing.lease_epoch;
+                let token = existing.lease_token.clone();
+                // Keep a fenced tracker in `epoch_ops` until `lease_guard.take()` commits
+                // replacement so concurrent mints/permits cannot re-insert an unfenced tracker.
+                let tracker = self.get_or_insert_epoch_tracker(epoch);
+                tracker.fence();
+                (Some(epoch), Some(token), Some(tracker), authority)
+            } else {
+                (None, None, None, authority)
             }
-            lease.as_ref().map(|existing| existing.lease_token.clone())
         };
         // Cleanup owns the barrier independently; cancelling this request cannot abandon
-        // unresolved holds, and a cancelled request never publishes a successor.
-        let held = self.held_state.clone();
-        let mouse = self.dispatch_mouse.clone();
-        let uncertain = self.native_outcome_uncertain.clone();
+        // unresolved holds, and a cancelled request never replaces an active predecessor.
+        let manager = self.clone();
+        let hook = self.lease_end_hook.lock().unwrap().clone();
+        let predecessor_tracker_for_done = predecessor_tracker.clone();
         let cleanup = tokio::spawn(async move {
-            let result = Self::dispatch_held_release_state(&held, &mouse, &uncertain, false).await;
-            (gate, result)
+            let drain_result = if let Some(epoch) = ended_epoch {
+                manager.drain_and_revoke_epoch_devtools(epoch, predecessor_tracker).await
+            } else {
+                Ok(())
+            };
+            let release_result = if drain_result.is_ok() {
+                Self::dispatch_held_release_state(
+                    &manager.held_state,
+                    &manager.dispatch_mouse,
+                    &manager.native_outcome_uncertain,
+                    false,
+                )
+                .await
+            } else {
+                drain_result
+            };
+            if let Some(t) = &predecessor_tracker_for_done {
+                t.mark_cleanup_done();
+            }
+            (gate, release_result)
         });
         let (gate, result) = cleanup.await.map_err(|_| {
             InputError::ReleaseFailed("native cleanup task failed".into())
         })?;
         result?;
+        let mut ended_for_hook = None;
+        {
+            let mut lease_guard = self.lease.lock().await;
+            if self.authority_generation.load(Ordering::Acquire) != fenced_authority
+                || self.recovery_suspended.load(Ordering::Acquire)
+                || self.dispatch_abandoned.load(Ordering::Acquire) != 0
+                || self.native_outcome_uncertain.load(Ordering::Acquire)
+            {
+                return Err(InputError::GeometryUnavailable);
+            }
+            match (lease_guard.as_ref(), ended_token.as_deref()) {
+                (Some(existing), Some(expected)) if !existing.ending && existing.lease_token == expected => {
+                    if let Some(ended) = lease_guard.take() {
+                        let _ = self.take_epoch_tracker(ended.lease_epoch);
+                        self.advance_authority_generation();
+                        self.cancel_registered_input(&ended.lease_token);
+                        self.expiry.send_replace(None);
+                        *self.last_ended_lease.lock().await = Some((ended.lease_token, ended.lease_epoch));
+                        ended_for_hook = Some(ended.lease_epoch);
+                    }
+                }
+                (None, None) => {}
+                _ => return Err(InputError::GeometryUnavailable),
+            }
+        }
+        if let (Some(epoch), Some(hook)) = (ended_for_hook, hook) {
+            hook(epoch).await;
+        }
         let mut lease_guard = self.lease.lock().await;
         if self.recovery_suspended.load(Ordering::Acquire)
             || self.dispatch_abandoned.load(Ordering::Acquire) != 0
-            || lease_guard.as_ref().is_some_and(|lease| lease.ending)
-            || lease_guard.as_ref().map(|lease| &lease.lease_token) != predecessor.as_ref()
+            || self.native_outcome_uncertain.load(Ordering::Acquire)
+            || lease_guard.is_some()
         {
             return Err(InputError::GeometryUnavailable);
         }
-        // Acquire all bookkeeping locks before removing the predecessor. No await occurs
-        // between ending it and publishing the successor.
-        let mut last_ended = self.last_ended_lease.lock().await;
+        // Acquire all bookkeeping locks before publishing the successor.
+        let last_ended = self.last_ended_lease.lock().await;
         let mut sequence = self.last_processed_seq.lock().await;
         let mut queue = self.queue.lock().await;
         let mut bytes = self.total_queued_bytes.lock().await;
         let mut mouse = self.dispatch_mouse.lock().await;
-        if self.authority_generation.load(Ordering::Acquire) != authority
-            || self.recovery_suspended.load(Ordering::Acquire)
+        if self.recovery_suspended.load(Ordering::Acquire)
             || self.dispatch_abandoned.load(Ordering::Acquire) != 0
+            || self.native_outcome_uncertain.load(Ordering::Acquire)
         {
             return Err(InputError::GeometryUnavailable);
-        }
-        let ended = lease_guard.take();
-        let ended_epoch = ended.as_ref().map(|lease| lease.lease_epoch);
-        if let Some(ended) = ended {
-            *last_ended = Some((ended.lease_token, ended.lease_epoch));
         }
         queue.clear();
         self.queue_changed.send_modify(|revision| *revision = revision.wrapping_add(1));
@@ -576,6 +1079,7 @@ impl SessionInputManager {
         let expires_at_unix_ms =
             chrono::Utc::now().timestamp_millis() + self.lease_ttl.as_millis() as i64;
         let lease_epoch = NEXT_LEASE_EPOCH.fetch_add(1, Ordering::SeqCst);
+        let _ = self.get_or_insert_epoch_tracker(lease_epoch);
 
         *lease_guard = Some(LeaseState {
             lease_epoch,
@@ -596,13 +1100,6 @@ impl SessionInputManager {
         drop(last_ended);
         drop(lease_guard);
         drop(gate);
-        if let Some(epoch) = ended_epoch {
-            let hook = self.lease_end_hook.lock().unwrap().clone();
-            if let Some(hook) = hook {
-                let task = tokio::spawn(async move { hook(epoch).await });
-                let _ = task.await;
-            }
-        }
 
         Ok((lease_token, expires_at_unix_ms))
     }
@@ -811,6 +1308,7 @@ impl SessionInputManager {
             if let Some(lease) = lease.as_mut() {
                 lease.ending = true;
                 self.cancel_registered_input(&lease.lease_token);
+                self.fence_epoch_ops(lease.lease_epoch);
             }
         }
         let gate = self.native_gate.clone().lock_owned().await;
@@ -821,6 +1319,7 @@ impl SessionInputManager {
         let mut bytes = self.total_queued_bytes.lock().await;
         let ended = lease.take();
         let epoch = ended.as_ref().map(|lease| lease.lease_epoch);
+        let tracker = epoch.and_then(|e| self.take_epoch_tracker(e));
         if let Some(ended) = ended {
             *last_ended = Some((ended.lease_token, ended.lease_epoch));
         }
@@ -828,16 +1327,33 @@ impl SessionInputManager {
         queue.clear();
         self.queue_changed.send_modify(|revision| *revision = revision.wrapping_add(1));
         *bytes = 0;
-        let held = self.held_state.clone();
-        let mouse = self.dispatch_mouse.clone();
-        let uncertain = self.native_outcome_uncertain.clone();
+        let manager = self.clone();
         let hook = self.lease_end_hook.lock().unwrap().clone();
+        let tracker_for_done = tracker.clone();
         let cleanup = tokio::spawn(async move {
-            let result = Self::dispatch_held_release_state(&held, &mouse, &uncertain, false).await;
-            drop(gate);
+            let drain_result = if let Some(epoch) = epoch {
+                manager.drain_and_revoke_epoch_devtools(epoch, tracker).await
+            } else {
+                Ok(())
+            };
+            let result = if drain_result.is_ok() {
+                Self::dispatch_held_release_state(
+                    &manager.held_state,
+                    &manager.dispatch_mouse,
+                    &manager.native_outcome_uncertain,
+                    false,
+                )
+                .await
+            } else {
+                drain_result
+            };
             if let (Some(epoch), Some(hook)) = (epoch, hook) {
                 hook(epoch).await;
             }
+            if let Some(t) = &tracker_for_done {
+                t.mark_cleanup_done();
+            }
+            drop(gate);
             result
         });
         drop(bytes);
@@ -907,6 +1423,7 @@ impl SessionInputManager {
         self.advance_authority_generation();
         lease.ending = true;
         self.cancel_registered_input(&lease.lease_token);
+        self.fence_epoch_ops(lease.lease_epoch);
         let token = lease.lease_token.clone();
         let manager = self.clone();
         Some(tokio::spawn(async move {
@@ -940,6 +1457,7 @@ impl SessionInputManager {
                     cancellation.cancel_before_write();
                 }
             }
+            self.fence_epoch_ops(current.lease_epoch);
         }
         if let Some(ended) = lease.take() {
             *self.last_ended_lease.lock().await = Some((ended.lease_token, ended.lease_epoch));
@@ -958,8 +1476,18 @@ impl SessionInputManager {
         let held = self.held_state.clone();
         let mouse = self.dispatch_mouse.clone();
         let uncertain = self.native_outcome_uncertain.clone();
+        let trackers: Vec<Arc<EpochOpTracker>> = self
+            .epoch_ops
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, t)| t)
+            .collect();
         tokio::spawn(async move {
             let result = Self::dispatch_held_release_state(&held, &mouse, &uncertain, false).await;
+            for t in trackers {
+                t.mark_cleanup_done();
+            }
             drop(gate);
             result
         }).await.unwrap_or_else(|_| Err(InputError::ReleaseFailed("native cleanup task failed".into())))
@@ -980,7 +1508,9 @@ impl SessionInputManager {
 
     pub(crate) async fn has_unresolved_native_input(&self, _gate: &OwnedMutexGuard<()>) -> bool {
         let held = self.held_state.lock().await;
-        !held.is_empty() || held.release_failed.is_some()
+        !held.is_empty()
+            || !held.pending_ops.is_empty()
+            || held.release_failed.is_some()
             || self.native_outcome_uncertain.load(Ordering::Acquire)
     }
 
@@ -1029,6 +1559,7 @@ impl SessionInputManager {
             if let Some(lease) = lease.as_mut() {
                 lease.ending = true;
                 self.cancel_registered_input(&lease.lease_token);
+                self.fence_epoch_ops(lease.lease_epoch);
                 Some(lease.lease_token.clone())
             } else {
                 None
@@ -1048,6 +1579,7 @@ impl SessionInputManager {
         let mut bytes = self.total_queued_bytes.lock().await;
         let ended_lease = lease.take();
         let ended_epoch = ended_lease.as_ref().map(|l| l.lease_epoch);
+        let tracker = ended_epoch.and_then(|e| self.take_epoch_tracker(e));
         if let Some(ended) = ended_lease {
             *last_ended = Some((ended.lease_token, ended.lease_epoch));
         }
@@ -1055,20 +1587,37 @@ impl SessionInputManager {
         queue.clear();
         self.queue_changed.send_modify(|revision| *revision = revision.wrapping_add(1));
         *bytes = 0;
-        let held = self.held_state.clone();
-        let mouse = self.dispatch_mouse.clone();
-        let uncertain = self.native_outcome_uncertain.clone();
+        let manager = self.clone();
         let hook = self.lease_end_hook.lock().unwrap().clone();
+        let tracker_for_done = tracker.clone();
         // This task owns the barrier and cleanup after authority is removed, even if the
         // request, websocket, or expiry watcher awaiting it is cancelled.
         let cleanup = tokio::spawn(async move {
-            let result = Self::dispatch_held_release_state(&held, &mouse, &uncertain, false).await;
-            drop(gate);
+            let drain_result = if let Some(epoch) = ended_epoch {
+                manager.drain_and_revoke_epoch_devtools(epoch, tracker).await
+            } else {
+                Ok(())
+            };
+            let result = if drain_result.is_ok() {
+                Self::dispatch_held_release_state(
+                    &manager.held_state,
+                    &manager.dispatch_mouse,
+                    &manager.native_outcome_uncertain,
+                    false,
+                )
+                .await
+            } else {
+                drain_result
+            };
             if run_hook || result.is_err() {
                 if let (Some(epoch), Some(hook)) = (ended_epoch, hook) {
                     hook(epoch).await;
                 }
             }
+            if let Some(t) = &tracker_for_done {
+                t.mark_cleanup_done();
+            }
+            drop(gate);
             result.map(|()| ended_epoch)
         });
         drop(bytes);
@@ -1102,21 +1651,21 @@ impl SessionInputManager {
                 "native input outcome is unresolved; close the browser session".into(),
             ));
         }
-        let (target, events, generation) = {
+        let (identity, events, generation) = {
             let held = held_state.lock().await;
             let events = if buttons_only {
                 held.button_release_events()
             } else {
                 held.generate_release_events()
             };
-            (held.target.clone(), events, held.generation)
+            (held.identity.clone(), events, held.generation)
         };
         // A nonempty ledger without its captured target cannot be safely forgotten.
-        let mut failure = (target.is_none() && !events.is_empty())
+        let mut failure = (identity.is_none() && !events.is_empty())
             .then(|| "native input target is unavailable".to_string());
-        if let Some(target) = &target {
+        if let Some(identity) = &identity {
             for event in &events {
-                if let Err(err) = target.dispatch(event).await {
+                if let Err(err) = identity.dispatch_release(event).await {
                     let ambiguous = err.outcome_is_ambiguous();
                     failure.get_or_insert_with(|| err.to_string());
                     if ambiguous {
@@ -1135,17 +1684,15 @@ impl SessionInputManager {
                 if held.generation == generation {
                     held.forget_released(&events);
                 }
-                if !events.iter().any(|e| matches!(e, InputEvent::PointerUp { .. })) {
-                    // No-op when only keys were released
-                } else {
+                if events.iter().any(|e| matches!(e, ReleaseInputEvent::PointerUp { .. })) {
                     let mut dm = dispatch_mouse.lock().await;
                     for event in &events {
-                        if let InputEvent::PointerUp { button, .. } = event {
+                        if let ReleaseInputEvent::PointerUp { button, .. } = event {
                             dm.held_buttons.remove(button);
                         }
                     }
                 }
-                if held.is_empty() {
+                if held.is_empty() && held.pending_ops.is_empty() {
                     held.release_failed = None;
                 }
                 Ok(())
@@ -1288,6 +1835,7 @@ impl SessionInputManager {
             if let Some(lease) = lease_guard.as_mut() {
                 lease.ending = true;
                 self.cancel_registered_input(&lease.lease_token);
+                self.fence_epoch_ops(lease.lease_epoch);
             }
         }
         drop(lease_guard);
@@ -1318,56 +1866,461 @@ impl SessionInputManager {
     /// remains in the ledger until its own native acknowledgement arrives.
     pub async fn prepare_native_input(
         &self,
-        _gate: &OwnedMutexGuard<()>,
+        gate: &OwnedMutexGuard<()>,
         target: NativeInputTarget,
         event: &InputEvent,
     ) -> Result<(), InputError> {
-        let mut held = self.held_state.lock().await;
-        if !held.is_empty() {
-            let Some(current) = &held.target else {
-                return Err(InputError::GeometryUnavailable);
-            };
-            if !Arc::ptr_eq(&current.client, &target.client)
-                || current.page_session_id != target.page_session_id
-            {
-                return Err(InputError::GeometryUnavailable);
-            }
-        } else {
-            held.target = Some(target);
-        }
-        match event {
-            InputEvent::PointerDown { button, u, v, modifiers } => {
-                held.held_buttons.insert(*button);
-                held.generation += 1;
-                held.pointer = (*u, *v);
-                held.modifiers = *modifiers;
-            }
-            InputEvent::KeyDown { key, code, modifiers } => {
-                let identity = (code.is_empty(), if code.is_empty() { key.clone() } else { code.clone() });
-                if !held.held_keys.contains_key(&identity) && held.held_keys.len() >= MAX_HELD_KEYS {
-                    return Err(InputError::QueueOverflow);
-                }
-                held.held_keys.insert(identity, (key.clone(), code.clone()));
-                held.generation += 1;
-                held.modifiers = *modifiers;
-            }
-            InputEvent::PointerUp { u, v, modifiers, .. }
-            | InputEvent::PointerMove { u, v, modifiers }
-            | InputEvent::Wheel { u, v, modifiers, .. } => {
-                held.pointer = (*u, *v);
-                held.modifiers = *modifiers;
-            }
-            _ => {}
-        }
+        let identity = CapturedNativeIdentity::from_cdp_target(
+            target,
+            String::new(),
+            String::new(),
+            0,
+        );
+        let _ = self
+            .prepare_native_input_with_identity(gate, identity, event)
+            .await?;
         Ok(())
     }
 
-    /// Forget releases only after Chromium confirms them.
-    pub async fn confirm_native_input(&self, _gate: &OwnedMutexGuard<()>, event: &InputEvent) {
-        if matches!(event, InputEvent::KeyUp { .. } | InputEvent::PointerUp { .. }) {
+    pub(crate) async fn prepare_native_input_with_identity(
+        &self,
+        _gate: &OwnedMutexGuard<()>,
+        identity: CapturedNativeIdentity,
+        event: &InputEvent,
+    ) -> Result<Option<PendingLedgerOp>, InputError> {
+        let current_epoch = self
+            .lease
+            .lock()
+            .await
+            .as_ref()
+            .filter(|l| !l.ending)
+            .map(|l| l.lease_epoch)
+            .ok_or(InputError::LeaseNotFound)?;
+        let mut held = self.held_state.lock().await;
+        if let Some(existing_epoch) = held.epoch {
+            if existing_epoch != current_epoch && (!held.is_empty() || !held.pending_ops.is_empty()) {
+                return Err(InputError::GeometryUnavailable);
+            }
+        }
+        if !held.is_empty() || !held.pending_ops.is_empty() {
+            let Some(current) = &mut held.identity else {
+                return Err(InputError::GeometryUnavailable);
+            };
+            if !current.matches(&identity) {
+                return Err(InputError::GeometryUnavailable);
+            }
+            current.merge_route(&identity);
+        } else {
+            held.identity = Some(identity);
+            held.epoch = Some(current_epoch);
+        }
+
+        let op_target = match event {
+            InputEvent::PointerDown { button, u, v, modifiers } => {
+                held.pointer = NativePointerPosition::Fraction(*u, *v);
+                held.modifiers = *modifiers;
+                if *button == MouseButton::None {
+                    None
+                } else {
+                    let entry = held.held_buttons.entry(*button).or_insert(HeldButtonEntry {
+                        confirmed: false,
+                        pending_down: 0,
+                        pending_up: 0,
+                        uncertain: false,
+                        last_channel: InputChannel::UiControl,
+                    });
+                    entry.pending_down += 1;
+                    entry.last_channel = InputChannel::UiControl;
+                    held.generation += 1;
+                    Some(PendingOpTarget::ButtonDown(*button))
+                }
+            }
+            InputEvent::PointerUp { button, u, v, modifiers } => {
+                held.pointer = NativePointerPosition::Fraction(*u, *v);
+                held.modifiers = *modifiers;
+                if *button == MouseButton::None {
+                    None
+                } else if let Some(entry) = held.held_buttons.get_mut(button) {
+                    entry.pending_up += 1;
+                    entry.last_channel = InputChannel::UiControl;
+                    held.generation += 1;
+                    Some(PendingOpTarget::ButtonUp(*button))
+                } else {
+                    None
+                }
+            }
+            InputEvent::KeyDown { key, code, modifiers } => {
+                let key_id = HeldInputState::key_identity(key, code);
+                if !held.held_keys.contains_key(&key_id) && held.held_keys.len() >= MAX_HELD_KEYS {
+                    held.clear_metadata_if_empty();
+                    return Err(InputError::QueueOverflow);
+                }
+                let entry = held.held_keys.entry(key_id.clone()).or_insert_with(|| HeldKeyEntry {
+                    key: key.clone(),
+                    code: code.clone(),
+                    confirmed: false,
+                    pending_down: 0,
+                    pending_up: 0,
+                    uncertain: false,
+                    last_channel: InputChannel::UiControl,
+                });
+                entry.pending_down += 1;
+                entry.last_channel = InputChannel::UiControl;
+                held.generation += 1;
+                held.modifiers = *modifiers;
+                Some(PendingOpTarget::KeyDown(key_id))
+            }
+            InputEvent::KeyUp { key, code, modifiers } => {
+                held.modifiers = *modifiers;
+                let key_id = HeldInputState::key_identity(key, code);
+                if let Some(entry) = held.held_keys.get_mut(&key_id) {
+                    entry.pending_up += 1;
+                    entry.last_channel = InputChannel::UiControl;
+                    held.generation += 1;
+                    Some(PendingOpTarget::KeyUp(key_id))
+                } else {
+                    None
+                }
+            }
+            InputEvent::PointerMove { u, v, modifiers }
+            | InputEvent::Wheel { u, v, modifiers, .. } => {
+                held.pointer = NativePointerPosition::Fraction(*u, *v);
+                held.modifiers = *modifiers;
+                None
+            }
+            _ => None,
+        };
+
+        let Some(target) = op_target else {
+            held.clear_metadata_if_empty();
+            return Ok(None);
+        };
+        held.next_op_id = held.next_op_id.wrapping_add(1).max(1);
+        let op_id = held.next_op_id;
+        held.pending_ops.insert(
+            op_id,
+            PendingOpRecord {
+                lease_epoch: current_epoch,
+                target,
+            },
+        );
+        Ok(Some(PendingLedgerOp {
+            op_id,
+            lease_epoch: current_epoch,
+        }))
+    }
+
+    /// Reserves pending hold/release obligations on the shared ledger for a DevTools proxy
+    /// `Input.*` command BEFORE writing to the native peer.
+    pub(crate) async fn prepare_cdp_input_op(
+        &self,
+        _gate: &OwnedMutexGuard<()>,
+        control_epoch: u64,
+        viewer_id: &str,
+        identity: CapturedNativeIdentity,
+        effect: &super::devtools_filter::CdpInputEffect,
+    ) -> Result<Option<PendingLedgerOp>, InputError> {
+        use super::devtools_filter::CdpInputEffect;
+
+        if !self.is_control_authority_live(control_epoch, viewer_id).await {
+            return Err(InputError::LeaseNotFound);
+        }
+        let mut held = self.held_state.lock().await;
+        if let Some(existing_epoch) = held.epoch {
+            if existing_epoch != control_epoch && (!held.is_empty() || !held.pending_ops.is_empty()) {
+                return Err(InputError::GeometryUnavailable);
+            }
+        }
+        if !held.is_empty() || !held.pending_ops.is_empty() {
+            let Some(current) = &mut held.identity else {
+                return Err(InputError::GeometryUnavailable);
+            };
+            if !current.matches(&identity) {
+                return Err(InputError::GeometryUnavailable);
+            }
+            current.merge_route(&identity);
+        } else {
+            held.identity = Some(identity);
+            held.epoch = Some(control_epoch);
+        }
+
+        let op_target = match effect {
+            CdpInputEffect::KeyDown { key, code, modifiers } => {
+                let key_id = HeldInputState::key_identity(key, code);
+                if !held.held_keys.contains_key(&key_id) && held.held_keys.len() >= MAX_HELD_KEYS {
+                    held.clear_metadata_if_empty();
+                    return Err(InputError::QueueOverflow);
+                }
+                let entry = held.held_keys.entry(key_id.clone()).or_insert_with(|| HeldKeyEntry {
+                    key: key.clone(),
+                    code: code.clone(),
+                    confirmed: false,
+                    pending_down: 0,
+                    pending_up: 0,
+                    uncertain: false,
+                    last_channel: InputChannel::DevToolsProxy,
+                });
+                entry.pending_down += 1;
+                entry.last_channel = InputChannel::DevToolsProxy;
+                held.generation += 1;
+                held.modifiers = *modifiers;
+                Some(PendingOpTarget::KeyDown(key_id))
+            }
+            CdpInputEffect::KeyUp { key, code, modifiers } => {
+                held.modifiers = *modifiers;
+                let key_id = HeldInputState::key_identity(key, code);
+                if let Some(entry) = held.held_keys.get_mut(&key_id) {
+                    entry.pending_up += 1;
+                    entry.last_channel = InputChannel::DevToolsProxy;
+                    held.generation += 1;
+                    Some(PendingOpTarget::KeyUp(key_id))
+                } else {
+                    None
+                }
+            }
+            CdpInputEffect::MouseDown { button, x, y, modifiers } => {
+                held.pointer = NativePointerPosition::Css(*x, *y);
+                held.modifiers = *modifiers;
+                let entry = held.held_buttons.entry(*button).or_insert(HeldButtonEntry {
+                    confirmed: false,
+                    pending_down: 0,
+                    pending_up: 0,
+                    uncertain: false,
+                    last_channel: InputChannel::DevToolsProxy,
+                });
+                entry.pending_down += 1;
+                entry.last_channel = InputChannel::DevToolsProxy;
+                held.generation += 1;
+                Some(PendingOpTarget::ButtonDown(*button))
+            }
+            CdpInputEffect::MouseUp { button, x, y, modifiers } => {
+                held.pointer = NativePointerPosition::Css(*x, *y);
+                held.modifiers = *modifiers;
+                if let Some(entry) = held.held_buttons.get_mut(button) {
+                    entry.pending_up += 1;
+                    entry.last_channel = InputChannel::DevToolsProxy;
+                    held.generation += 1;
+                    Some(PendingOpTarget::ButtonUp(*button))
+                } else {
+                    None
+                }
+            }
+            CdpInputEffect::PointerMove { x, y, modifiers } => {
+                held.pointer = NativePointerPosition::Css(*x, *y);
+                held.modifiers = *modifiers;
+                None
+            }
+            CdpInputEffect::NonHeld => None,
+        };
+
+        let Some(target) = op_target else {
+            held.clear_metadata_if_empty();
+            return Ok(None);
+        };
+        held.next_op_id = held.next_op_id.wrapping_add(1).max(1);
+        let op_id = held.next_op_id;
+        held.pending_ops.insert(
+            op_id,
+            PendingOpRecord {
+                lease_epoch: control_epoch,
+                target,
+            },
+        );
+        Ok(Some(PendingLedgerOp {
+            op_id,
+            lease_epoch: control_epoch,
+        }))
+    }
+
+    pub(crate) async fn confirm_native_op(&self, _gate: &OwnedMutexGuard<()>, op: PendingLedgerOp) {
+        let delta = {
             let mut held = self.held_state.lock().await;
-            held.forget_released(std::slice::from_ref(event));
-            held.generation += 1;
+            if held.epoch != Some(op.lease_epoch) {
+                return;
+            }
+            let Some(record) = held.pending_ops.remove(&op.op_id) else {
+                return;
+            };
+            if record.lease_epoch != op.lease_epoch {
+                return;
+            }
+            let delta = match record.target {
+                PendingOpTarget::KeyDown(key_id) => {
+                    if let Some(entry) = held.held_keys.get_mut(&key_id) {
+                        entry.pending_down = entry.pending_down.saturating_sub(1);
+                        entry.confirmed = true;
+                        entry.uncertain = false;
+                        held.generation += 1;
+                    }
+                    None
+                }
+                PendingOpTarget::KeyUp(key_id) => {
+                    if let Some(entry) = held.held_keys.get_mut(&key_id) {
+                        entry.pending_up = entry.pending_up.saturating_sub(1);
+                        entry.confirmed = false;
+                        entry.uncertain = false;
+                        if entry.is_empty() {
+                            held.held_keys.remove(&key_id);
+                        }
+                        held.generation += 1;
+                    }
+                    None
+                }
+                PendingOpTarget::ButtonDown(button) => {
+                    if let Some(entry) = held.held_buttons.get_mut(&button) {
+                        entry.pending_down = entry.pending_down.saturating_sub(1);
+                        entry.confirmed = true;
+                        entry.uncertain = false;
+                        held.generation += 1;
+                    }
+                    Some(MouseLedgerDelta::Down(button))
+                }
+                PendingOpTarget::ButtonUp(button) => {
+                    if let Some(entry) = held.held_buttons.get_mut(&button) {
+                        entry.pending_up = entry.pending_up.saturating_sub(1);
+                        entry.confirmed = false;
+                        entry.uncertain = false;
+                        if entry.is_empty() {
+                            held.held_buttons.remove(&button);
+                        }
+                        held.generation += 1;
+                    }
+                    Some(MouseLedgerDelta::Up(button))
+                }
+            };
+            held.clear_metadata_if_empty();
+            delta
+        };
+        if let Some(delta) = delta {
+            let mut dm = self.dispatch_mouse.lock().await;
+            match delta {
+                MouseLedgerDelta::Down(button) => {
+                    dm.held_buttons.insert(button);
+                }
+                MouseLedgerDelta::Up(button) => {
+                    dm.held_buttons.remove(&button);
+                }
+            }
+        }
+    }
+
+    /// Rolls back only the unapplied pending change after a definitive Chromium rejection or
+    /// pre-write cancellation, preserving any prior confirmed or pending hold.
+    pub(crate) async fn reject_native_op(&self, _gate: &OwnedMutexGuard<()>, op: PendingLedgerOp) {
+        let mut held = self.held_state.lock().await;
+        if held.epoch != Some(op.lease_epoch) {
+            return;
+        }
+        let Some(record) = held.pending_ops.remove(&op.op_id) else {
+            return;
+        };
+        if record.lease_epoch != op.lease_epoch {
+            return;
+        }
+        match record.target {
+            PendingOpTarget::KeyDown(key_id) => {
+                if let Some(entry) = held.held_keys.get_mut(&key_id) {
+                    entry.pending_down = entry.pending_down.saturating_sub(1);
+                    if entry.is_empty() {
+                        held.held_keys.remove(&key_id);
+                    }
+                    held.generation += 1;
+                }
+            }
+            PendingOpTarget::KeyUp(key_id) => {
+                if let Some(entry) = held.held_keys.get_mut(&key_id) {
+                    entry.pending_up = entry.pending_up.saturating_sub(1);
+                    if entry.is_empty() {
+                        held.held_keys.remove(&key_id);
+                    }
+                    held.generation += 1;
+                }
+            }
+            PendingOpTarget::ButtonDown(button) => {
+                if let Some(entry) = held.held_buttons.get_mut(&button) {
+                    entry.pending_down = entry.pending_down.saturating_sub(1);
+                    if entry.is_empty() {
+                        held.held_buttons.remove(&button);
+                    }
+                    held.generation += 1;
+                }
+            }
+            PendingOpTarget::ButtonUp(button) => {
+                if let Some(entry) = held.held_buttons.get_mut(&button) {
+                    entry.pending_up = entry.pending_up.saturating_sub(1);
+                    if entry.is_empty() {
+                        held.held_buttons.remove(&button);
+                    }
+                    held.generation += 1;
+                }
+            }
+        }
+        held.clear_metadata_if_empty();
+    }
+
+    /// Retains the potential hold as uncertain when write/reply/cancel is ambiguous.
+    pub(crate) async fn mark_native_op_ambiguous(
+        &self,
+        _gate: &OwnedMutexGuard<()>,
+        op: PendingLedgerOp,
+    ) {
+        self.mark_native_outcome_uncertain();
+        let mut held = self.held_state.lock().await;
+        if held.epoch != Some(op.lease_epoch) {
+            return;
+        }
+        let Some(record) = held.pending_ops.remove(&op.op_id) else {
+            return;
+        };
+        match record.target {
+            PendingOpTarget::KeyDown(key_id) | PendingOpTarget::KeyUp(key_id) => {
+                if let Some(entry) = held.held_keys.get_mut(&key_id) {
+                    entry.pending_down = entry.pending_down.saturating_sub(1);
+                    entry.pending_up = entry.pending_up.saturating_sub(1);
+                    entry.uncertain = true;
+                    held.generation += 1;
+                }
+            }
+            PendingOpTarget::ButtonDown(button) | PendingOpTarget::ButtonUp(button) => {
+                if let Some(entry) = held.held_buttons.get_mut(&button) {
+                    entry.pending_down = entry.pending_down.saturating_sub(1);
+                    entry.pending_up = entry.pending_up.saturating_sub(1);
+                    entry.uncertain = true;
+                    held.generation += 1;
+                }
+            }
+        }
+    }
+
+    /// Forget releases only after Chromium confirms them.
+    pub async fn confirm_native_input(&self, gate: &OwnedMutexGuard<()>, event: &InputEvent) {
+        let mut matching_op = None;
+        {
+            let held = self.held_state.lock().await;
+            let target_matches = |target: &PendingOpTarget| match (event, target) {
+                (InputEvent::KeyDown { key, code, .. }, PendingOpTarget::KeyDown(k)) => {
+                    *k == HeldInputState::key_identity(key, code)
+                }
+                (InputEvent::KeyUp { key, code, .. }, PendingOpTarget::KeyUp(k)) => {
+                    *k == HeldInputState::key_identity(key, code)
+                }
+                (InputEvent::PointerDown { button, .. }, PendingOpTarget::ButtonDown(b)) => {
+                    b == button
+                }
+                (InputEvent::PointerUp { button, .. }, PendingOpTarget::ButtonUp(b)) => {
+                    b == button
+                }
+                _ => false,
+            };
+            if let Some((&op_id, record)) = held.pending_ops.iter().find(|(_, r)| target_matches(&r.target)) {
+                matching_op = Some(PendingLedgerOp {
+                    op_id,
+                    lease_epoch: record.lease_epoch,
+                });
+            }
+        }
+        if let Some(op) = matching_op {
+            self.confirm_native_op(gate, op).await;
         }
     }
 
@@ -1378,6 +2331,7 @@ impl SessionInputManager {
         token: String,
         gate: Option<OwnedMutexGuard<()>>,
         mut pending: Option<super::cdp::PendingCommand>,
+        pending_op: Option<PendingLedgerOp>,
     ) {
         if let Some(command) = &pending {
             command.cancel_before_write();
@@ -1393,9 +2347,31 @@ impl SessionInputManager {
                 None => manager.native_gate.clone().lock_owned().await,
             };
             if let Some(command) = pending.take() {
-                if command.wait().await.is_err_and(|error| error.outcome_is_ambiguous()) {
-                    manager.mark_native_outcome_uncertain();
+                match command.wait().await {
+                    Ok(_) => {
+                        if let Some(op) = pending_op {
+                            manager.confirm_native_op(&gate, op).await;
+                        }
+                    }
+                    Err(error) if error.outcome_is_ambiguous() => {
+                        if let Some(op) = pending_op {
+                            manager.mark_native_op_ambiguous(&gate, op).await;
+                        } else {
+                            manager.mark_native_outcome_uncertain();
+                        }
+                    }
+                    Err(super::cdp::CdpError::Protocol { .. }) => {
+                        if let Some(op) = pending_op {
+                            manager.reject_native_op(&gate, op).await;
+                        }
+                    }
+                    Err(_) => {
+                        // Cancellation before write leaves the prepared hold in held_state so
+                        // `fail_native_dispatch_owned` releases it on the captured native identity.
+                    }
                 }
+            } else {
+                // Cancellation between prepare and CDP enqueue also releases the prepared hold.
             }
             if let Err(error) = manager.fail_native_dispatch_owned(gate, &token).await {
                 tracing::warn!(error = %error, "abandoned native input cleanup failed");
@@ -1432,9 +2408,13 @@ impl SessionInputManager {
             if lease.as_ref().is_some_and(|l| l.lease_token != token) {
                 return Ok(());
             }
+            if lease.is_some() {
+                self.advance_authority_generation();
+            }
             lease.take()
         };
         let epoch = ended.as_ref().map(|l| l.lease_epoch);
+        let tracker = epoch.and_then(|e| self.take_epoch_tracker(e));
         if let Some(ended) = ended {
             *self.last_ended_lease.lock().await = Some((ended.lease_token, ended.lease_epoch));
         }
@@ -1442,13 +2422,40 @@ impl SessionInputManager {
         self.queue.lock().await.clear();
         self.queue_changed.send_modify(|revision| *revision = revision.wrapping_add(1));
         *self.total_queued_bytes.lock().await = 0;
-        let result = self.dispatch_held_release(&gate, false).await;
-        drop(gate);
-        if let Some(epoch) = epoch {
-            let hook = self.lease_end_hook.lock().unwrap().clone();
-            if let Some(hook) = hook {
-                hook(epoch).await;
+        let tracker_for_done = tracker.clone();
+        let drain_result = if let Some(epoch) = epoch {
+            self.drain_and_revoke_epoch_devtools(epoch, tracker).await
+        } else {
+            Ok(())
+        };
+        let result = if drain_result.is_ok() {
+            self.dispatch_held_release(&gate, false).await
+        } else {
+            drain_result
+        };
+        let run_hook = async {
+            if let Some(epoch) = epoch {
+                let hook = self.lease_end_hook.lock().unwrap().clone();
+                if let Some(hook) = hook {
+                    hook(epoch).await;
+                }
             }
+        };
+        // When invoked from `abandon_dispatch` (`dispatch_abandoned != 0`), admission is already
+        // fenced; release `gate` before `hook` so concurrent `acquire_lease` returns `GeometryUnavailable`
+        // without blocking behind a custom hook, while non-abandoned failures hold `gate` across `hook`.
+        if self.dispatch_abandoned.load(Ordering::Acquire) != 0 {
+            drop(gate);
+            run_hook.await;
+            if let Some(t) = &tracker_for_done {
+                t.mark_cleanup_done();
+            }
+        } else {
+            run_hook.await;
+            if let Some(t) = &tracker_for_done {
+                t.mark_cleanup_done();
+            }
+            drop(gate);
         }
         result
     }
@@ -1486,9 +2493,6 @@ impl SessionInputManager {
         let mut dm = self.dispatch_mouse.lock().await;
         match event {
             InputEvent::PointerDown { button, u, v, .. } => {
-                if *button != MouseButton::None {
-                    dm.held_buttons.insert(*button);
-                }
                 let x = (u * geom.css_width).clamp(0.0, geom.css_width);
                 let y = (v * geom.css_height + geom.offset_top)
                     .clamp(0.0, geom.css_height + geom.offset_top);
@@ -1508,7 +2512,7 @@ impl SessionInputManager {
                 dm.last_click = (*button != MouseButton::None)
                     .then_some((*button, x, y, now, click_count));
                 MouseDispatchContext {
-                    buttons: dm.buttons_mask(),
+                    buttons: dm.buttons_mask() | button.bitmask(),
                     move_button: None,
                     click_count,
                 }
@@ -1519,13 +2523,12 @@ impl SessionInputManager {
                 click_count: 1,
             },
             InputEvent::PointerUp { button, .. } => {
-                dm.held_buttons.remove(button);
                 let click_count = dm
                     .last_click
                     .filter(|(prev_btn, ..)| prev_btn == button)
                     .map_or(1, |(_, _, _, _, count)| count);
                 MouseDispatchContext {
-                    buttons: dm.buttons_mask(),
+                    buttons: dm.buttons_mask() & !button.bitmask(),
                     move_button: None,
                     click_count,
                 }
@@ -1587,7 +2590,7 @@ mod tests {
         let manager = Arc::new(SessionInputManager::new());
         let (token, _) = manager.acquire_lease("successor", "human").await.unwrap();
         let gate = manager.begin_dispatch(&token).await.unwrap();
-        manager.abandon_dispatch("obsolete-token".into(), None, None);
+        manager.abandon_dispatch("obsolete-token".into(), None, None, None);
         let origin = Uuid::new_v4();
         let message = InputMessage {
             browser_session_id: "s".into(), browser_incarnation: "i".into(),
@@ -1649,7 +2652,7 @@ mod tests {
         let manager = Arc::new(SessionInputManager::new());
         let (token, _) = manager.acquire_lease("successor", "human").await.unwrap();
         let gate = manager.begin_dispatch(&token).await.unwrap();
-        manager.abandon_dispatch("old-token".into(), None, None);
+        manager.abandon_dispatch("old-token".into(), None, None, None);
         let context = ControlInputContext {
             input_manager: &manager, session_id: &session, viewer_id: "successor",
             subscription_epoch: "sub", paired: true,
@@ -1884,9 +2887,9 @@ mod tests {
             })
         }));
         let gate = manager.begin_dispatch(&token).await.unwrap();
-        manager.abandon_dispatch("stale-token".into(), None, None);
+        manager.abandon_dispatch("stale-token".into(), None, None, None);
         tokio::task::yield_now().await;
-        manager.abandon_dispatch(token.clone(), None, None);
+        manager.abandon_dispatch(token.clone(), None, None, None);
         tokio::task::yield_now().await;
         drop(gate);
         tokio::time::timeout(Duration::from_secs(2), entered.notified()).await.unwrap();
@@ -2193,7 +3196,15 @@ mod tests {
     #[tokio::test]
     async fn test_prepare_mouse_dispatch_tracks_drag_buttons_and_click_count() {
         let mgr = SessionInputManager::new();
-        let _ = mgr.acquire_lease("viewer1", "human").await.unwrap();
+        let (tok, _) = mgr.acquire_lease("viewer1", "human").await.unwrap();
+        let gate = mgr.begin_dispatch(&tok).await.unwrap();
+        let identity = CapturedNativeIdentity {
+            native_target_id: "T-MOUSE".into(),
+            browser_incarnation: "inc-mouse".into(),
+            profile_epoch: 1,
+            cdp_target: None,
+            proxy_route: None,
+        };
         let geo = TargetGeometry {
             css_width: 1000.0,
             css_height: 800.0,
@@ -2211,13 +3222,15 @@ mod tests {
             .await;
         assert_eq!(move_idle, MouseDispatchContext { buttons: 0, move_button: None, click_count: 1 });
 
-        let down1 = mgr
-            .prepare_mouse_dispatch(
-                &InputEvent::PointerDown { button: MouseButton::Left, u: 0.2, v: 0.2, modifiers: 0 },
-                &geo,
-            )
-            .await;
+        let down_ev = InputEvent::PointerDown { button: MouseButton::Left, u: 0.2, v: 0.2, modifiers: 0 };
+        let op_down1 = mgr
+            .prepare_native_input_with_identity(&gate, identity.clone(), &down_ev)
+            .await
+            .unwrap()
+            .unwrap();
+        let down1 = mgr.prepare_mouse_dispatch(&down_ev, &geo).await;
         assert_eq!(down1, MouseDispatchContext { buttons: 1, move_button: None, click_count: 1 });
+        mgr.confirm_native_op(&gate, op_down1).await;
 
         let drag_move = mgr
             .prepare_mouse_dispatch(&InputEvent::PointerMove { u: 0.4, v: 0.2, modifiers: 0 }, &geo)
@@ -2227,13 +3240,15 @@ mod tests {
             MouseDispatchContext { buttons: 1, move_button: Some(MouseButton::Left), click_count: 1 }
         );
 
-        let up1 = mgr
-            .prepare_mouse_dispatch(
-                &InputEvent::PointerUp { button: MouseButton::Left, u: 0.4, v: 0.2, modifiers: 0 },
-                &geo,
-            )
-            .await;
+        let up_ev = InputEvent::PointerUp { button: MouseButton::Left, u: 0.4, v: 0.2, modifiers: 0 };
+        let op_up1 = mgr
+            .prepare_native_input_with_identity(&gate, identity.clone(), &up_ev)
+            .await
+            .unwrap()
+            .unwrap();
+        let up1 = mgr.prepare_mouse_dispatch(&up_ev, &geo).await;
         assert_eq!(up1, MouseDispatchContext { buttons: 0, move_button: None, click_count: 1 });
+        mgr.confirm_native_op(&gate, op_up1).await;
 
         let move_after = mgr
             .prepare_mouse_dispatch(&InputEvent::PointerMove { u: 0.5, v: 0.2, modifiers: 0 }, &geo)
@@ -2241,25 +3256,245 @@ mod tests {
         assert_eq!(move_after, MouseDispatchContext { buttons: 0, move_button: None, click_count: 1 });
 
         // Rapid second click at a new position starts at 1, immediate next click at same position advances to 2
-        let down2 = mgr
-            .prepare_mouse_dispatch(
-                &InputEvent::PointerDown { button: MouseButton::Left, u: 0.4, v: 0.2, modifiers: 0 },
-                &geo,
-            )
-            .await;
+        let down2_ev = InputEvent::PointerDown { button: MouseButton::Left, u: 0.4, v: 0.2, modifiers: 0 };
+        let op_down2 = mgr.prepare_native_input_with_identity(&gate, identity.clone(), &down2_ev).await.unwrap().unwrap();
+        let down2 = mgr.prepare_mouse_dispatch(&down2_ev, &geo).await;
         assert_eq!(down2.click_count, 1);
-        let _ = mgr
-            .prepare_mouse_dispatch(
-                &InputEvent::PointerUp { button: MouseButton::Left, u: 0.4, v: 0.2, modifiers: 0 },
-                &geo,
-            )
-            .await;
-        let down3 = mgr
-            .prepare_mouse_dispatch(
-                &InputEvent::PointerDown { button: MouseButton::Left, u: 0.4, v: 0.2, modifiers: 0 },
-                &geo,
-            )
-            .await;
+        mgr.confirm_native_op(&gate, op_down2).await;
+        let op_up2 = mgr.prepare_native_input_with_identity(&gate, identity.clone(), &up_ev).await.unwrap().unwrap();
+        let _ = mgr.prepare_mouse_dispatch(&up_ev, &geo).await;
+        mgr.confirm_native_op(&gate, op_up2).await;
+        let down3 = mgr.prepare_mouse_dispatch(&down2_ev, &geo).await;
         assert_eq!(down3.click_count, 2);
+
+        // Unconfirmed/rejected PointerDown must NOT leak into subsequent PointerMove held_buttons.
+        let rej_ev = InputEvent::PointerDown { button: MouseButton::Right, u: 0.9, v: 0.9, modifiers: 0 };
+        let op_rej = mgr.prepare_native_input_with_identity(&gate, identity, &rej_ev).await.unwrap().unwrap();
+        let _ = mgr.prepare_mouse_dispatch(&rej_ev, &geo).await;
+        mgr.reject_native_op(&gate, op_rej).await;
+        let move_unconfirmed = mgr
+            .prepare_mouse_dispatch(&InputEvent::PointerMove { u: 0.9, v: 0.9, modifiers: 0 }, &geo)
+            .await;
+        assert_eq!(move_unconfirmed, MouseDispatchContext { buttons: 0, move_button: None, click_count: 1 });
+    }
+
+    #[tokio::test]
+    async fn shared_ledger_handles_pending_confirm_reject_ambiguity_repeats_and_mixed_channel_up() {
+        use super::super::devtools_filter::CdpInputEffect;
+
+        let mgr = Arc::new(SessionInputManager::new());
+        let (tok1, _) = mgr.acquire_lease("viewer-1", "human").await.unwrap();
+        let (epoch1, cancel1) = mgr.verify_control_authority_for_mint("viewer-1", &tok1).await.unwrap();
+        assert!(!cancel1.is_cancelled());
+
+        let cdp_identity = CapturedNativeIdentity {
+            native_target_id: "T-SHARED".into(),
+            browser_incarnation: "inc-shared".into(),
+            profile_epoch: 1,
+            cdp_target: None,
+            proxy_route: None,
+        };
+
+        let gate = mgr.begin_dispatch(&tok1).await.unwrap();
+
+        // 1. Pending keyDown -> rejected before confirm -> entry disappears cleanly
+        let op_rej = mgr
+            .prepare_cdp_input_op(
+                &gate,
+                epoch1,
+                "viewer-1",
+                cdp_identity.clone(),
+                &CdpInputEffect::KeyDown { key: "x".into(), code: "KeyX".into(), modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(mgr.has_unresolved_native_input(&gate).await);
+        mgr.reject_native_op(&gate, op_rej).await;
+        assert!(!mgr.has_unresolved_native_input(&gate).await);
+
+        // 2. Confirmed keyDown + repeat keyDown rejected -> prior confirmed hold preserved!
+        let op_down1 = mgr
+            .prepare_cdp_input_op(
+                &gate,
+                epoch1,
+                "viewer-1",
+                cdp_identity.clone(),
+                &CdpInputEffect::KeyDown { key: "a".into(), code: "KeyA".into(), modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        mgr.confirm_native_op(&gate, op_down1).await;
+
+        let op_repeat = mgr
+            .prepare_cdp_input_op(
+                &gate,
+                epoch1,
+                "viewer-1",
+                cdp_identity.clone(),
+                &CdpInputEffect::KeyDown { key: "a".into(), code: "KeyA".into(), modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        mgr.reject_native_op(&gate, op_repeat).await;
+        {
+            let held = mgr.held_state.lock().await;
+            assert_eq!(held.held_keys.len(), 1);
+            assert!(held.held_keys.values().next().unwrap().confirmed);
+            assert_eq!(held.generate_release_events().len(), 1);
+        }
+
+        // 3. UI keyUp on the CDP-pressed KeyA -> rejected keyUp preserves hold; confirmed keyUp clears it
+        let op_up_rej = mgr
+            .prepare_native_input_with_identity(
+                &gate,
+                cdp_identity.clone(),
+                &InputEvent::KeyUp { key: "a".into(), code: "KeyA".into(), modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        mgr.reject_native_op(&gate, op_up_rej).await;
+        assert!(mgr.has_unresolved_native_input(&gate).await);
+
+        let op_up_ok = mgr
+            .prepare_native_input_with_identity(
+                &gate,
+                cdp_identity.clone(),
+                &InputEvent::KeyUp { key: "a".into(), code: "KeyA".into(), modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        mgr.confirm_native_op(&gate, op_up_ok).await;
+        assert!(!mgr.has_unresolved_native_input(&gate).await);
+
+        // 4. CDP mousePressed + confirm -> syncs dispatch_mouse, UI mouse context does not pre-mutate held_buttons
+        let mouse_ctx = mgr
+            .prepare_mouse_dispatch(
+                &InputEvent::PointerDown { button: MouseButton::Right, u: 0.2, v: 0.3, modifiers: 0 },
+                &TargetGeometry {
+                    css_width: 800.0,
+                    css_height: 600.0,
+                    offset_top: 0.0,
+                    scroll_x: 0.0,
+                    scroll_y: 0.0,
+                    page_scale: 1.0,
+                    visual_offset_x: 0.0,
+                    visual_offset_y: 0.0,
+                    dpr: 1.0,
+                },
+            )
+            .await;
+        assert_eq!(mouse_ctx.buttons, MouseButton::Right.bitmask());
+        assert!(!mgr.dispatch_mouse.lock().await.held_buttons.contains(&MouseButton::Right));
+
+        // UI-only KeyU hold does not report DevTools activity on clean dock close
+        let op_ui_key = mgr
+            .prepare_native_input_with_identity(
+                &gate,
+                cdp_identity.clone(),
+                &InputEvent::KeyDown { key: "u".into(), code: "KeyU".into(), modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        mgr.confirm_native_op(&gate, op_ui_key).await;
+        assert!(!mgr.has_unresolved_devtools_activity(epoch1).await);
+
+        let op_btn1 = mgr
+            .prepare_cdp_input_op(
+                &gate,
+                epoch1,
+                "viewer-1",
+                cdp_identity.clone(),
+                &CdpInputEffect::MouseDown { button: MouseButton::Left, x: 50.0, y: 60.0, modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(mgr.has_unresolved_devtools_activity(epoch1).await);
+        mgr.confirm_native_op(&gate, op_btn1).await;
+        assert!(mgr.dispatch_mouse.lock().await.held_buttons.contains(&MouseButton::Left));
+        // Clear UI KeyU & CDP mouseReleased so release/transfer sees clean state
+        let op_ui_key_up = mgr
+            .prepare_native_input_with_identity(
+                &gate,
+                cdp_identity.clone(),
+                &InputEvent::KeyUp { key: "u".into(), code: "KeyU".into(), modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        mgr.confirm_native_op(&gate, op_ui_key_up).await;
+        let op_btn1_up = mgr
+            .prepare_cdp_input_op(
+                &gate,
+                epoch1,
+                "viewer-1",
+                cdp_identity.clone(),
+                &CdpInputEffect::MouseUp { button: MouseButton::Left, x: 50.0, y: 60.0, modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        mgr.confirm_native_op(&gate, op_btn1_up).await;
+        drop(gate);
+
+        // 5. Release viewer-1 -> fences & cleans up, then transfer to viewer-2 -> old epoch cancel token fires; stale epoch op cannot clear viewer-2's hold
+        let ended_epoch1 = mgr.release_lease(&tok1).await.unwrap().unwrap();
+        assert_eq!(ended_epoch1, epoch1);
+        assert!(cancel1.is_cancelled());
+        let (tok2, _) = mgr.acquire_lease("viewer-2", "human").await.unwrap();
+        let (epoch2, _) = mgr.verify_control_authority_for_mint("viewer-2", &tok2).await.unwrap();
+        assert_ne!(epoch1, epoch2);
+
+        let gate2 = mgr.begin_dispatch(&tok2).await.unwrap();
+        let op_v2 = mgr
+            .prepare_cdp_input_op(
+                &gate2,
+                epoch2,
+                "viewer-2",
+                cdp_identity.clone(),
+                &CdpInputEffect::KeyDown { key: "b".into(), code: "KeyB".into(), modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        mgr.confirm_native_op(&gate2, op_v2).await;
+        // Attempt confirm/reject with stale op from epoch1 -> must NOT clear viewer-2's KeyB
+        mgr.confirm_native_op(&gate2, PendingLedgerOp { op_id: op_v2.op_id, lease_epoch: epoch1 }).await;
+        assert!(mgr.has_unresolved_native_input(&gate2).await);
+
+        // 6. Ambiguous outcome retains hold and permanently marks native_outcome_uncertain
+        let op_amb = mgr
+            .prepare_cdp_input_op(
+                &gate2,
+                epoch2,
+                "viewer-2",
+                cdp_identity,
+                &CdpInputEffect::KeyUp { key: "b".into(), code: "KeyB".into(), modifiers: 0 },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        mgr.mark_native_op_ambiguous(&gate2, op_amb).await;
+        assert!(mgr.release_failure().await.is_some());
+        drop(gate2);
+        assert!(matches!(mgr.acquire_lease("viewer-3", "human").await, Err(InputError::ReleaseFailed(_))));
+
+        // 7. Fencing epoch_ops keeps tracker fenced in map and blocks mint/permit resurrection
+        let mgr_fence = SessionInputManager::new();
+        let (ftok, _) = mgr_fence.acquire_lease("viewer-f", "human").await.unwrap();
+        let (fepoch, _) = mgr_fence.verify_control_authority_for_mint("viewer-f", &ftok).await.unwrap();
+        let ftracker = mgr_fence.fence_epoch_ops(fepoch).unwrap();
+        assert!(ftracker.fenced.load(Ordering::Acquire));
+        assert!(matches!(
+            mgr_fence.verify_control_authority_for_mint("viewer-f", &ftok).await,
+            Err(InputError::LeaseNotFound)
+        ));
+        assert!(mgr_fence.try_acquire_devtools_op_permit(fepoch, "viewer-f").await.is_none());
     }
 }

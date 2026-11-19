@@ -8,6 +8,8 @@ import { sanitizeBrowserError } from "./browser-navigation.js";
 export interface BrowserDevToolsDockProps {
   owner: ConnectionRef;
   sessionId: string;
+  viewerId: string;
+  leaseToken: string;
   browserIncarnation?: string;
   profileEpoch?: string;
   dockSide: "bottom" | "right";
@@ -16,7 +18,7 @@ export interface BrowserDevToolsDockProps {
 }
 
 interface ActiveLeaseRef { owner: ConnectionRef; sessionId: string; token: string }
-interface AttemptResult { key: string; lease: { token: string; url: string } | null; error: string | null }
+interface AttemptResult { key: string; lease: { token: string; url: string; controlEpoch: string } | null; error: string | null }
 
 function revokeLeaseQuietly(owner: ConnectionRef, sessionId: string, token: string): void {
   if (isCurrentConnection(owner)) {
@@ -25,15 +27,21 @@ function revokeLeaseQuietly(owner: ConnectionRef, sessionId: string, token: stri
 }
 
 export function BrowserDevToolsDock({
-  owner, sessionId, browserIncarnation, profileEpoch, dockSide, onToggleDockSide, onClose,
+  owner, sessionId, viewerId, leaseToken, browserIncarnation, profileEpoch, dockSide, onToggleDockSide, onClose,
 }: BrowserDevToolsDockProps): ReactElement {
   const [reloadNonce, setReloadNonce] = useState(0);
   const [attemptResult, setAttemptResult] = useState<AttemptResult | null>(null);
-  const requestKey = `${owner.profileId}:${owner.generation}:${sessionId}:${browserIncarnation ?? ""}:${profileEpoch ?? ""}:${reloadNonce}`;
+  const hasControlBinding = Boolean(viewerId && leaseToken);
+  const requestKey = `${owner.profileId}:${owner.generation}:${sessionId}:${viewerId}:${leaseToken}:${browserIncarnation ?? ""}:${profileEpoch ?? ""}:${reloadNonce}`;
 
   const mountedRef = useRef(true);
   const attemptIdRef = useRef(0);
+  const activeRequestKeyRef = useRef(requestKey);
   const activeLeaseRef = useRef<ActiveLeaseRef | null>(null);
+
+  useEffect(() => {
+    activeRequestKeyRef.current = requestKey;
+  }, [requestKey]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -41,40 +49,72 @@ export function BrowserDevToolsDock({
   }, []);
 
   useEffect(() => {
+    if (!hasControlBinding) {
+      activeLeaseRef.current = null;
+      return;
+    }
     const attemptId = ++attemptIdRef.current;
     const ac = new AbortController();
     const capturedOwner: ConnectionRef = { profileId: owner.profileId, generation: owner.generation };
+    const capturedRequestKey = requestKey;
 
     void (async () => {
       let mintedToken: string | null = null;
       try {
-        const lease = await createBrowserDevToolsLease(capturedOwner, sessionId, ac.signal);
+        const lease = await createBrowserDevToolsLease(
+          capturedOwner,
+          sessionId,
+          { viewerId, leaseToken },
+          ac.signal,
+        );
         mintedToken = lease.token;
         const isCurrent =
-          mountedRef.current && attemptId === attemptIdRef.current && !ac.signal.aborted && isCurrentConnection(capturedOwner);
+          mountedRef.current &&
+          attemptId === attemptIdRef.current &&
+          activeRequestKeyRef.current === capturedRequestKey &&
+          !ac.signal.aborted &&
+          isCurrentConnection(capturedOwner);
         const matchesTarget =
           lease.browserSessionId === sessionId &&
+          lease.viewerId === viewerId &&
           (!browserIncarnation || lease.browserIncarnation === browserIncarnation) &&
           (!profileEpoch || String(lease.profileEpoch) === String(profileEpoch));
         if (!isCurrent || !matchesTarget) {
           revokeLeaseQuietly(capturedOwner, sessionId, lease.token);
-          if (mountedRef.current && attemptId === attemptIdRef.current && !ac.signal.aborted && isCurrent) {
+          if (
+            mountedRef.current &&
+            attemptId === attemptIdRef.current &&
+            activeRequestKeyRef.current === capturedRequestKey &&
+            !ac.signal.aborted &&
+            isCurrentConnection(capturedOwner)
+          ) {
             setAttemptResult({
-              key: requestKey,
+              key: capturedRequestKey,
               lease: null,
-              error: "Developer Tools target changed; retry to reconnect.",
+              error: "Developer Tools target or control authority changed; retry to reconnect.",
             });
           }
           return;
         }
         const url = buildBrowserDevToolsUrl(capturedOwner, lease.token, "console");
         activeLeaseRef.current = { owner: capturedOwner, sessionId, token: lease.token };
-        setAttemptResult({ key: requestKey, lease: { token: lease.token, url }, error: null });
+        setAttemptResult({
+          key: capturedRequestKey,
+          lease: { token: lease.token, url, controlEpoch: lease.controlEpoch },
+          error: null,
+        });
       } catch (err) {
         if (mintedToken) revokeLeaseQuietly(capturedOwner, sessionId, mintedToken);
-        if (ac.signal.aborted || !mountedRef.current || attemptId !== attemptIdRef.current) return;
+        if (
+          ac.signal.aborted ||
+          !mountedRef.current ||
+          attemptId !== attemptIdRef.current ||
+          activeRequestKeyRef.current !== capturedRequestKey
+        ) {
+          return;
+        }
         setAttemptResult({
-          key: requestKey,
+          key: capturedRequestKey,
           lease: null,
           error: sanitizeBrowserError(err, "Failed to open Developer Tools."),
         });
@@ -87,12 +127,16 @@ export function BrowserDevToolsDock({
       activeLeaseRef.current = null;
       if (active) revokeLeaseQuietly(active.owner, active.sessionId, active.token);
     };
-  }, [owner.profileId, owner.generation, sessionId, browserIncarnation, profileEpoch, reloadNonce, requestKey]);
+  }, [owner.profileId, owner.generation, sessionId, viewerId, leaseToken, hasControlBinding, browserIncarnation, profileEpoch, reloadNonce, requestKey]);
 
   const isSettled = attemptResult?.key === requestKey;
-  const leaseState = isSettled ? attemptResult.lease : null;
-  const error = isSettled ? attemptResult.error : null;
-  const loading = !isSettled;
+  const leaseState = hasControlBinding && isSettled ? attemptResult.lease : null;
+  const error = !hasControlBinding
+    ? "Acquire control before opening Developer Tools."
+    : isSettled
+      ? attemptResult.error
+      : null;
+  const loading = hasControlBinding && !isSettled;
 
   const dockClass =
     dockSide === "right"

@@ -63,6 +63,8 @@ describe("BrowserDevToolsDock", () => {
     const props: BrowserDevToolsDockProps = {
       owner,
       sessionId: "sess-1",
+      viewerId: "viewer-1",
+      leaseToken: "ctrl-lease-1",
       browserIncarnation: "inc-1",
       profileEpoch: "1",
       dockSide: "bottom",
@@ -83,12 +85,19 @@ describe("BrowserDevToolsDock", () => {
       browserSessionId: "sess-1",
       browserIncarnation: "inc-1",
       profileEpoch: "1",
+      viewerId: "viewer-1",
+      controlEpoch: "7",
     };
     api.createBrowserDevToolsLease.mockResolvedValueOnce(lease);
 
     await renderDock();
 
-    expect(api.createBrowserDevToolsLease).toHaveBeenCalledWith(owner, "sess-1", expect.any(AbortSignal));
+    expect(api.createBrowserDevToolsLease).toHaveBeenCalledWith(
+      owner,
+      "sess-1",
+      { viewerId: "viewer-1", leaseToken: "ctrl-lease-1" },
+      expect.any(AbortSignal),
+    );
     const iframe = container?.querySelector<HTMLIFrameElement>('[data-testid="browser-devtools-iframe"]');
     expect(iframe).toBeTruthy();
     expect(iframe?.getAttribute("src")).toContain("/api/browser/devtools/dt-token-1/devtools_app.html");
@@ -110,6 +119,8 @@ describe("BrowserDevToolsDock", () => {
         browserSessionId: "sess-1",
         browserIncarnation: "inc-1",
         profileEpoch: "1",
+        viewerId: "viewer-1",
+        controlEpoch: "7",
       })
       .mockResolvedValueOnce({
         token: "dt-token-2",
@@ -117,6 +128,8 @@ describe("BrowserDevToolsDock", () => {
         browserSessionId: "sess-1",
         browserIncarnation: "inc-1",
         profileEpoch: "1",
+        viewerId: "viewer-1",
+        controlEpoch: "7",
       });
 
     const props = await renderDock({ dockSide: "bottom" });
@@ -158,12 +171,14 @@ describe("BrowserDevToolsDock", () => {
         browserSessionId: "sess-1",
         browserIncarnation: "inc-1",
         profileEpoch: "1",
+        viewerId: "viewer-1",
+        controlEpoch: "7",
       });
     });
     expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "sess-1", "late-token");
   });
 
-  it("rejects and revokes leases with mismatched browserIncarnation or profileEpoch and drops stale-connection leases", async () => {
+  it("rejects and revokes leases with mismatched browserIncarnation, profileEpoch, or viewerId and drops stale-connection leases", async () => {
     // 1. Mismatched browserIncarnation -> revokes token, shows error + Retry, never mounts iframe
     api.createBrowserDevToolsLease.mockResolvedValueOnce({
       token: "wrong-inc-token",
@@ -171,6 +186,8 @@ describe("BrowserDevToolsDock", () => {
       browserSessionId: "sess-1",
       browserIncarnation: "inc-other",
       profileEpoch: "1",
+      viewerId: "viewer-1",
+      controlEpoch: "7",
     });
     await renderDock({ sessionId: "sess-1", browserIncarnation: "inc-1", profileEpoch: "1" });
     expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "sess-1", "wrong-inc-token");
@@ -185,6 +202,8 @@ describe("BrowserDevToolsDock", () => {
       browserSessionId: "sess-1",
       browserIncarnation: "inc-1",
       profileEpoch: "99",
+      viewerId: "viewer-1",
+      controlEpoch: "7",
     });
     await act(async () => {
       container?.querySelector<HTMLButtonElement>('[data-testid="browser-devtools-retry-btn"]')?.click();
@@ -193,7 +212,24 @@ describe("BrowserDevToolsDock", () => {
     expect(container?.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
     expect(container?.querySelector('[data-testid="browser-devtools-error"]')).toBeTruthy();
 
-    // 3. Stale connection (!isCurrentConnection) on resolve -> never mounts iframe or calls revoke on stale owner
+    // 3. Mismatched viewerId -> revokes token, shows error + Retry
+    api.revokeBrowserDevToolsLease.mockClear();
+    api.createBrowserDevToolsLease.mockResolvedValueOnce({
+      token: "wrong-viewer-token",
+      expiresAtUnixMs: Date.now() + 300_000,
+      browserSessionId: "sess-1",
+      browserIncarnation: "inc-1",
+      profileEpoch: "1",
+      viewerId: "viewer-other",
+      controlEpoch: "7",
+    });
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[data-testid="browser-devtools-retry-btn"]')?.click();
+    });
+    expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "sess-1", "wrong-viewer-token");
+    expect(container?.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+
+    // 4. Stale connection (!isCurrentConnection) on resolve -> never mounts iframe or calls revoke on stale owner
     api.revokeBrowserDevToolsLease.mockClear();
     const deferred = Promise.withResolvers<DevToolsLeaseResponse>();
     api.createBrowserDevToolsLease.mockReturnValueOnce(deferred.promise);
@@ -208,10 +244,55 @@ describe("BrowserDevToolsDock", () => {
         browserSessionId: "sess-1",
         browserIncarnation: "inc-1",
         profileEpoch: "1",
+        viewerId: "viewer-1",
+        controlEpoch: "7",
       });
     });
     expect(container?.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
     expect(api.revokeBrowserDevToolsLease).not.toHaveBeenCalled();
+  });
+
+  it("remints when leaseToken rotates, preserves iframe across non-token prop updates, and refuses mint without control credentials", async () => {
+    api.createBrowserDevToolsLease
+      .mockResolvedValueOnce({
+        token: "dt-epoch-1",
+        expiresAtUnixMs: Date.now() + 300_000,
+        browserSessionId: "sess-1",
+        browserIncarnation: "inc-1",
+        profileEpoch: "1",
+        viewerId: "viewer-1",
+        controlEpoch: "7",
+      })
+      .mockResolvedValueOnce({
+        token: "dt-epoch-2",
+        expiresAtUnixMs: Date.now() + 300_000,
+        browserSessionId: "sess-1",
+        browserIncarnation: "inc-1",
+        profileEpoch: "1",
+        viewerId: "viewer-1",
+        controlEpoch: "8",
+      });
+
+    await renderDock({ leaseToken: "ctrl-epoch-1" });
+    expect(api.createBrowserDevToolsLease).toHaveBeenCalledTimes(1);
+    expect(container?.querySelector<HTMLIFrameElement>('[data-testid="browser-devtools-iframe"]')?.getAttribute("src")).toContain("dt-epoch-1");
+
+    // Same leaseToken (e.g. dockSide change or same-epoch renewal) does not remint
+    await renderDock({ leaseToken: "ctrl-epoch-1", dockSide: "right" });
+    expect(api.createBrowserDevToolsLease).toHaveBeenCalledTimes(1);
+
+    // New leaseToken (new control epoch) revokes old and mints new
+    await renderDock({ leaseToken: "ctrl-epoch-2" });
+    expect(api.revokeBrowserDevToolsLease).toHaveBeenCalledWith(owner, "sess-1", "dt-epoch-1");
+    expect(api.createBrowserDevToolsLease).toHaveBeenCalledTimes(2);
+    expect(container?.querySelector<HTMLIFrameElement>('[data-testid="browser-devtools-iframe"]')?.getAttribute("src")).toContain("dt-epoch-2");
+
+    // Empty control credentials never mint
+    api.createBrowserDevToolsLease.mockClear();
+    await renderDock({ viewerId: "", leaseToken: "" });
+    expect(api.createBrowserDevToolsLease).not.toHaveBeenCalled();
+    expect(container?.querySelector('[data-testid="browser-devtools-iframe"]')).toBeNull();
+    expect(container?.querySelector('[data-testid="browser-devtools-error"]')?.textContent).toContain("Acquire control");
   });
 
   it("shows error state and retries minting on failure", async () => {
@@ -223,6 +304,8 @@ describe("BrowserDevToolsDock", () => {
         browserSessionId: "sess-1",
         browserIncarnation: "inc-1",
         profileEpoch: "1",
+        viewerId: "viewer-1",
+        controlEpoch: "7",
       });
 
     await renderDock();

@@ -621,20 +621,29 @@ describe("browser-host-client", () => {
             browserSessionId: "sess-1",
             browserIncarnation: "inc-1",
             profileEpoch: "2",
+            viewerId: "viewer-1",
+            controlEpoch: "4",
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
       );
 
-      const lease = await createBrowserDevToolsLease(mockOwner, "sess/1");
+      const lease = await createBrowserDevToolsLease(mockOwner, "sess/1", {
+        viewerId: "viewer-1",
+        leaseToken: "ctrl-lease-1",
+      });
       expect(lease.token).toBe("dt-tok-1");
+      expect(lease.viewerId).toBe("viewer-1");
+      expect(lease.controlEpoch).toBe("4");
       expect(fetchSpy).toHaveBeenCalledWith(
         "http://127.0.0.1:4801/api/browser/sessions/sess%2F1/devtools",
         expect.objectContaining({
           method: "POST",
+          body: JSON.stringify({ viewerId: "viewer-1", leaseToken: "ctrl-lease-1" }),
           headers: expect.objectContaining({
             Authorization: "Bearer test-token-xyz",
             "Cache-Control": "no-store",
+            "Content-Type": "application/json",
           }),
         }),
       );

@@ -215,12 +215,19 @@ export interface IssueTicketResponse {
   expiresAtUnixMs: number;
 }
 
+export interface CreateDevToolsLeaseRequest {
+  viewerId: string;
+  leaseToken: string;
+}
+
 export interface DevToolsLeaseResponse {
   token: string;
   expiresAtUnixMs: number;
   browserSessionId: string;
   browserIncarnation: string;
   profileEpoch: string;
+  viewerId: string;
+  controlEpoch: string;
 }
 
 export interface ProfileResetRequest {

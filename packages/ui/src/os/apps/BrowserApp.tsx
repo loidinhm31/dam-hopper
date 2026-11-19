@@ -144,6 +144,7 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
   const [copyPending, setCopyPending] = useState(false);
   const [copyStatus, setCopyStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [devToolsOpenByTab, setDevToolsOpenByTab] = useState<Record<string, boolean>>({});
+  const [devToolsControlDeniedByTab, setDevToolsControlDeniedByTab] = useState<Record<string, boolean>>({});
   const [devToolsDockSide, setDevToolsDockSide] = useState<"bottom" | "right">("bottom");
   const [dismissedDownloadByTab, setDismissedDownloadByTab] = useState<Record<string, string>>({});
   const copyInFlightRef = useRef(false);
@@ -152,6 +153,7 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
   const controlInFlightRef = useRef(false);
   const activeTabId = activeTab.tabId;
   const sessionId = activeTab.sessionId;
+  const viewerId = activeTab.viewerId;
   const isController = Boolean(activeTab.isController);
   const leaseToken = activeTab.leaseToken;
   const navigationRevision = activeTab.snapshot?.navigationRevision ?? "";
@@ -995,12 +997,73 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
     !masked && (selection.selectionActive || selection.preview || selection.preparedArtifact || selection.error || selection.notice),
   );
   const isConnectedOwner = connectionSnap?.status === "connected" && isCurrentConnection(owner);
-  const canUseDevTools = isVisible && isConnectedOwner && !masked && activeTab.phase === "live" && Boolean(sessionId);
+  const hasControlAuthority = Boolean(isController && leaseToken && viewerId);
+  const isStreamHealthy =
+    activeTab.phase === "live" &&
+    Boolean(sessionId) &&
+    (activeTab.snapshot?.status === undefined || activeTab.snapshot.status === "running") &&
+    activeTab.snapshot?.inputAvailable !== false;
+  const canUseDevTools =
+    isVisible && !canonicalState.closing && isConnectedOwner && !masked && hasControlAuthority && isStreamHealthy;
   const devToolsOpen = canUseDevTools && Boolean(devToolsOpenByTab[activeTabId]);
+  const showDevToolsControlRequired =
+    isVisible &&
+    !canonicalState.closing &&
+    isConnectedOwner &&
+    !masked &&
+    !hasControlAuthority &&
+    activeTab.phase === "live" &&
+    Boolean(sessionId) &&
+    Boolean(devToolsControlDeniedByTab[activeTabId]);
+
+  useEffect(() => {
+    if (!hasControlAuthority || !isStreamHealthy || !isConnectedOwner || canonicalState.closing) {
+      setDevToolsOpenByTab((prev) => {
+        if (!prev[activeTabId]) return prev;
+        const next = { ...prev };
+        delete next[activeTabId];
+        return next;
+      });
+    }
+    if (hasControlAuthority) {
+      setDevToolsControlDeniedByTab((prev) => {
+        if (!prev[activeTabId]) return prev;
+        const next = { ...prev };
+        delete next[activeTabId];
+        return next;
+      });
+    }
+  }, [activeTabId, canonicalState.closing, hasControlAuthority, isConnectedOwner, isStreamHealthy]);
+
   const handleToggleDevTools = useCallback(() => {
-    if (!isConnectedOwner || masked || activeTab.phase !== "live" || !sessionId) return;
+    if (!isConnectedOwner || masked || activeTab.phase !== "live" || !sessionId || canonicalState.closing) return;
+    if (!hasControlAuthority || activeTab.snapshot?.inputAvailable === false) {
+      setDevToolsControlDeniedByTab((prev) => ({ ...prev, [activeTabId]: !prev[activeTabId] }));
+      setDevToolsOpenByTab((prev) => {
+        if (!(activeTabId in prev)) return prev;
+        const next = { ...prev };
+        delete next[activeTabId];
+        return next;
+      });
+      return;
+    }
+    setDevToolsControlDeniedByTab((prev) => {
+      if (!(activeTabId in prev)) return prev;
+      const next = { ...prev };
+      delete next[activeTabId];
+      return next;
+    });
     setDevToolsOpenByTab((prev) => ({ ...prev, [activeTabId]: !prev[activeTabId] }));
-  }, [activeTab.phase, activeTabId, isConnectedOwner, masked, sessionId]);
+  }, [
+    activeTab.phase,
+    activeTab.snapshot?.inputAvailable,
+    activeTabId,
+    canonicalState.closing,
+    hasControlAuthority,
+    isConnectedOwner,
+    masked,
+    sessionId,
+  ]);
 
   const activeDownload = !masked ? (activeTab.snapshot?.lastDownload ?? null) : null;
   const activeDownloadKey = activeDownload ? `${activeDownload.guid}:${activeDownload.state}` : null;
@@ -1072,6 +1135,31 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
       {!masked && activeTab.unsupportedReason && (
         <div role="alert" data-testid="browser-unsupported-banner" className="flex items-center justify-between px-3 py-1.5 bg-[var(--color-danger)]/15 border-b border-[var(--color-danger)]/30 text-[var(--color-danger)] text-xs">
           <span className="font-medium">Browser capability unavailable: {activeTab.unsupportedReason}</span>
+        </div>
+      )}
+
+      {showDevToolsControlRequired && (
+        <div role="alert" data-testid="browser-devtools-control-required" className="flex items-center justify-between gap-2 px-3 py-1.5 bg-[var(--color-warning)]/15 border-b border-[var(--color-warning)]/30 text-[var(--color-warning)] text-xs">
+          <span>Developer Tools requires active viewer control. Acquire control to inspect this page.</span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              data-testid="browser-devtools-acquire-control-btn"
+              disabled={controlPending}
+              onClick={() => void handleAcquireControl()}
+              className="rounded border border-[var(--color-warning)]/50 px-2 py-0.5 text-[11px] font-medium hover:bg-[var(--color-warning)]/10 disabled:opacity-40"
+            >
+              {controlPending ? "Acquiring…" : "Acquire Control"}
+            </button>
+            <button
+              type="button"
+              data-testid="browser-devtools-dismiss-denied-btn"
+              onClick={() => setDevToolsControlDeniedByTab((prev) => ({ ...prev, [activeTabId]: false }))}
+              className="rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-text)]"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
@@ -1273,11 +1361,13 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
             </div>
           )}
             </div>
-            {devToolsOpen && sessionId && (
+            {devToolsOpen && sessionId && viewerId && leaseToken && (
               <BrowserDevToolsDock
-                key={`${activeTabId}:${sessionId}:${activeTab.snapshot?.browserIncarnation ?? ""}:${String(activeTab.snapshot?.profileEpoch ?? "")}`}
+                key={`${activeTabId}:${sessionId}:${viewerId}:${leaseToken}:${activeTab.snapshot?.browserIncarnation ?? ""}:${String(activeTab.snapshot?.profileEpoch ?? "")}`}
                 owner={owner}
                 sessionId={sessionId}
+                viewerId={viewerId}
+                leaseToken={leaseToken}
                 browserIncarnation={activeTab.snapshot?.browserIncarnation}
                 profileEpoch={activeTab.snapshot?.profileEpoch}
                 dockSide={devToolsDockSide}

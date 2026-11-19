@@ -23,15 +23,21 @@ use tokio_tungstenite::tungstenite::Message as WsMsg;
 use tower::ServiceExt;
 
 use dam_hopper_server::agent_store::AgentStoreService;
-use dam_hopper_server::api::browser_host::global_session_registry;
+use dam_hopper_server::api::browser_host::{
+    global_attachment_manager, global_input_managers, global_session_registry,
+};
 use dam_hopper_server::api::build_router_with_origins;
 use dam_hopper_server::auth::model::{
     chrono_to_bson, AuthClaims, AuthSession, UserRecord, UserRole,
 };
 use dam_hopper_server::auth::policy::AUTH_PROTOCOL_VERSION;
 use dam_hopper_server::auth::{AuthService, AuthStore, SystemClock};
+use dam_hopper_server::browser_host::attachments::{
+    AdmittedAttachment, AttachmentError, AttachmentPurpose, PairRegistration,
+};
 use dam_hopper_server::browser_host::config::BrowserHostConfig;
 use dam_hopper_server::browser_host::manager::BrowserInstanceHandle;
+use dam_hopper_server::browser_host::media::ViewerPermit;
 use dam_hopper_server::browser_host::session::{
     BindOutcome, CreateParams, CreateReservation, CreateSessionRequest, ViewportRequest,
 };
@@ -464,19 +470,140 @@ where
         }
     }
 }
+static TEST_VIEWER_CAP: AtomicUsize = AtomicUsize::new(0);
+
+struct PairedViewerGuard {
+    media: PairRegistration,
+    control: PairRegistration,
+}
+
+impl PairedViewerGuard {
+    async fn release(self) {
+        let mgr = global_attachment_manager();
+        mgr.unregister_connection(self.control.connection_id).await;
+        mgr.unregister_connection(self.media.connection_id).await;
+    }
+}
+
+async fn admit_paired_viewer(
+    principal: &str,
+    auth_session_id: &str,
+    browser_session_id: &str,
+    viewer_id: &str,
+    incarnation: &str,
+) -> PairedViewerGuard {
+    let mgr = global_attachment_manager();
+    let sub_epoch = uuid::Uuid::new_v4().to_string();
+    let base = |purpose| AdmittedAttachment {
+        purpose,
+        principal: principal.to_string(),
+        is_dev: false,
+        auth_session_id: Some(auth_session_id.to_string()),
+        auth_version: Some(1),
+        credential_version: Some(1),
+        effective_deadline: None,
+        profile_epoch: 1,
+        browser_incarnation: incarnation.to_string(),
+        browser_session_id: Some(browser_session_id.to_string()),
+        viewer_id: Some(viewer_id.to_string()),
+        subscription_epoch: Some(sub_epoch.clone()),
+    };
+    let permit = || {
+        ViewerPermit::try_acquire_in(&TEST_VIEWER_CAP, 64)
+            .map_err(|_| AttachmentError::ViewerCapacityExceeded(64))
+    };
+    let media = mgr
+        .register_pair_connection(&base(AttachmentPurpose::Media), permit)
+        .await
+        .expect("register media pair");
+    assert!(mgr.mark_media_attached(media.connection_id).await);
+    let control = mgr
+        .register_pair_connection(&base(AttachmentPurpose::Control), permit)
+        .await
+        .expect("register control pair");
+    PairedViewerGuard { media, control }
+}
+
+async fn acquire_control_router(
+    app: &Router,
+    session_id: &str,
+    auth_token: &str,
+    viewer_id: &str,
+) -> String {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/browser/sessions/{session_id}/control/acquire"))
+                .header(AUTHORIZATION, format!("Bearer {auth_token}"))
+                .header(ORIGIN, "http://127.0.0.1:5173")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "viewerId": viewer_id, "holderKind": "human" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 65536).await.unwrap())
+            .unwrap();
+    body["leaseToken"].as_str().unwrap().to_string()
+}
+
+async fn cleanup_test_session_viewers(sid: &str) {
+    let mgr = global_input_managers().write().await.remove(sid);
+    if let Some(mgr) = mgr {
+        let _ = mgr.revoke_lease().await;
+    }
+    dam_hopper_server::browser_host::devtools::global_devtools_leases()
+        .revoke_by_browser_session(sid)
+        .await;
+    global_attachment_manager()
+        .revoke_by_browser_session(sid)
+        .await;
+}
+
+async fn acquire_control_http(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    session_id: &str,
+    auth_token: &str,
+    viewer_id: &str,
+) -> String {
+    let resp = client
+        .post(format!("http://{addr}/api/browser/sessions/{session_id}/control/acquire"))
+        .header(AUTHORIZATION, format!("Bearer {auth_token}"))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "viewerId": viewer_id, "holderKind": "human" }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    resp_json(resp).await["leaseToken"].as_str().unwrap().to_string()
+}
+
 async fn mint_devtools_probe_token(
     client: &reqwest::Client,
     addr: SocketAddr,
     session_id: &str,
     auth_token: &str,
+    viewer_id: &str,
+    lease_token: &str,
 ) -> String {
     let response = client
         .post(format!("http://{addr}/api/browser/sessions/{session_id}/devtools"))
         .header(AUTHORIZATION, format!("Bearer {auth_token}"))
         .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "viewerId": viewer_id, "leaseToken": lease_token }).to_string())
         .send()
         .await
         .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
     resp_json(response).await["token"].as_str().unwrap().to_string()
 }
 
@@ -578,7 +705,7 @@ async fn test_devtools_lease_mint_foreign_conflict_and_capacity() {
         user_data_dir: tmp.path().to_path_buf(),
     });
 
-    // Foreign principal cannot mint lease -> 404
+    // Foreign principal cannot mint lease -> 404 (even with JSON body)
     let foreign_state = create_test_state(tmp.path().to_path_buf(), None, enabled_cfg)
         .with_auth_service(Arc::new(other_auth));
     let foreign_app = build_router_with_origins(foreign_state, origins);
@@ -589,14 +716,93 @@ async fn test_devtools_lease_mint_foreign_conflict_and_capacity() {
                 .uri(format!("/api/browser/sessions/{running_id}/devtools"))
                 .header(AUTHORIZATION, format!("Bearer {other_tok}"))
                 .header(ORIGIN, "http://127.0.0.1:5173")
-                .body(Body::empty())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "viewerId": "v-other", "leaseToken": "tok-other" }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
-    // Mint 8 leases (cap) -> 9th returns 429
+    // Bodyless mint is rejected (no legacy fallback) and does not create an input manager
+    let bodyless_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/browser/sessions/{running_id}/devtools"))
+                .header(AUTHORIZATION, format!("Bearer {owner_tok}"))
+                .header(ORIGIN, "http://127.0.0.1:5173")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(bodyless_resp.status().is_client_error());
+    assert!(global_input_managers().read().await.get(&running_id).is_none());
+
+    // Same owner without active control lease -> 403 and no input manager created
+    let no_ctrl_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/browser/sessions/{running_id}/devtools"))
+                .header(AUTHORIZATION, format!("Bearer {owner_tok}"))
+                .header(ORIGIN, "http://127.0.0.1:5173")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "viewerId": "viewer-cap", "leaseToken": "missing" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_ctrl_resp.status(), StatusCode::FORBIDDEN);
+    assert!(global_input_managers().read().await.get(&running_id).is_none());
+
+    // Acquire control WITHOUT admitted viewer pair -> 403 viewerNotAdmitted
+    let lease_tok = acquire_control_router(&app, &running_id, &owner_tok, "viewer-cap").await;
+    let unadmitted_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/browser/sessions/{running_id}/devtools"))
+                .header(AUTHORIZATION, format!("Bearer {owner_tok}"))
+                .header(ORIGIN, "http://127.0.0.1:5173")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "viewerId": "viewer-cap", "leaseToken": lease_tok }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unadmitted_resp.status(), StatusCode::FORBIDDEN);
+
+    // Admit paired viewer, verify wrong viewerId or wrong leaseToken rejected, then mint 8 (cap) -> 9th 429
+    let pair = admit_paired_viewer("dt-owner", "sess-dt-owner", &running_id, "viewer-cap", "inc-cap").await;
+    let wrong_viewer = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/browser/sessions/{running_id}/devtools"))
+                .header(AUTHORIZATION, format!("Bearer {owner_tok}"))
+                .header(ORIGIN, "http://127.0.0.1:5173")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "viewerId": "viewer-wrong", "leaseToken": lease_tok }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_viewer.status(), StatusCode::FORBIDDEN);
+
     let mut minted = Vec::new();
     for _ in 0..8 {
         let resp = app
@@ -607,7 +813,10 @@ async fn test_devtools_lease_mint_foreign_conflict_and_capacity() {
                     .uri(format!("/api/browser/sessions/{running_id}/devtools"))
                     .header(AUTHORIZATION, format!("Bearer {owner_tok}"))
                     .header(ORIGIN, "http://127.0.0.1:5173")
-                    .body(Body::empty())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "viewerId": "viewer-cap", "leaseToken": lease_tok }).to_string(),
+                    ))
                     .unwrap(),
             )
             .await
@@ -616,6 +825,8 @@ async fn test_devtools_lease_mint_foreign_conflict_and_capacity() {
         let body: Value =
             serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 65536).await.unwrap())
                 .unwrap();
+        assert_eq!(body["viewerId"], "viewer-cap");
+        assert!(body["controlEpoch"].as_str().is_some());
         minted.push(body["token"].as_str().unwrap().to_string());
     }
     let cap_resp = app
@@ -626,7 +837,10 @@ async fn test_devtools_lease_mint_foreign_conflict_and_capacity() {
                 .uri(format!("/api/browser/sessions/{running_id}/devtools"))
                 .header(AUTHORIZATION, format!("Bearer {owner_tok}"))
                 .header(ORIGIN, "http://127.0.0.1:5173")
-                .body(Body::empty())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "viewerId": "viewer-cap", "leaseToken": lease_tok }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -665,14 +879,17 @@ async fn test_devtools_lease_mint_foreign_conflict_and_capacity() {
                 .uri(format!("/api/browser/sessions/{init_id}/devtools"))
                 .header(AUTHORIZATION, format!("Bearer {owner_tok}"))
                 .header(ORIGIN, "http://127.0.0.1:5173")
-                .body(Body::empty())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "viewerId": "viewer-cap", "leaseToken": lease_tok }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(conflict_resp.status(), StatusCode::CONFLICT);
 
-    // DELETE revokes one lease and frees slot; session DELETE revokes all
+    // DELETE revokes one lease and frees slot; session cleanup releases pair & control
     let del_resp = app
         .clone()
         .oneshot(
@@ -687,6 +904,8 @@ async fn test_devtools_lease_mint_foreign_conflict_and_capacity() {
         .await
         .unwrap();
     assert_eq!(del_resp.status(), StatusCode::OK);
+    pair.release().await;
+    cleanup_test_session_viewers(&running_id).await;
 }
 
 #[tokio::test]
@@ -716,6 +935,8 @@ async fn test_devtools_asset_proxy_csp_and_path_traversal() {
     });
     let app = build_router_with_origins(state, vec![HeaderValue::from_static("http://127.0.0.1:5173")]);
     let sid = insert_running_session("dt-asset", false, "inc-asset", "TARGET-ASSET").await;
+    let pair = admit_paired_viewer("dt-asset", "sess-dt-asset", &sid, "viewer-asset", "inc-asset").await;
+    let ctrl_tok = acquire_control_router(&app, &sid, &tok, "viewer-asset").await;
 
     let mint_resp = app
         .clone()
@@ -725,11 +946,15 @@ async fn test_devtools_asset_proxy_csp_and_path_traversal() {
                 .uri(format!("/api/browser/sessions/{sid}/devtools"))
                 .header(AUTHORIZATION, format!("Bearer {tok}"))
                 .header(ORIGIN, "http://127.0.0.1:5173")
-                .body(Body::empty())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "viewerId": "viewer-asset", "leaseToken": ctrl_tok }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
+    assert_eq!(mint_resp.status(), StatusCode::OK);
     let lease: Value =
         serde_json::from_slice(&axum::body::to_bytes(mint_resp.into_body(), 65536).await.unwrap())
             .unwrap();
@@ -807,6 +1032,8 @@ async fn test_devtools_asset_proxy_csp_and_path_traversal() {
         .await
         .unwrap();
     assert_eq!(expired_resp.status(), StatusCode::UNAUTHORIZED);
+    pair.release().await;
+    cleanup_test_session_viewers(&sid).await;
 }
 
 #[tokio::test]
@@ -847,44 +1074,26 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
 
     let sid = insert_running_session("dt-ws", false, "inc-ws", "TARGET-WS").await;
     let client = reqwest::Client::new();
-    let lease_a = resp_json(
-        client
-            .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
-            .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
-            .header(ORIGIN, "http://127.0.0.1:5173")
-            .send()
-            .await
-            .unwrap(),
-    )
-    .await;
-    let lease_b = resp_json(
-        client
-            .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
-            .header(AUTHORIZATION, format!("Bearer {}", tokens[1]))
-            .header(ORIGIN, "http://127.0.0.1:5173")
-            .send()
-            .await
-            .unwrap(),
-    )
-    .await;
-    let binary_lease = resp_json(
-        client
-            .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
-            .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
-            .header(ORIGIN, "http://127.0.0.1:5173")
-            .send()
-            .await
-            .unwrap(),
-    )
-    .await;
-    let tok_binary = binary_lease["token"].as_str().unwrap();
-    let tok_malformed = mint_devtools_probe_token(&client, addr, &sid, &tokens[0]).await;
-    let tok_batch = mint_devtools_probe_token(&client, addr, &sid, &tokens[0]).await;
-    let tok_upstream_binary = mint_devtools_probe_token(&client, addr, &sid, &tokens[0]).await;
-    let tok_dense = mint_devtools_probe_token(&client, addr, &sid, &tokens[0]).await;
-    let tok_scalar = mint_devtools_probe_token(&client, addr, &sid, &tokens[0]).await;
-    let tok_a = lease_a["token"].as_str().unwrap();
-    let tok_b = lease_b["token"].as_str().unwrap();
+    let pair_a = admit_paired_viewer("dt-ws", "auth-a", &sid, "viewer-a", "inc-ws").await;
+    let lease_token_a = acquire_control_http(&client, addr, &sid, &tokens[0], "viewer-a").await;
+    // Another auth session cannot mint DevTools using viewer-a's admitted viewer ID
+    let cross_auth_resp = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[1]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "viewerId": "viewer-a", "leaseToken": lease_token_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_auth_resp.status(), StatusCode::FORBIDDEN);
+    let tok_a = mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_token_a).await;
+    let tok_binary = mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_token_a).await;
+    let tok_malformed = mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_token_a).await;
+    let tok_batch = mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_token_a).await;
+    let tok_upstream_binary = mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_token_a).await;
+    let tok_dense = mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_token_a).await;
+    let tok_scalar = mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_token_a).await;
 
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{tok_a}/ws"))
         .await
@@ -951,19 +1160,6 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
     assert!(!seen_methods.lock().iter().any(|frame| {
         matches!(frame.as_str(), "<binary>" | "<invalid-json>" | "<non-command>")
     }));
-    let (mut survivor_ws, _) =
-        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{tok_b}/ws"))
-            .await
-            .expect("connect auth-b survivor devtools ws");
-    let survivor_first_evt = tokio::time::timeout(std::time::Duration::from_secs(2), survivor_ws.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(survivor_first_evt.to_text().unwrap()).unwrap()["params"]["targetInfo"]["targetId"],
-        "CHILD-WORKER"
-    );
 
     // Upstream foreign page Target.targetCreated dropped; worker forwarded
     let first_evt = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
@@ -1104,7 +1300,7 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
     assert!(snap.dto.input_available, "input_available must stay true");
     assert_eq!(seen_methods.lock().as_slice(), &["Runtime.triggerBinary", "Runtime.enable", "Runtime.evaluate"]);
 
-    // Single-session auth revocation (DELETE /api/auth/sessions/auth-a) closes auth-a WS while auth-b survives
+    // Single-session auth revocation (DELETE /api/auth/sessions/auth-a) closes auth-a WS
     let revoke_resp = client
         .delete(format!("http://{addr}/api/auth/sessions/auth-a"))
         .header(AUTHORIZATION, format!("Bearer {}", tokens[1]))
@@ -1115,6 +1311,25 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
     assert_eq!(revoke_resp.status(), StatusCode::NO_CONTENT);
     let closed = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await.unwrap();
     assert!(matches!(closed, None | Some(Ok(WsMsg::Close(_))) | Some(Err(_))));
+    pair_a.release().await;
+
+    // auth-b admits its own viewer, acquires control, mints DevTools, and continues
+    let pair_b = admit_paired_viewer("dt-ws", "auth-b", &sid, "viewer-b", "inc-ws").await;
+    let lease_token_b = acquire_control_http(&client, addr, &sid, &tokens[1], "viewer-b").await;
+    let tok_b = mint_devtools_probe_token(&client, addr, &sid, &tokens[1], "viewer-b", &lease_token_b).await;
+    let (mut survivor_ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{tok_b}/ws"))
+            .await
+            .expect("connect auth-b survivor devtools ws");
+    let survivor_first_evt = tokio::time::timeout(std::time::Duration::from_secs(2), survivor_ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(survivor_first_evt.to_text().unwrap()).unwrap()["params"]["targetInfo"]["targetId"],
+        "CHILD-WORKER"
+    );
     survivor_ws
         .send(WsMsg::Text(json!({"id": 100, "method": "Runtime.enable"}).to_string().into()))
         .await
@@ -1153,6 +1368,8 @@ async fn test_devtools_ws_target_isolation_geometry_fence_and_revocation() {
         .await
         .unwrap();
     assert_eq!(b_after.status(), StatusCode::UNAUTHORIZED);
+    pair_b.release().await;
+    cleanup_test_session_viewers(&sid).await;
 }
 
 #[tokio::test]
@@ -1191,35 +1408,17 @@ async fn test_devtools_ws_enforces_max_concurrent_connections() {
 
     let sid = insert_running_session("dt-max", false, "inc-max", "TARGET-MAX").await;
     let client = reqwest::Client::new();
+    let pair = admit_paired_viewer("dt-max", "sess-dt-max", &sid, "viewer-max", "inc-max").await;
+    let lease_token = acquire_control_http(&client, addr, &sid, &tok, "viewer-max").await;
     let mut sockets = Vec::new();
     for _ in 0..4 {
-        let lease = resp_json(
-            client
-                .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
-                .header(AUTHORIZATION, format!("Bearer {tok}"))
-                .header(ORIGIN, "http://127.0.0.1:5173")
-                .send()
-                .await
-                .unwrap(),
-        )
-        .await;
-        let t = lease["token"].as_str().unwrap();
+        let t = mint_devtools_probe_token(&client, addr, &sid, &tok, "viewer-max", &lease_token).await;
         let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{t}/ws"))
             .await
             .unwrap();
         sockets.push(ws);
     }
-    let fifth = resp_json(
-        client
-            .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
-            .header(AUTHORIZATION, format!("Bearer {tok}"))
-            .header(ORIGIN, "http://127.0.0.1:5173")
-            .send()
-            .await
-            .unwrap(),
-    )
-    .await;
-    let fifth_tok = fifth["token"].as_str().unwrap();
+    let fifth_tok = mint_devtools_probe_token(&client, addr, &sid, &tok, "viewer-max", &lease_token).await;
     let err = tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{fifth_tok}/ws"))
         .await
         .unwrap_err();
@@ -1228,6 +1427,8 @@ async fn test_devtools_ws_enforces_max_concurrent_connections() {
     };
     assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     drop(sockets);
+    pair.release().await;
+    cleanup_test_session_viewers(&sid).await;
 }
 
 #[tokio::test]
@@ -1439,19 +1640,12 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
     }
     let created = resp_json(create_resp).await;
     let sid = created["browserSessionId"].as_str().unwrap().to_string();
+    let inc = created["browserIncarnation"].as_str().unwrap().to_string();
+    let pair = admit_paired_viewer("dt-real", "sess-dt-real", &sid, "viewer-real", &inc).await;
+    let lease_token = acquire_control_http(&client, addr, &sid, &tok, "viewer-real").await;
 
     // 1. Mint DevTools lease and fetch real Chromium devtools_app.html
-    let lease = resp_json(
-        client
-            .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
-            .header(AUTHORIZATION, format!("Bearer {tok}"))
-            .header(ORIGIN, "http://127.0.0.1:5173")
-            .send()
-            .await
-            .unwrap(),
-    )
-    .await;
-    let dt_tok = lease["token"].as_str().unwrap();
+    let dt_tok = mint_devtools_probe_token(&client, addr, &sid, &tok, "viewer-real", &lease_token).await;
     let dt_html = client
         .get(format!("http://{addr}/api/browser/devtools/{dt_tok}/devtools_app.html"))
         .send()
@@ -1855,6 +2049,8 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
     assert_eq!(after_oopif_dto.pointer("/lastDownload/filePath").and_then(Value::as_str), after_oopif_path.to_str());
 
     drop(ws);
+    pair.release().await;
+    cleanup_test_session_viewers(&sid).await;
     let _ = client
         .delete(format!("http://{addr}/api/browser/sessions/{sid}"))
         .header(AUTHORIZATION, format!("Bearer {tok}"))
@@ -1862,4 +2058,627 @@ async fn test_real_chromium_devtools_and_native_host_downloads() {
         .send()
         .await;
     state.browser_host.shutdown_all().await;
+}
+
+#[derive(Default)]
+struct ProgrammableCdpBehavior {
+    reject_keyup: std::sync::atomic::AtomicBool,
+    reject_bad_repeat: std::sync::atomic::AtomicBool,
+}
+
+async fn spawn_programmable_cdp_server(
+    expected_target_id: String,
+) -> (
+    u16,
+    Arc<Mutex<Vec<(String, Value)>>>,
+    Arc<ProgrammableCdpBehavior>,
+) {
+    let recorded: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+    let behavior = Arc::new(ProgrammableCdpBehavior::default());
+
+    let ver_router = Router::new().route(
+        "/json/version",
+        get(|| async {
+            axum::Json(json!({
+                "Browser": "Chrome/130.0.0.0",
+                "Protocol-Version": "1.3"
+            }))
+        }),
+    );
+
+    let rec_clone = recorded.clone();
+    let beh_clone = behavior.clone();
+    let target_clone = expected_target_id.clone();
+
+    let app = ver_router.route(
+        "/devtools/page/{tid}",
+        get(
+            move |AxumPath(tid): AxumPath<String>, ws: WebSocketUpgrade| {
+                let rec = rec_clone.clone();
+                let beh = beh_clone.clone();
+                let exp = target_clone.clone();
+                async move {
+                    if tid != exp {
+                        return StatusCode::NOT_FOUND.into_response();
+                    }
+                    ws.on_upgrade(move |mut socket| async move {
+                        while let Some(Ok(frame)) = socket.next().await {
+                            match frame {
+                                AxumWsMsg::Text(txt) => {
+                                    let Ok(val) = serde_json::from_str::<Value>(&txt) else {
+                                        continue;
+                                    };
+                                    let method = val
+                                        .get("method")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let params = val.get("params").cloned().unwrap_or(Value::Null);
+                                    rec.lock().push((method.clone(), params.clone()));
+
+                                    let is_keyup = method == "Input.dispatchKeyEvent"
+                                        && params.get("type").and_then(Value::as_str)
+                                            == Some("keyUp");
+                                    let is_bad_repeat = method == "Input.dispatchKeyEvent"
+                                        && params.get("key").and_then(Value::as_str)
+                                            == Some("BadRepeat");
+
+                                    let reply = if is_keyup
+                                        && beh.reject_keyup.load(Ordering::Acquire)
+                                    {
+                                        json!({
+                                            "id": val["id"],
+                                            "error": { "code": -32000, "message": "simulated keyUp release failure" }
+                                        })
+                                    } else if is_bad_repeat
+                                        && beh.reject_bad_repeat.load(Ordering::Acquire)
+                                    {
+                                        json!({
+                                            "id": val["id"],
+                                            "error": { "code": -32000, "message": "simulated key repeat error" }
+                                        })
+                                    } else {
+                                        json!({ "id": val["id"], "result": { "ok": true } })
+                                    };
+                                    if socket
+                                        .send(AxumWsMsg::Text(reply.to_string().into()))
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                AxumWsMsg::Ping(payload) => {
+                                    if socket.send(AxumWsMsg::Pong(payload)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                AxumWsMsg::Close(_) => break,
+                                _ => {}
+                            }
+                        }
+                    })
+                }
+            },
+        ),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (port, recorded, behavior)
+}
+
+#[tokio::test]
+async fn test_devtools_control_transfer_race_and_stale_refresh_denial() {
+    let _serial = TEST_SERIAL.lock().await;
+    global_session_registry().reset_for_test().await;
+    let tmp = tempdir().unwrap();
+    let (mock_port, seen_methods, _, _) =
+        spawn_mock_chromium_server("TARGET-XFER".into()).await;
+    let (store, auth_service, tokens) =
+        setup_sqlite_multi_session(tmp.path(), "dt-xfer", &["auth-a", "auth-b"]).await;
+    let state = create_test_state(
+        tmp.path().to_path_buf(),
+        Some(store),
+        Some(BrowserHostConfig {
+            enabled: true,
+            ..BrowserHostConfig::default()
+        }),
+    )
+    .with_auth_service(auth_service);
+    *state.browser_host._test_mock_handle.write() = Some(BrowserInstanceHandle {
+        subject: "dt-xfer".into(),
+        is_dev: false,
+        pid: 1,
+        ws_endpoint: format!("ws://127.0.0.1:{mock_port}/devtools/browser/mock"),
+        browser_incarnation: "inc-xfer".into(),
+        profile_epoch: 1,
+        user_data_dir: tmp.path().to_path_buf(),
+    });
+    let app = build_router_with_origins(
+        state,
+        vec![HeaderValue::from_static("http://127.0.0.1:5173")],
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let sid = insert_running_session("dt-xfer", false, "inc-xfer", "TARGET-XFER").await;
+    let client = reqwest::Client::new();
+    let pair_a = admit_paired_viewer("dt-xfer", "auth-a", &sid, "viewer-a", "inc-xfer").await;
+    let pair_b = admit_paired_viewer("dt-xfer", "auth-b", &sid, "viewer-b", "inc-xfer").await;
+
+    // 1. viewer-a acquires control and mints DevTools lease (bound to viewer-a & epoch1)
+    let lease_a = acquire_control_http(&client, addr, &sid, &tokens[0], "viewer-a").await;
+    let mint_a_resp = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "viewerId": "viewer-a", "leaseToken": lease_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mint_a_resp.status(), StatusCode::OK);
+    let mint_a = resp_json(mint_a_resp).await;
+    assert_eq!(mint_a["viewerId"], "viewer-a");
+    let epoch_a = mint_a["controlEpoch"].as_str().unwrap().to_string();
+    let dt_tok_a = mint_a["token"].as_str().unwrap().to_string();
+
+    let (mut ws_a, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_a}/ws"))
+            .await
+            .expect("viewer-a devtools ws connects");
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), ws_a.next())
+        .await
+        .unwrap();
+
+    // 2. Same-epoch control/renew preserves existing DevTools socket and capability
+    let renew_resp = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/renew"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "leaseToken": lease_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(renew_resp.status(), StatusCode::OK);
+    ws_a.send(WsMsg::Text(
+        json!({"id": 1, "method": "Runtime.enable"}).to_string().into(),
+    ))
+    .await
+    .unwrap();
+    loop {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(2), ws_a.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let val: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+        if val.get("id") == Some(&json!(1)) {
+            assert_eq!(val["result"]["ok"], true);
+            break;
+        }
+    }
+
+    // 3. Mint an unused second DevTools token for viewer-a to verify post-transfer connect/refresh denial
+    let unused_a_tok =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_a).await;
+
+    // 4. Cooperative control check: viewer-b cannot steal live control without release (409 Conflict)
+    let steal_attempt = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/acquire"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[1]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "viewerId": "viewer-b", "holderKind": "human" }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(steal_attempt.status(), StatusCode::CONFLICT);
+
+    // Release viewer-a control -> closes viewer-a WS, revokes viewer-a asset/WS tokens
+    let release_a_resp = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/release"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "leaseToken": lease_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(release_a_resp.status(), StatusCode::OK);
+    let _lease_b1 = acquire_control_http(&client, addr, &sid, &tokens[1], "viewer-b").await;
+    let closed_a = tokio::time::timeout(std::time::Duration::from_secs(2), ws_a.next())
+        .await
+        .unwrap();
+    assert!(matches!(
+        closed_a,
+        None | Some(Ok(WsMsg::Close(_))) | Some(Err(_))
+    ));
+    let commands_after_transfer = seen_methods.lock().len();
+
+    let asset_after = client
+        .get(format!(
+            "http://{addr}/api/browser/devtools/{dt_tok_a}/devtools_app.html"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(asset_after.status(), StatusCode::UNAUTHORIZED);
+
+    let stale_ws_err = tokio_tungstenite::connect_async(format!(
+        "ws://{addr}/api/browser/devtools/{unused_a_tok}/ws"
+    ))
+    .await
+    .unwrap_err();
+    let tokio_tungstenite::tungstenite::Error::Http(stale_ws_resp) = stale_ws_err else {
+        panic!("expected HTTP rejection for stale devtools WS token, got {stale_ws_err:?}");
+    };
+    assert_eq!(stale_ws_resp.status(), StatusCode::UNAUTHORIZED);
+
+    // viewer-a cannot re-mint with its revoked lease token
+    let stale_mint = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "viewerId": "viewer-a", "leaseToken": lease_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale_mint.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        seen_methods.lock().len(),
+        commands_after_transfer,
+        "no post-fence DevTools commands may reach mock Chromium"
+    );
+
+    // 5. Same-viewer reacquire (viewer-b -> viewer-b) rotates controlEpoch and revokes prior epoch's DevTools token
+    let mint_b1 = resp_json(
+        client
+            .post(format!("http://{addr}/api/browser/sessions/{sid}/devtools"))
+            .header(AUTHORIZATION, format!("Bearer {}", tokens[1]))
+            .header(ORIGIN, "http://127.0.0.1:5173")
+            .header(CONTENT_TYPE, "application/json")
+            .body(json!({ "viewerId": "viewer-b", "leaseToken": _lease_b1 }).to_string())
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let dt_tok_b1 = mint_b1["token"].as_str().unwrap().to_string();
+    let epoch_b1 = mint_b1["controlEpoch"].as_str().unwrap().to_string();
+    assert_ne!(epoch_a, epoch_b1);
+    let b1_ok = client
+        .get(format!(
+            "http://{addr}/api/browser/devtools/{dt_tok_b1}/devtools_app.html"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(b1_ok.status(), StatusCode::OK);
+
+    let lease_b2 = acquire_control_http(&client, addr, &sid, &tokens[1], "viewer-b").await;
+    assert_ne!(_lease_b1, lease_b2);
+    let b1_after_reacquire = client
+        .get(format!(
+            "http://{addr}/api/browser/devtools/{dt_tok_b1}/devtools_app.html"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(b1_after_reacquire.status(), StatusCode::UNAUTHORIZED);
+
+    pair_a.release().await;
+    pair_b.release().await;
+    cleanup_test_session_viewers(&sid).await;
+}
+
+#[tokio::test]
+async fn test_devtools_shared_input_ledger_ordered_release_and_stalled_write_cancel() {
+    use dam_hopper_server::browser_host::cdp_gateway::{write_with_cancel, WriteOutcome};
+
+    let _serial = TEST_SERIAL.lock().await;
+    global_session_registry().reset_for_test().await;
+    let tmp = tempdir().unwrap();
+    let (mock_port, recorded_cmds, behavior) =
+        spawn_programmable_cdp_server("TARGET-LEDGER".into()).await;
+    let (store, auth_service, tokens) =
+        setup_sqlite_multi_session(tmp.path(), "dt-ledger", &["auth-a", "auth-b"]).await;
+    let state = create_test_state(
+        tmp.path().to_path_buf(),
+        Some(store),
+        Some(BrowserHostConfig {
+            enabled: true,
+            ..BrowserHostConfig::default()
+        }),
+    )
+    .with_auth_service(auth_service);
+    *state.browser_host._test_mock_handle.write() = Some(BrowserInstanceHandle {
+        subject: "dt-ledger".into(),
+        is_dev: false,
+        pid: 1,
+        ws_endpoint: format!("ws://127.0.0.1:{mock_port}/devtools/browser/mock"),
+        browser_incarnation: "inc-ledger".into(),
+        profile_epoch: 1,
+        user_data_dir: tmp.path().to_path_buf(),
+    });
+    let app = build_router_with_origins(
+        state,
+        vec![HeaderValue::from_static("http://127.0.0.1:5173")],
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let sid = insert_running_session("dt-ledger", false, "inc-ledger", "TARGET-LEDGER").await;
+    let client = reqwest::Client::new();
+    let pair_a = admit_paired_viewer("dt-ledger", "auth-a", &sid, "viewer-a", "inc-ledger").await;
+    let pair_b = admit_paired_viewer("dt-ledger", "auth-b", &sid, "viewer-b", "inc-ledger").await;
+
+    let lease_a = acquire_control_http(&client, addr, &sid, &tokens[0], "viewer-a").await;
+    let dt_tok_a =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[0], "viewer-a", &lease_a).await;
+    let (mut ws_a, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_a}/ws"))
+            .await
+            .expect("connect devtools ws for ledger test");
+
+    // 1. Denied unsupported Input.* methods fail before reaching mock Chromium
+    for (id, method, params) in [
+        (10, "Input.dispatchTouchEvent", json!({ "type": "touchStart", "touchPoints": [] })),
+        (11, "Input.dispatchDragEvent", json!({ "type": "dragEnter", "x": 10, "y": 10, "data": { "items": [], "dragOperationsMask": 1 } })),
+        (12, "Input.synthesizeTapGesture", json!({ "x": 10, "y": 10 })),
+        (13, "Input.imeSetComposition", json!({ "text": "a", "selectionStart": 0, "selectionEnd": 1 })),
+        (14, "Input.setIgnoreInputEvents", json!({ "ignore": true })),
+        (15, "Input.unknownMethod", json!({})),
+    ] {
+        ws_a.send(WsMsg::Text(
+            json!({ "id": id, "method": method, "params": params })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws_a.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let val: Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
+        assert_eq!(val["id"], id);
+        assert_eq!(val["error"]["code"], -32601);
+    }
+    assert!(
+        recorded_cmds.lock().is_empty(),
+        "denied Input.* methods must never reach Chromium"
+    );
+
+    // 2. Send supported keyDown KeyA, mousePressed left, insertText, plus failed repeat keyDown
+    for (id, method, params) in [
+        (
+            20,
+            "Input.dispatchKeyEvent",
+            json!({ "type": "keyDown", "key": "a", "code": "KeyA", "windowsVirtualKeyCode": 65, "nativeVirtualKeyCode": 65 }),
+        ),
+        (
+            21,
+            "Input.dispatchMouseEvent",
+            json!({ "type": "mousePressed", "x": 40, "y": 50, "button": "left", "clickCount": 1 }),
+        ),
+        (22, "Input.insertText", json!({ "text": "hello" })),
+    ] {
+        ws_a.send(WsMsg::Text(
+            json!({ "id": id, "method": method, "params": params })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws_a.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let val: Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
+        assert_eq!(val["id"], id);
+        assert_eq!(val["result"]["ok"], true);
+    }
+    behavior.reject_bad_repeat.store(true, Ordering::Release);
+    ws_a.send(WsMsg::Text(
+        json!({
+            "id": 23,
+            "method": "Input.dispatchKeyEvent",
+            "params": { "type": "keyDown", "key": "BadRepeat", "code": "KeyA", "windowsVirtualKeyCode": 65, "nativeVirtualKeyCode": 65 }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let repeat_err_reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws_a.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let repeat_err_val: Value = serde_json::from_str(repeat_err_reply.to_text().unwrap()).unwrap();
+    assert_eq!(repeat_err_val["id"], 23);
+    assert_eq!(repeat_err_val["error"]["code"], -32000);
+
+    // 3. Control release + handoff to viewer-b releases mousePressed & KeyA via captured DevTools proxy BEFORE returning 200 OK
+    let count_before_transfer = recorded_cmds.lock().len();
+    let release_a_resp = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/release"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[0]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "leaseToken": lease_a }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(release_a_resp.status(), StatusCode::OK);
+    let post_transfer_cmds: Vec<(String, Value)> = recorded_cmds.lock()[count_before_transfer..].to_vec();
+    let lease_b = acquire_control_http(&client, addr, &sid, &tokens[1], "viewer-b").await;
+    let saw_mouse_release = post_transfer_cmds.iter().any(|(m, p)| {
+        m == "Input.dispatchMouseEvent"
+            && p.get("type").and_then(Value::as_str) == Some("mouseReleased")
+            && p.get("button").and_then(Value::as_str) == Some("left")
+    });
+    let saw_key_release = post_transfer_cmds.iter().any(|(m, p)| {
+        m == "Input.dispatchKeyEvent"
+            && p.get("type").and_then(Value::as_str) == Some("keyUp")
+            && p.get("code").and_then(Value::as_str) == Some("KeyA")
+    });
+    assert!(
+        saw_mouse_release && saw_key_release,
+        "control transfer must release held mouse & key BEFORE returning 200 OK; saw={post_transfer_cmds:?}"
+    );
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), ws_a.next()).await;
+
+    // 4. Closing DevTools WS with zero holds leaves UI control lease live; closing while holding KeyZ releases KeyZ
+    let dt_tok_b1 =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[1], "viewer-b", &lease_b).await;
+    let (ws_b1, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_b1}/ws"))
+            .await
+            .unwrap();
+    drop(ws_b1);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let renew_after_clean_close = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/renew"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[1]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "leaseToken": lease_b }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(renew_after_clean_close.status(), StatusCode::OK);
+
+    let dt_tok_b2 =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[1], "viewer-b", &lease_b).await;
+    let (mut ws_b2, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_b2}/ws"))
+            .await
+            .unwrap();
+    ws_b2
+        .send(WsMsg::Text(
+            json!({
+                "id": 30,
+                "method": "Input.dispatchKeyEvent",
+                "params": { "type": "keyDown", "key": "z", "code": "KeyZ", "windowsVirtualKeyCode": 90, "nativeVirtualKeyCode": 90 }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let z_reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws_b2.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(serde_json::from_str::<Value>(z_reply.to_text().unwrap()).unwrap()["result"]["ok"], true);
+    let count_before_ws_close = recorded_cmds.lock().len();
+    drop(ws_b2);
+    let release_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut released_z = false;
+    while tokio::time::Instant::now() < release_deadline {
+        let cmds = recorded_cmds.lock();
+        if cmds[count_before_ws_close..].iter().any(|(m, p)| {
+            m == "Input.dispatchKeyEvent"
+                && p.get("type").and_then(Value::as_str) == Some("keyUp")
+                && p.get("code").and_then(Value::as_str) == Some("KeyZ")
+        }) {
+            released_z = true;
+            break;
+        }
+        drop(cmds);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(released_z, "closing DevTools WS while holding KeyZ must release KeyZ");
+
+    // 5. Failed cleanup on control release/reacquire rejects with 503 inputUnavailable
+    let lease_b2 = acquire_control_http(&client, addr, &sid, &tokens[1], "viewer-b").await;
+    let dt_tok_b3 =
+        mint_devtools_probe_token(&client, addr, &sid, &tokens[1], "viewer-b", &lease_b2).await;
+    let (mut ws_b3, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser/devtools/{dt_tok_b3}/ws"))
+            .await
+            .unwrap();
+    ws_b3
+        .send(WsMsg::Text(
+            json!({
+                "id": 40,
+                "method": "Input.dispatchKeyEvent",
+                "params": { "type": "keyDown", "key": "k", "code": "KeyK", "windowsVirtualKeyCode": 75, "nativeVirtualKeyCode": 75 }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let k_reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws_b3.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(serde_json::from_str::<Value>(k_reply.to_text().unwrap()).unwrap()["result"]["ok"], true);
+
+    behavior.reject_keyup.store(true, Ordering::Release);
+    let failed_transfer_resp = client
+        .post(format!("http://{addr}/api/browser/sessions/{sid}/control/release"))
+        .header(AUTHORIZATION, format!("Bearer {}", tokens[1]))
+        .header(ORIGIN, "http://127.0.0.1:5173")
+        .header(CONTENT_TYPE, "application/json")
+        .body(json!({ "leaseToken": lease_b2 }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        failed_transfer_resp.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    behavior.reject_keyup.store(false, Ordering::Release);
+
+    // 6. Stalled write_with_cancel aborts promptly when cancellation token triggers
+    let (_abort_tx, mut abort_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let cancel_tok = tokio_util::sync::CancellationToken::new();
+    let cancel_trigger = cancel_tok.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        cancel_trigger.cancel();
+    });
+    let start = tokio::time::Instant::now();
+    let (outcome, aborted) = write_with_cancel(
+        futures_util::future::pending::<Result<(), ()>>(),
+        &mut abort_rx,
+        None,
+        Some(&cancel_tok),
+    )
+    .await;
+    assert_eq!(outcome, WriteOutcome::Failed);
+    assert!(aborted);
+    assert!(
+        start.elapsed() < std::time::Duration::from_millis(500),
+        "write_with_cancel must cancel immediately rather than waiting 5s WRITE_DEADLINE"
+    );
+
+    drop(ws_b3);
+    pair_a.release().await;
+    pair_b.release().await;
+    cleanup_test_session_viewers(&sid).await;
 }

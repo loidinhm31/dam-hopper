@@ -16,6 +16,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 use url::Url;
 
@@ -70,20 +71,29 @@ pub async fn write_with_cancel<F, E>(
     write: F,
     abort_rx: &mut tokio::sync::mpsc::Receiver<()>,
     deadline_at: Option<tokio::time::Instant>,
+    cancel: Option<&CancellationToken>,
 ) -> (WriteOutcome, bool)
 where
     F: Future<Output = Result<(), E>>,
 {
     let write_fut = write_with_outcome(write);
+    let cancel_fut = async {
+        match cancel {
+            Some(token) => token.cancelled().await,
+            None => std::future::pending::<()>().await,
+        }
+    };
     if let Some(dl) = deadline_at {
         let sleep_fut = tokio::time::sleep_until(dl);
         tokio::select! {
+            _ = cancel_fut => (WriteOutcome::Failed, true),
             _ = abort_rx.recv() => (WriteOutcome::Failed, true),
             _ = sleep_fut => (WriteOutcome::DeadlineElapsed, true),
             outcome = write_fut => (outcome, false),
         }
     } else {
         tokio::select! {
+            _ = cancel_fut => (WriteOutcome::Failed, true),
             _ = abort_rx.recv() => (WriteOutcome::Failed, true),
             outcome = write_fut => (outcome, false),
         }
@@ -909,6 +919,7 @@ async fn relay_agent_cdp_socket(
                             upstream_ws.send(UpstreamMessage::Text(t.as_str().into())),
                             &mut auth_abort_rx,
                             Some(deadline_instant),
+                            None,
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -921,6 +932,7 @@ async fn relay_agent_cdp_socket(
                             upstream_ws.send(UpstreamMessage::Binary(b)),
                             &mut auth_abort_rx,
                             Some(deadline_instant),
+                            None,
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -929,6 +941,7 @@ async fn relay_agent_cdp_socket(
                             upstream_ws.send(UpstreamMessage::Ping(p)),
                             &mut auth_abort_rx,
                             Some(deadline_instant),
+                            None,
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -937,6 +950,7 @@ async fn relay_agent_cdp_socket(
                             upstream_ws.send(UpstreamMessage::Pong(p)),
                             &mut auth_abort_rx,
                             Some(deadline_instant),
+                            None,
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -963,6 +977,7 @@ async fn relay_agent_cdp_socket(
                             client_ws.send(AxumWsMessage::Text(t.as_str().into())),
                             &mut auth_abort_rx,
                             Some(deadline_instant),
+                            None,
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -975,6 +990,7 @@ async fn relay_agent_cdp_socket(
                             client_ws.send(AxumWsMessage::Binary(b)),
                             &mut auth_abort_rx,
                             Some(deadline_instant),
+                            None,
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -983,6 +999,7 @@ async fn relay_agent_cdp_socket(
                             client_ws.send(AxumWsMessage::Ping(p)),
                             &mut auth_abort_rx,
                             Some(deadline_instant),
+                            None,
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -991,6 +1008,7 @@ async fn relay_agent_cdp_socket(
                             client_ws.send(AxumWsMessage::Pong(p)),
                             &mut auth_abort_rx,
                             Some(deadline_instant),
+                            None,
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }

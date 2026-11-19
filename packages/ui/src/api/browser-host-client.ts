@@ -29,6 +29,7 @@ import {
   type AcquireControlResponse,
   type BrowserCapabilitiesResponse,
   type BrowserSessionDto,
+  type CreateDevToolsLeaseRequest,
   type CreateSessionRequest,
   type DevToolsLeaseResponse,
   type DialogResponseRequest,
@@ -439,10 +440,11 @@ export async function issueAttachmentTicket(
 // Target-Scoped Native Chromium DevTools Leases
 // ---------------------------------------------------------------------------
 
-/** Mints a target-scoped DevTools capability lease for an owned running session. */
+/** Mints a target-scoped DevTools capability lease for the current controller. */
 export async function createBrowserDevToolsLease(
   owner: ConnectionRef,
   sessionId: string,
+  req: CreateDevToolsLeaseRequest,
   signal?: AbortSignal,
 ): Promise<DevToolsLeaseResponse> {
   return requestBrowserHostJson<DevToolsLeaseResponse>(
@@ -450,6 +452,7 @@ export async function createBrowserDevToolsLease(
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/devtools`,
     {
       method: "POST",
+      body: req,
       signal,
     },
   );

@@ -2906,7 +2906,7 @@ fn keyboard_virtual_key_code(key: &str, code: &str) -> u32 {
     }
 }
 
-fn keyboard_event_params(key: &str, code: &str, modifiers: u32, down: bool) -> serde_json::Value {
+pub(crate) fn keyboard_event_params(key: &str, code: &str, modifiers: u32, down: bool) -> serde_json::Value {
     // Enter needs Chromium's character phase for newline insertion/form submission.
     // All printable/IME text still arrives exclusively through Input.insertText.
     let enter_text = down && key == "Enter" && modifiers & (1 | 2 | 4) == 0;
@@ -3039,6 +3039,30 @@ pub async fn dispatch_input_event_to_cdp_with_mouse(
     };
     client
         .send_command(method, Some(params), Some(page_session_id))
+        .await
+        .map(|_| ())
+}
+
+/// Dispatches a mouse button release directly in CSS layout coordinates on the given native
+/// page session (used for shared UI/CDP held-button cleanup).
+pub async fn dispatch_mouse_release_css_to_cdp(
+    client: &CdpClient,
+    page_session_id: &str,
+    button: crate::browser_host::input::MouseButton,
+    x: f64,
+    y: f64,
+) -> Result<(), CdpError> {
+    let params = serde_json::json!({
+        "type": "mouseReleased",
+        "x": x,
+        "y": y,
+        "modifiers": 0,
+        "buttons": 0,
+        "button": button.as_cdp_str(),
+        "clickCount": 1,
+    });
+    client
+        .send_command("Input.dispatchMouseEvent", Some(params), Some(page_session_id))
         .await
         .map(|_| ())
 }

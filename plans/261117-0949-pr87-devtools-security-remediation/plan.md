@@ -11,16 +11,16 @@ created: 2026-11-17
 # PR #87 DevTools security and isolation remediation
 
 ## Outcome and route
-Phase 01 and Phase 02 implementations completed and explicitly approved with noted limitations/warnings; this plan now tracks remaining remediation phases (Phases 03–05). The completed [native DevTools feature](../261116-0223-browser-native-chromium-devtools/plan.md) remains historical context, not a security closure receipt. Phase 01 and Phase 02 do not imply completion or qualification of the full remediation.
+Phase 01, Phase 02, and Phase 03 implementations completed; this plan now tracks remaining remediation phases (Phases 04–05). The completed [native DevTools feature](../261116-0223-browser-native-chromium-devtools/plan.md) remains historical context, not a security closure receipt. Phases 01–03 do not imply completion or qualification of the full remediation.
 
-Close four findings end-to-end: F1 client download-directory override; F2 iframe download cross-tab attribution; F3 DevTools bypass of viewer control; F4 foreign worker/child-target metadata or attachment, including non-Target ServiceWorker authority. Planning evidence did not include deployed Chromium reproduction; Phase 01 and Phase 02 reported test results and acceptance are recorded below.
+Close four findings end-to-end: F1 client download-directory override; F2 iframe download cross-tab attribution; F3 DevTools bypass of viewer control; F4 foreign worker/child-target metadata or attachment, including non-Target ServiceWorker authority. Planning evidence did not include deployed Chromium reproduction; Phase 01, Phase 02, and Phase 03 reported test results and status are recorded below.
 
 ## Phases
 | Phase | Scope | Status | Effort |
 |---|---|---|---|
 | [01](phase-01-command-effect-boundary.md) | Command/download policy, ServiceWorker deny and bounded analogous effect inventory | DONE (2026-11-17 12:44:55 EST) | 5h |
 | [02](phase-02-frame-download-ownership.md) | Positive frame ownership and GUID-pinned download routing | DONE (2026-11-19 01:23:01 EST) | 8h |
-| [03](phase-03-control-capability-lifecycle.md) | Control binding, ordered revocation and shared UI/CDP held-input accounting, all UI callers | pending | 10h |
+| [03](phase-03-control-capability-lifecycle.md) | Control binding, ordered revocation and shared UI/CDP held-input accounting, all UI callers | DONE (2026-11-19 03:45 EST) | 10h |
 | [04](phase-04-target-session-isolation.md) | Positive target/session filtering plus non-Target worker metadata/control closure | pending | 10h |
 | [05](phase-05-regressions-qualification-docs.md) | Real-Chromium attacks/input-release/compatibility matrix and canonical API docs | pending | 7h |
 Nine durable tasks; strictly sequential graph. Estimates exclude unavailable environment waits. Main is integration/scheduling owner; assign one writer at a time for overlapping sources/tests.
@@ -36,6 +36,12 @@ Nine durable tasks; strictly sequential graph. Estimates exclude unavailable env
 - **Validation reported PASS (285/285):** `browser_host::` unit tests 223/223 passed (`target_ownership::tests` 27/27, `manager::ordered_position_tests` 22/22); integration tests 62/62 passed (`browser_host_adapter` 21/21, `browser_host_bounds` 6/6, `browser_host_devtools` 5/5 including real `/usr/bin/chromium` same-process <-> OOPIF round-trip download qualification with `DAM_HOPPER_REQUIRE_BROWSER=1`, `browser_host_selection` 30/30). The project-manager status update did not rerun checks.
 - **Review:** 7/10; user explicitly approved with noted warnings.
 - **Noted warnings / remaining scope:** global `OwnershipFence::fail_projection` reset without full `ObserverState` resync; `ChildAttached` refusing paused OOPIFs while parent is seeding & `close_page` `"iframe"` absence check; 16 MiB `FRAME_TREE_STAGING_RESERVATION_BYTES` amplification; `frame_rx` token-mismatch `result.is_some()` leak. Phases 03–05 (including Phase 05 two-tab cross-tab real-Chromium gate) remain pending; this receipt does not claim full-plan completion or full remediation closure.
+
+## Phase 03 completion receipt
+- **Status:** DONE (2026-11-19 03:45 EST).
+- **Scope:** `bind-devtools-control-epoch`, `fence-devtools-command-admission`, and `migrate-devtools-control-ui` (control-bound DevTools capability lifecycle, ordered command fencing and shared UI/CDP held-input ledger/release, and DevTools UI/typed client cutover).
+- **Validation reported PASS:** `225` Rust lib tests, `97` integration tests with Chromium, UI build + `56` Vitest tests, and `pnpm lint` (0 errors). The project-manager status update did not rerun checks.
+- **Remaining scope:** Phases 04–05 (target/session isolation, Phase 05 real-Chromium attacks/input-release/compatibility matrix, and canonical API docs) remain pending; this receipt does not claim full-plan completion or full remediation closure.
 
 
 ## Settled design
@@ -68,7 +74,7 @@ All four attacks denied or correctly isolated through DamHopper routes; owned co
 - Initial challenge and [targeted follow-up](reports/independent-plan-review-followup.md) complete: R1–R3 consistently propagated; no residual material planning finding established on reviewed surfaces. This is not implementation finding closure.
 - Final `prompt` validation **complete** (2026-11-17): user selected all three existing defaults—raw CDP `retain-privileged` (authenticated instance-wide exception, no cooperative viewer-control coverage); stateful Input `tracked-core` (shared UI/CDP key/mouse ledger, unsupported touch/drag/gesture denied unless cleanup proven); worker scope `deny-ambiguous` (positive target-scoped proof only).
 - No material decision changed; existing review/follow-up receipts remain applicable. No repeat review or phase/task changes required.
-Phases 01 and 02 are DONE and explicitly approved with noted limitations/warnings as recorded above. Phases 03–05 remain pending; their control/isolation/qualification work (including the Phase 05 two-tab cross-tab real-Chromium gate) is outside these approvals. Shared-file handoff, full deployed-engine evidence, and eventual implementation/release qualification remain separate gates; no full-plan completion or security-closure claim.
+Phases 01, 02, and 03 are DONE as recorded above. Phases 04–05 remain pending; their target/session isolation and full qualification work (including the Phase 05 two-tab cross-tab real-Chromium gate) remain outside these completions. Shared-file handoff, full deployed-engine evidence, and eventual implementation/release qualification remain separate gates; no full-plan completion or security-closure claim.
 
 ## Unresolved questions / blockers
 - Active-plan setter was invoked from the published harness; `EVCRATE_SESSION_ID` is unset, so session persistence is unavailable. Carry this explicit selected path; no activation claimed.

@@ -196,6 +196,9 @@ struct PairedSlot {
     media_failed: bool,
     /// Weak: the sockets own the capacity, the registry only lets the mate share it.
     permit: std::sync::Weak<ViewerPermit>,
+    auth_session_id: Option<String>,
+    auth_version: Option<i64>,
+    credential_version: Option<i64>,
     profile_epoch: u64,
     browser_incarnation: String,
     cancel_token: CancellationToken,
@@ -493,6 +496,12 @@ impl AttachmentManager {
                 {
                     return Err(AttachmentError::SessionMismatch);
                 }
+                if slot.auth_session_id != admitted.auth_session_id
+                    || slot.auth_version != admitted.auth_version
+                    || slot.credential_version != admitted.credential_version
+                {
+                    return Err(AttachmentError::ViewerMismatch);
+                }
                 let permit = match slot.permit.upgrade() {
                     Some(permit) if !slot.media_failed => permit,
                     _ => {
@@ -521,6 +530,9 @@ impl AttachmentManager {
                     media_attached: false,
                     media_failed: false,
                     permit: Arc::downgrade(&permit),
+                    auth_session_id: admitted.auth_session_id.clone(),
+                    auth_version: admitted.auth_version,
+                    credential_version: admitted.credential_version,
                     profile_epoch: admitted.profile_epoch,
                     browser_incarnation: admitted.browser_incarnation.clone(),
                     cancel_token: CancellationToken::new(),
@@ -653,6 +665,44 @@ impl AttachmentManager {
             }
             _ => false,
         }
+    }
+
+    /// Verifies that `viewer_id` currently owns a live, ready media+control attachment pair
+    /// bound to the exact principal, auth session, browser session, profile epoch, and browser
+    /// incarnation. Never falls back to principal-only matching.
+    pub async fn has_admitted_viewer_pair(
+        &self,
+        admission: &BrowserAdmission,
+        browser_session_id: &str,
+        viewer_id: &str,
+        profile_epoch: u64,
+        browser_incarnation: &str,
+    ) -> bool {
+        let conns = self.active_connections.read().await;
+        let pairs = self.pairs.read().await;
+        pairs.iter().any(|((principal, bsid, vid, _sub), slot)| {
+            principal == &admission.principal
+                && bsid == browser_session_id
+                && vid == viewer_id
+                && slot.is_ready()
+                && !slot.media_failed
+                && !slot.cancel_token.is_cancelled()
+                && slot.permit.strong_count() > 0
+                && slot.profile_epoch == profile_epoch
+                && slot.browser_incarnation == browser_incarnation
+                && slot.auth_session_id == admission.session_id
+                && slot.auth_version == admission.auth_version
+                && slot.credential_version == admission.credential_version
+                && conns.values().any(|conn| {
+                    conn.pair_id == Some(slot.id)
+                        && conn.purpose == AttachmentPurpose::Control
+                        && !conn.cancel_token.is_cancelled()
+                        && conn.principal == admission.principal
+                        && conn.auth_session_id == admission.session_id
+                        && conn.auth_version == admission.auth_version
+                        && conn.credential_version == admission.credential_version
+                })
+        })
     }
 
     pub async fn unregister_connection(&self, connection_id: Uuid) {

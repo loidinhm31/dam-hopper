@@ -12,8 +12,11 @@ use uuid::Uuid;
 use tracing::{debug, warn};
 
 use super::cdp::{InputCommandCancellation, PendingCommand};
-use super::input::{map_fraction_to_css_coords, InputError, InputEvent, InputMessage, SessionInputManager};
-use super::input_native_release::NativeInputTarget;
+use super::input::{
+    map_fraction_to_css_coords, InputError, InputEvent, InputMessage, PendingLedgerOp,
+    SessionInputManager,
+};
+use super::input_native_release::{CapturedNativeIdentity, NativeInputTarget};
 use super::media::{enqueue_cancellable_input, get_producer};
 use super::protocol::ServerControlEvent;
 
@@ -32,13 +35,19 @@ struct DispatchAbandonGuard {
     token: Option<String>,
     gate: Option<OwnedMutexGuard<()>>,
     pending: Option<PendingCommand>,
+    pending_op: Option<PendingLedgerOp>,
     cancellation: Option<InputCommandCancellation>,
 }
 
 impl Drop for DispatchAbandonGuard {
     fn drop(&mut self) {
         if let Some(token) = self.token.take() {
-            self.manager.abandon_dispatch(token, self.gate.take(), self.pending.take());
+            self.manager.abandon_dispatch(
+                token,
+                self.gate.take(),
+                self.pending.take(),
+                self.pending_op.take(),
+            );
         }
         if let Some(cancellation) = self.cancellation.take() {
             self.manager.clear_input_cancellation(&cancellation);
@@ -155,6 +164,7 @@ pub(crate) async fn drain_control_input(
             token: Some(msg.lease_token.clone()),
             gate: None,
             pending: None,
+            pending_op: None,
             cancellation: None,
         };
         // Resolve only after the claim is armed, so cancellation cannot lose a release.
@@ -237,16 +247,34 @@ pub(crate) async fn drain_control_input(
             page_session_id: page_session_id.clone(),
             geometry: geometry.clone(),
         };
-        if ctx.input_manager.prepare_native_input(abandon.gate.as_ref().expect("dispatch gate"), target, &msg.event).await.is_err() {
-            let gate = abandon.gate.take().expect("dispatch gate");
-            abandon.token = None;
-            if let Err(InputError::ReleaseFailed(reason)) =
-                ctx.input_manager.fail_native_dispatch(gate, &msg.lease_token).await
-            {
-                return ControlInputOutcome::ReleaseFailed(reason);
+        let identity = CapturedNativeIdentity::from_cdp_target(
+            target,
+            producer.target_id().to_string(),
+            producer.browser_incarnation().to_string(),
+            msg.profile_epoch,
+        );
+        let pending_op = match ctx
+            .input_manager
+            .prepare_native_input_with_identity(
+                abandon.gate.as_ref().expect("dispatch gate"),
+                identity,
+                &msg.event,
+            )
+            .await
+        {
+            Ok(op) => op,
+            Err(_) => {
+                let gate = abandon.gate.take().expect("dispatch gate");
+                abandon.token = None;
+                if let Err(InputError::ReleaseFailed(reason)) =
+                    ctx.input_manager.fail_native_dispatch(gate, &msg.lease_token).await
+                {
+                    return ControlInputOutcome::ReleaseFailed(reason);
+                }
+                return ControlInputOutcome::DispatchFailed;
             }
-            return ControlInputOutcome::DispatchFailed;
-        }
+        };
+        abandon.pending_op = pending_op;
         debug!(session_id = %ctx.session_id, kind, "Dispatching CDP input event");
         let mouse_ctx = ctx
             .input_manager
@@ -258,6 +286,11 @@ pub(crate) async fn drain_control_input(
             &msg.lease_token,
             cancellation.clone(),
         ).await {
+            if let Some(op) = abandon.pending_op.take() {
+                ctx.input_manager
+                    .reject_native_op(abandon.gate.as_ref().expect("dispatch gate"), op)
+                    .await;
+            }
             return ControlInputOutcome::DispatchFailed;
         }
         abandon.cancellation = Some(cancellation.clone());
@@ -272,13 +305,39 @@ pub(crate) async fn drain_control_input(
             Ok(Some(command)) => {
                 abandon.pending = Some(command);
                 let result = abandon.pending.as_mut().expect("pending command").wait_mut().await;
-                if result.as_ref().is_err_and(|error| error.outcome_is_ambiguous()) {
-                    ctx.input_manager.mark_native_outcome_uncertain();
-                }
                 abandon.pending = None;
-                result.map(|_| ())
+                match result {
+                    Ok(_) => Ok(()),
+                    Err(err) => {
+                        if let Some(op) = abandon.pending_op.take() {
+                            if err.outcome_is_ambiguous() {
+                                ctx.input_manager
+                                    .mark_native_op_ambiguous(
+                                        abandon.gate.as_ref().expect("dispatch gate"),
+                                        op,
+                                    )
+                                    .await;
+                            } else {
+                                ctx.input_manager
+                                    .reject_native_op(
+                                        abandon.gate.as_ref().expect("dispatch gate"),
+                                        op,
+                                    )
+                                    .await;
+                            }
+                        } else if err.outcome_is_ambiguous() {
+                            ctx.input_manager.mark_native_outcome_uncertain();
+                        }
+                        Err(err)
+                    }
+                }
             }
             Ok(None) => {
+                if let Some(op) = abandon.pending_op.take() {
+                    ctx.input_manager
+                        .reject_native_op(abandon.gate.as_ref().expect("dispatch gate"), op)
+                        .await;
+                }
                 let gate = abandon.gate.take().expect("dispatch gate");
                 abandon.token = None;
                 if let Err(InputError::ReleaseFailed(reason)) =
@@ -288,7 +347,28 @@ pub(crate) async fn drain_control_input(
                 }
                 return ControlInputOutcome::DispatchFailed;
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                if let Some(op) = abandon.pending_op.take() {
+                    if error.outcome_is_ambiguous() {
+                        ctx.input_manager
+                            .mark_native_op_ambiguous(
+                                abandon.gate.as_ref().expect("dispatch gate"),
+                                op,
+                            )
+                            .await;
+                    } else {
+                        ctx.input_manager
+                            .reject_native_op(
+                                abandon.gate.as_ref().expect("dispatch gate"),
+                                op,
+                            )
+                            .await;
+                    }
+                } else if error.outcome_is_ambiguous() {
+                    ctx.input_manager.mark_native_outcome_uncertain();
+                }
+                Err(error)
+            }
         };
         if let Err(err) = result {
             warn!(session_id = %ctx.session_id, kind, error = %err, "CDP input dispatch failed");
@@ -301,7 +381,11 @@ pub(crate) async fn drain_control_input(
             }
             return ControlInputOutcome::DispatchFailed;
         }
-        ctx.input_manager.confirm_native_input(abandon.gate.as_ref().expect("dispatch gate"), &msg.event).await;
+        if let Some(op) = abandon.pending_op.take() {
+            ctx.input_manager
+                .confirm_native_op(abandon.gate.as_ref().expect("dispatch gate"), op)
+                .await;
+        }
         abandon.token = None;
     }
     ControlInputOutcome::Continue
