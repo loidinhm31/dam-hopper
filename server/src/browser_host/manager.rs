@@ -14,8 +14,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use super::cdp::{
-    CdpClient, CdpError, CdpFrameTreeSnapshot, CdpLifecycleEvent, CdpOrderedEvent, CdpOrderedRecord,
-    CdpStreamPosition, CdpTargetEvent, ContainmentEscalation, FrameDetachReason, NativeTargetInfo,
+    CdpClient, CdpError, CdpFrameTreeSnapshot, CdpLifecycleEvent, CdpOrderedEvent,
+    CdpOrderedRecord, CdpStreamPosition, CdpTargetEvent, ContainmentEscalation, FrameDetachReason,
+    NativeTargetInfo,
 };
 use super::config::{evaluate_capabilities, BrowserCapabilitiesDto, BrowserHostConfig};
 use super::network_policy::NetworkPolicy;
@@ -1546,12 +1547,17 @@ impl BrowserHostManager {
             subject: handle.subject.clone(),
             is_dev: handle.is_dev,
             max_targets: self.max_targets,
-            request_policy: Arc::new(NetworkPolicy::from_config(&self.config, handle.is_dev)
-                .map_err(|err| ManagerError::Internal(format!("invalid browser request policy: {err}")))?),
+            request_policy: Arc::new(
+                NetworkPolicy::from_config(&self.config, handle.is_dev).map_err(|err| {
+                    ManagerError::Internal(format!("invalid browser request policy: {err}"))
+                })?,
+            ),
             inst: inst_arc.clone(),
             native: self.native.clone(),
             faults: self.native_faults.clone(),
-            downloads: self.native.download_bindings_for(&handle.browser_incarnation),
+            downloads: self
+                .native
+                .download_bindings_for(&handle.browser_incarnation),
             token,
         };
         let (control, task) = start_observer(shared, handle, initial).await?;
@@ -1643,6 +1649,8 @@ const PENDING_CLOSE_SWEEP: Duration = Duration::from_millis(500);
 const PENDING_CLOSE_GRACE: Duration = Duration::from_secs(1);
 const CLOSE_VERIFY_ATTEMPTS: usize = 30;
 const CLOSE_VERIFY_INTERVAL: Duration = Duration::from_millis(100);
+const TARGET_ABSENT_VERIFY_ATTEMPTS: usize = 10;
+const TARGET_ABSENT_VERIFY_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_REJECTED_TARGETS: usize = 256;
 const MAX_OBSERVER_CHILD_FRAME_ROOTS: usize = 64;
 /// Shared across all ordered frame-attachment records; overflow retires the observer.
@@ -2004,8 +2012,50 @@ impl NativeControl {
         self.client.is_closed()
     }
 
+    /// Confirms via `Target.getTargets` that `target_id` (any target type) is no longer present.
+    /// Fails closed (`false`) if the inventory cannot be read or `target_id` remains listed.
+    async fn confirm_target_absent(&self, target_id: &str) -> bool {
+        for attempt in 0..TARGET_ABSENT_VERIFY_ATTEMPTS {
+            let Ok(value) = self
+                .client
+                .send_command("Target.getTargets", None, None)
+                .await
+            else {
+                return false;
+            };
+            let Some(infos) = value.get("targetInfos").and_then(Value::as_array) else {
+                return false;
+            };
+            let still_present = infos
+                .iter()
+                .any(|info| info.get("targetId").and_then(Value::as_str) == Some(target_id));
+            if !still_present {
+                return true;
+            }
+            if attempt + 1 < TARGET_ABSENT_VERIFY_ATTEMPTS {
+                sleep(TARGET_ABSENT_VERIFY_INTERVAL).await;
+            }
+        }
+        false
+    }
+
     fn revoke_observer_authority(&self) {
         self.ownership_fence.retire_current();
+    }
+}
+
+/// Returns true only for CDP protocol errors proving the target or flattened session was already closed.
+fn is_session_or_target_gone_error(error: &CdpError) -> bool {
+    match error {
+        CdpError::Protocol { code, message } => {
+            let msg = message.to_ascii_lowercase();
+            *code == -32001
+                || msg.contains("session with given id not found")
+                || msg.contains("no target with given id found")
+                || msg.contains("target closed")
+                || msg.contains("inspected target navigated or closed")
+        }
+        _ => false,
     }
 }
 
@@ -2072,9 +2122,9 @@ impl ExpiredGuidFilter {
     }
 
     fn contains(&self, guid: &str) -> bool {
-        Self::indexes(guid).into_iter().all(|index| {
-            self.bits[index / 64] & (1u64 << (index % 64)) != 0
-        })
+        Self::indexes(guid)
+            .into_iter()
+            .all(|index| self.bits[index / 64] & (1u64 << (index % 64)) != 0)
     }
 
     fn insert(&mut self, guid: &str) {
@@ -2108,17 +2158,21 @@ impl Default for DownloadBindings {
 
 impl DownloadBindings {
     fn expire_terminal_entries(&mut self, now: Instant) {
-        let expired: Vec<_> = self.entries.iter().filter_map(|(guid, entry)| match entry {
-            GuidEntry::Tombstone => Some(guid.clone()),
-            GuidEntry::Bound(binding)
-                if binding.terminal_at.is_some_and(|at| {
-                    now.saturating_duration_since(at) >= TERMINAL_GUID_RETENTION
-                }) =>
-            {
-                Some(guid.clone())
-            }
-            _ => None,
-        }).collect();
+        let expired: Vec<_> = self
+            .entries
+            .iter()
+            .filter_map(|(guid, entry)| match entry {
+                GuidEntry::Tombstone => Some(guid.clone()),
+                GuidEntry::Bound(binding)
+                    if binding.terminal_at.is_some_and(|at| {
+                        now.saturating_duration_since(at) >= TERMINAL_GUID_RETENTION
+                    }) =>
+                {
+                    Some(guid.clone())
+                }
+                _ => None,
+            })
+            .collect();
         for guid in expired {
             self.entries.remove(&guid);
             self.reservations.remove(&guid);
@@ -2146,15 +2200,14 @@ impl DownloadBindings {
             return None;
         }
         if self.filter_reservation.is_none() {
-            self.filter_reservation = match super::diagnostics::global_memory_controller()
-                .try_reserve(2 * 1024)
-            {
-                Ok(reservation) => Some(reservation),
-                Err(_) => {
-                    self.expired.insert(guid);
-                    return None;
-                }
-            };
+            self.filter_reservation =
+                match super::diagnostics::global_memory_controller().try_reserve(2 * 1024) {
+                    Ok(reservation) => Some(reservation),
+                    Err(_) => {
+                        self.expired.insert(guid);
+                        return None;
+                    }
+                };
         }
         if self.map_reservation.is_none() {
             self.map_reservation = match super::diagnostics::global_memory_controller()
@@ -2167,9 +2220,12 @@ impl DownloadBindings {
                 }
             };
         }
-        let Some(reservation) = NEXT_DOWNLOAD_RESERVATION.fetch_update(
-            Ordering::Relaxed, Ordering::Relaxed, |next| next.checked_add(1),
-        ).ok() else {
+        let Some(reservation) = NEXT_DOWNLOAD_RESERVATION
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .ok()
+        else {
             self.expired.insert(guid);
             return None;
         };
@@ -2181,10 +2237,13 @@ impl DownloadBindings {
             }
         };
         self.reservations.insert(guid.to_string(), memory);
-        self.entries.insert(guid.to_string(), GuidEntry::Pending {
-            reservation,
-            owner: binding.owner.clone(),
-        });
+        self.entries.insert(
+            guid.to_string(),
+            GuidEntry::Pending {
+                reservation,
+                owner: binding.owner.clone(),
+            },
+        );
         Some(reservation)
     }
 }
@@ -2205,7 +2264,8 @@ struct NativeHandles {
 impl NativeHandles {
     fn download_bindings_for(&self, incarnation: &str) -> Arc<StdMutex<DownloadBindings>> {
         let mut bindings = self.download_bindings.lock().unwrap();
-        bindings.entry(incarnation.to_string())
+        bindings
+            .entry(incarnation.to_string())
             .or_insert_with(|| Arc::new(StdMutex::new(DownloadBindings::default())))
             .clone()
     }
@@ -2416,9 +2476,17 @@ impl ObserverState {
             retry.next_attempt = retry.next_attempt.min(next_attempt);
             true
         } else if self.frame_tree_retries.len() < MAX_PENDING_FRAME_TREE_RETRIES {
-            self.frame_tree_retries.insert(session_id, FrameTreeRetry {
-                owner, token, child_parent_session, child_attach_sequence, reseed_budget, next_attempt,
-            });
+            self.frame_tree_retries.insert(
+                session_id,
+                FrameTreeRetry {
+                    owner,
+                    token,
+                    child_parent_session,
+                    child_attach_sequence,
+                    reseed_budget,
+                    next_attempt,
+                },
+            );
             true
         } else {
             false
@@ -2501,7 +2569,9 @@ fn parse_frame_tree_with_external_root(
         }
     }
     if allow_external_root_parent
-        && nodes.first().and_then(|root| root.parent_frame_id.as_deref())
+        && nodes
+            .first()
+            .and_then(|root| root.parent_frame_id.as_deref())
             .is_some_and(|parent| ids.contains(parent))
     {
         return None;
@@ -2584,7 +2654,10 @@ impl DownloadBinding {
 
 #[derive(Clone)]
 enum GuidEntry {
-    Pending { reservation: u64, owner: DownloadOwner },
+    Pending {
+        reservation: u64,
+        owner: DownloadOwner,
+    },
     Bound(DownloadBinding),
     Tombstone,
 }
@@ -2643,24 +2716,33 @@ fn download_progress_allowed(
         return false;
     }
     let emitter_is_bound = session_id.is_none_or(|session_id| {
-        (binding.connection_token.belongs_to_same_connection(connection_token)
+        (binding
+            .connection_token
+            .belongs_to_same_connection(connection_token)
             && binding.source_session_id.as_deref() == Some(session_id))
             || (proven_sessions.contains(session_id)
-                && session_owners.get(session_id)
+                && session_owners
+                    .get(session_id)
                     .is_some_and(|frame| download_owner_matches_frame(&binding.owner, frame)))
     });
-    emitter_is_bound && match binding.terminal {
-        None => true,
-        Some(DownloadTerminal::Completed) => {
-            progress == "completed"
-                && binding.terminal_path.as_deref().is_none_or(|path| {
-                    file_path.is_none_or(|candidate| candidate == path)
-                })
-                && binding.terminal_received_bytes.is_none_or(|previous| received_bytes == previous)
-                && binding.terminal_total_bytes.is_none_or(|previous| total_bytes == previous)
+    emitter_is_bound
+        && match binding.terminal {
+            None => true,
+            Some(DownloadTerminal::Completed) => {
+                progress == "completed"
+                    && binding
+                        .terminal_path
+                        .as_deref()
+                        .is_none_or(|path| file_path.is_none_or(|candidate| candidate == path))
+                    && binding
+                        .terminal_received_bytes
+                        .is_none_or(|previous| received_bytes == previous)
+                    && binding
+                        .terminal_total_bytes
+                        .is_none_or(|previous| total_bytes == previous)
+            }
+            Some(DownloadTerminal::Canceled) => false,
         }
-        Some(DownloadTerminal::Canceled) => false,
-    }
 }
 
 async fn dispatch_download_will_begin(
@@ -2678,10 +2760,14 @@ async fn dispatch_download_will_begin(
         return;
     }
     debug!(session_id = ?session_id, frame_id, "CDP download begin received");
-    let mut matches = state.frame_sessions.iter()
+    let mut matches = state
+        .frame_sessions
+        .iter()
         .filter(|session| session_id.is_none_or(|id| id == session.as_str()))
         .filter_map(|session| {
-            fence.lookup(token, session, frame_id).map(|owner| (session.clone(), owner))
+            fence
+                .lookup(token, session, frame_id)
+                .map(|owner| (session.clone(), owner))
         });
     let Some((_, owner)) = matches.next() else {
         debug!(
@@ -2692,21 +2778,36 @@ async fn dispatch_download_will_begin(
         return;
     };
     if matches.any(|(_, matched_owner)| matched_owner != owner) {
-        debug!(frame_id, "download begin rejected: conflicting frame owners");
+        debug!(
+            frame_id,
+            "download begin rejected: conflicting frame owners"
+        );
         return;
     }
     let binding = DownloadBinding::new(
-        owner, session_id.map(str::to_string), frame_id.to_string(), token,
+        owner,
+        session_id.map(str::to_string),
+        frame_id.to_string(),
+        token,
         suggested_filename.to_string(),
     );
     let Some(reservation) = downloads.lock().unwrap().reserve_begin(guid, &binding) else {
         debug!(frame_id, "download begin rejected by GUID reservation");
         return;
     };
-    let committed = registry.record_download_will_begin_fenced(
-        fence, token, &binding.owner, guid.to_string(), binding.filename.clone(),
-    ).await;
-    debug!(committed, frame_id, "download begin ownership commit result");
+    let committed = registry
+        .record_download_will_begin_fenced(
+            fence,
+            token,
+            &binding.owner,
+            guid.to_string(),
+            binding.filename.clone(),
+        )
+        .await;
+    debug!(
+        committed,
+        frame_id, "download begin ownership commit result"
+    );
     let mut downloads = downloads.lock().unwrap();
     if let Some(entry) = downloads.entries.get_mut(guid) {
         if matches!(entry, GuidEntry::Pending { reservation: id, .. } if *id == reservation) {
@@ -2735,15 +2836,21 @@ async fn dispatch_download_progress(
     if !matches!(progress, "inProgress" | "completed" | "canceled") {
         return;
     }
-    let Some(GuidEntry::Bound(binding)) =
-        downloads.lock().unwrap().entries.get(guid).cloned()
+    let Some(GuidEntry::Bound(binding)) = downloads.lock().unwrap().entries.get(guid).cloned()
     else {
         debug!(session_id = ?session_id, "download progress ignored without a bound begin");
         return;
     };
     if !download_progress_allowed(
-        &binding, token, session_id, &state.frame_sessions, &state.owners,
-        progress, received_bytes, total_bytes, file_path,
+        &binding,
+        token,
+        session_id,
+        &state.frame_sessions,
+        &state.owners,
+        progress,
+        received_bytes,
+        total_bytes,
+        file_path,
     ) {
         return;
     }
@@ -2752,10 +2859,20 @@ async fn dispatch_download_progress(
         "canceled" => Some(DownloadTerminal::Canceled),
         _ => None,
     };
-    if registry.record_download_progress_fenced(
-        fence, token, &binding.owner, guid.to_string(), binding.filename.clone(),
-        progress.to_string(), received_bytes, total_bytes, file_path.map(str::to_string),
-    ).await {
+    if registry
+        .record_download_progress_fenced(
+            fence,
+            token,
+            &binding.owner,
+            guid.to_string(),
+            binding.filename.clone(),
+            progress.to_string(),
+            received_bytes,
+            total_bytes,
+            file_path.map(str::to_string),
+        )
+        .await
+    {
         if let Some(terminal) = terminal {
             let mut downloads = downloads.lock().unwrap();
             if let Some(GuidEntry::Bound(current)) = downloads.entries.get_mut(guid) {
@@ -2785,29 +2902,64 @@ async fn dispatch_download_lifecycle_event(
 ) {
     match event {
         CdpLifecycleEvent::DownloadWillBegin {
-            session_id, frame_id: Some(frame_id), guid, suggested_filename, ..
+            session_id,
+            frame_id: Some(frame_id),
+            guid,
+            suggested_filename,
+            ..
         } => {
             dispatch_download_will_begin(
-                registry, downloads, fence, token, state, session_id.as_deref(),
-                frame_id, guid, suggested_filename,
-            ).await;
+                registry,
+                downloads,
+                fence,
+                token,
+                state,
+                session_id.as_deref(),
+                frame_id,
+                guid,
+                suggested_filename,
+            )
+            .await;
         }
-        CdpLifecycleEvent::DownloadWillBegin { session_id, frame_id: None, .. } => {
+        CdpLifecycleEvent::DownloadWillBegin {
+            session_id,
+            frame_id: None,
+            ..
+        } => {
             debug!(session_id = ?session_id, "CDP download begin omitted frame id");
         }
         CdpLifecycleEvent::DownloadProgress {
-            session_id, guid, state: progress, received_bytes, total_bytes, file_path, ..
+            session_id,
+            guid,
+            state: progress,
+            received_bytes,
+            total_bytes,
+            file_path,
+            ..
         } => {
             dispatch_download_progress(
-                registry, downloads, fence, token, state, session_id.as_deref(),
-                guid, progress, *received_bytes, *total_bytes, file_path.as_deref(),
-            ).await;
+                registry,
+                downloads,
+                fence,
+                token,
+                state,
+                session_id.as_deref(),
+                guid,
+                progress,
+                *received_bytes,
+                *total_bytes,
+                file_path.as_deref(),
+            )
+            .await;
         }
         _ => {}
     }
 }
 
-fn parent_frame_predates_child_attach(evidence_sequence: Option<u64>, attach_sequence: u64) -> bool {
+fn parent_frame_predates_child_attach(
+    evidence_sequence: Option<u64>,
+    attach_sequence: u64,
+) -> bool {
     evidence_sequence.is_some_and(|sequence| sequence < attach_sequence)
 }
 /// A child-target root keeps an external parentId, so CDP's session-local
@@ -2822,10 +2974,14 @@ fn is_child_root_navigation(
     let Some((parent_session, attach_sequence)) = state.pending_children.get(session_id) else {
         return false;
     };
-    if state.child_frame_roots.get(session_id).is_some_and(|attachment| {
-        attachment.parent_session_id.as_str() != parent_session.as_str()
-            || attachment.logical_frame_id != frame_id
-    }) {
+    if state
+        .child_frame_roots
+        .get(session_id)
+        .is_some_and(|attachment| {
+            attachment.parent_session_id.as_str() != parent_session.as_str()
+                || attachment.logical_frame_id != frame_id
+        })
+    {
         return false;
     }
     let Some((recorded_parent, evidence_sequence)) = state
@@ -2845,7 +3001,8 @@ fn frame_navigation_reseeds_snapshot(state: &ObserverState, event: &CdpLifecycle
         frame_id,
         parent_frame_id,
         ..
-    } = event else {
+    } = event
+    else {
         return false;
     };
     *is_main_frame
@@ -2853,7 +3010,6 @@ fn frame_navigation_reseeds_snapshot(state: &ObserverState, event: &CdpLifecycle
             is_child_root_navigation(state, session_id, frame_id, parent_frame_id.as_deref())
         })
 }
-
 
 /// The first record establishes the subscription's baseline; subsequent records must be
 /// contiguous within that same connection generation.
@@ -2869,22 +3025,21 @@ fn ordered_position_follows(previous: Option<CdpStreamPosition>, next: CdpStream
 
 #[cfg(test)]
 mod ordered_position_tests {
-    use super::{
-        attachment_session_closure, child_sessions_to_retire,
-        child_root_matches_attachment, classify_download_begin,
-        dispatch_download_lifecycle_event, download_progress_allowed, frame_navigation_reseeds_snapshot,
-        child_root_swap_reseed_budget, is_child_root_navigation,
-        CdpLifecycleEvent, frame_detach_preserved_parent, mark_pending_frame_detached,
-        ordered_position_follows, parent_frame_predates_child_attach,
-        parse_child_frame_tree, parse_frame_tree, record_frame_attachment,
-        retire_detached_frame, retire_frame_attachment_subtree, CdpStreamPosition,
-        ChildFrameAttachment, DownloadBeginDisposition, DownloadBinding, DownloadBindings,
-        DownloadTerminal, FrameDetachReason, FrameOwner, GuidEntry, MAX_OBSERVER_FRAME_ATTACHMENTS,
-        MAX_CHILD_ROOT_RESEEDS, MAX_PENDING_FRAME_DETACHES, MAX_PENDING_FRAME_TREE_RETRIES, ObserverState,
-        OwnershipFence, PendingDetach, PendingFrameTree, ValidityToken,
-    };
     use super::super::session::{CreateSessionRequest, SessionRegistry, ViewportRequest};
     use super::super::target_ownership::FrameSnapshotNode;
+    use super::{
+        attachment_session_closure, child_root_matches_attachment, child_root_swap_reseed_budget,
+        child_sessions_to_retire, classify_download_begin, dispatch_download_lifecycle_event,
+        download_progress_allowed, frame_detach_preserved_parent,
+        frame_navigation_reseeds_snapshot, is_child_root_navigation, mark_pending_frame_detached,
+        ordered_position_follows, parent_frame_predates_child_attach, parse_child_frame_tree,
+        parse_frame_tree, record_frame_attachment, retire_detached_frame,
+        retire_frame_attachment_subtree, CdpLifecycleEvent, CdpStreamPosition,
+        ChildFrameAttachment, DownloadBeginDisposition, DownloadBinding, DownloadBindings,
+        DownloadTerminal, FrameDetachReason, FrameOwner, GuidEntry, ObserverState, OwnershipFence,
+        PendingDetach, PendingFrameTree, ValidityToken, MAX_CHILD_ROOT_RESEEDS,
+        MAX_OBSERVER_FRAME_ATTACHMENTS, MAX_PENDING_FRAME_DETACHES, MAX_PENDING_FRAME_TREE_RETRIES,
+    };
     use serde_json::json;
     use std::collections::HashSet;
     use std::sync::Mutex as StdMutex;
@@ -2892,18 +3047,26 @@ mod ordered_position_tests {
     #[test]
     fn child_root_navigation_requires_current_parent_attachment_provenance() {
         let mut state = ObserverState::default();
-        state.pending_children.insert("child-session".into(), ("parent-session".into(), 10));
+        state
+            .pending_children
+            .insert("child-session".into(), ("parent-session".into(), 10));
         state.frame_attached.insert(
             ("parent-session".into(), "root-frame".into()),
             ("outer-frame".into(), 9),
         );
-        state.child_frame_roots.insert("child-session".into(), ChildFrameAttachment {
-            parent_session_id: "parent-session".into(),
-            logical_frame_id: "root-frame".into(),
-        });
+        state.child_frame_roots.insert(
+            "child-session".into(),
+            ChildFrameAttachment {
+                parent_session_id: "parent-session".into(),
+                logical_frame_id: "root-frame".into(),
+            },
+        );
 
         assert!(is_child_root_navigation(
-            &state, "child-session", "root-frame", Some("outer-frame"),
+            &state,
+            "child-session",
+            "root-frame",
+            Some("outer-frame"),
         ));
         let root_navigation = CdpLifecycleEvent::FrameNavigated {
             session_id: Some("child-session".into()),
@@ -2924,24 +3087,39 @@ mod ordered_position_tests {
             loader_id: None,
             _reservation: None,
         };
-        assert!(!frame_navigation_reseeds_snapshot(&state, &nested_navigation));
-        assert!(!is_child_root_navigation(
-            &state, "child-session", "nested-frame", Some("root-frame"),
+        assert!(!frame_navigation_reseeds_snapshot(
+            &state,
+            &nested_navigation
         ));
         assert!(!is_child_root_navigation(
-            &state, "child-session", "root-frame", Some("unexpected-parent"),
+            &state,
+            "child-session",
+            "nested-frame",
+            Some("root-frame"),
+        ));
+        assert!(!is_child_root_navigation(
+            &state,
+            "child-session",
+            "root-frame",
+            Some("unexpected-parent"),
         ));
 
         state.child_frame_roots.remove("child-session");
         assert!(is_child_root_navigation(
-            &state, "child-session", "root-frame", Some("outer-frame"),
+            &state,
+            "child-session",
+            "root-frame",
+            Some("outer-frame"),
         ));
         state.frame_attached.insert(
             ("parent-session".into(), "root-frame".into()),
             ("outer-frame".into(), 10),
         );
         assert!(!is_child_root_navigation(
-            &state, "child-session", "root-frame", Some("outer-frame"),
+            &state,
+            "child-session",
+            "root-frame",
+            Some("outer-frame"),
         ));
     }
     #[test]
@@ -2952,26 +3130,39 @@ mod ordered_position_tests {
         assert!(state.queue_frame_tree_retry("child".into(), owner.clone(), token, None, None, 1));
         assert!(state.queue_frame_tree_retry("child".into(), owner.clone(), token, None, None, 2));
         assert_eq!(state.frame_tree_retries.len(), 1);
-        assert_eq!(state.frame_tree_retries.get("child").unwrap().reseed_budget, 2);
+        assert_eq!(
+            state.frame_tree_retries.get("child").unwrap().reseed_budget,
+            2
+        );
 
         for index in 0..MAX_PENDING_FRAME_TREE_RETRIES {
             let expected = index + 1 < MAX_PENDING_FRAME_TREE_RETRIES;
             assert_eq!(
                 state.queue_frame_tree_retry(
-                    format!("session-{index}"), owner.clone(), token, None, None, MAX_CHILD_ROOT_RESEEDS,
+                    format!("session-{index}"),
+                    owner.clone(),
+                    token,
+                    None,
+                    None,
+                    MAX_CHILD_ROOT_RESEEDS,
                 ),
                 expected,
             );
         }
-        assert_eq!(state.frame_tree_retries.len(), MAX_PENDING_FRAME_TREE_RETRIES);
-        assert!(!state.frame_tree_retries.contains_key(&format!(
-            "session-{}", MAX_PENDING_FRAME_TREE_RETRIES - 1,
-        )));
+        assert_eq!(
+            state.frame_tree_retries.len(),
+            MAX_PENDING_FRAME_TREE_RETRIES
+        );
+        assert!(!state
+            .frame_tree_retries
+            .contains_key(&format!("session-{}", MAX_PENDING_FRAME_TREE_RETRIES - 1,)));
     }
     #[test]
     fn detach_flags_scope_to_recorded_frames_and_overflow_fails_closed() {
         let mut state = ObserverState::default();
-        state.pending_frames.insert(1, child_root_pending(MAX_CHILD_ROOT_RESEEDS));
+        state
+            .pending_frames
+            .insert(1, child_root_pending(MAX_CHILD_ROOT_RESEEDS));
         mark_pending_frame_detached(&mut state, "parent", "frame-a", FrameDetachReason::Remove);
         mark_pending_frame_detached(&mut state, "parent", "frame-b", FrameDetachReason::Remove);
         let pending = state.pending_frames.get(&1).unwrap();
@@ -2980,7 +3171,12 @@ mod ordered_position_tests {
         assert_eq!(pending.detached.len(), 2);
 
         for index in 0..MAX_PENDING_FRAME_DETACHES {
-            mark_pending_frame_detached(&mut state, "parent", &format!("frame-{index}"), FrameDetachReason::Swap);
+            mark_pending_frame_detached(
+                &mut state,
+                "parent",
+                &format!("frame-{index}"),
+                FrameDetachReason::Swap,
+            );
         }
         assert!(state.pending_frames.get(&1).unwrap().detach_overflow);
     }
@@ -3002,12 +3198,20 @@ mod ordered_position_tests {
     #[test]
     fn child_root_swap_reseed_is_budgeted_and_root_remove_revokes() {
         let mut state = ObserverState::default();
-        state.pending_frames.insert(1, child_root_pending(MAX_CHILD_ROOT_RESEEDS));
+        state
+            .pending_frames
+            .insert(1, child_root_pending(MAX_CHILD_ROOT_RESEEDS));
         mark_pending_frame_detached(&mut state, "parent", "frame-a", FrameDetachReason::Swap);
         let pending = state.pending_frames.get(&1).unwrap();
         let detaches: Vec<&PendingDetach> = pending.detached.iter().collect();
-        assert_eq!(child_root_swap_reseed_budget(pending, &detaches), Some(MAX_CHILD_ROOT_RESEEDS - 1));
-        assert_eq!(child_root_swap_reseed_budget(&child_root_pending(0), &detaches), None);
+        assert_eq!(
+            child_root_swap_reseed_budget(pending, &detaches),
+            Some(MAX_CHILD_ROOT_RESEEDS - 1)
+        );
+        assert_eq!(
+            child_root_swap_reseed_budget(&child_root_pending(0), &detaches),
+            None
+        );
 
         mark_pending_frame_detached(&mut state, "parent", "frame-a", FrameDetachReason::Remove);
         let pending = state.pending_frames.get(&1).unwrap();
@@ -3017,14 +3221,18 @@ mod ordered_position_tests {
     #[test]
     fn child_root_swap_reseed_rejects_child_session_and_second_root() {
         let mut state = ObserverState::default();
-        state.pending_frames.insert(1, child_root_pending(MAX_CHILD_ROOT_RESEEDS));
+        state
+            .pending_frames
+            .insert(1, child_root_pending(MAX_CHILD_ROOT_RESEEDS));
         mark_pending_frame_detached(&mut state, "child", "frame-a", FrameDetachReason::Swap);
         let pending = state.pending_frames.get(&1).unwrap();
         let detaches: Vec<&PendingDetach> = pending.detached.iter().collect();
         assert_eq!(child_root_swap_reseed_budget(pending, &detaches), None);
 
         let mut state = ObserverState::default();
-        state.pending_frames.insert(1, child_root_pending(MAX_CHILD_ROOT_RESEEDS));
+        state
+            .pending_frames
+            .insert(1, child_root_pending(MAX_CHILD_ROOT_RESEEDS));
         mark_pending_frame_detached(&mut state, "parent", "frame-a", FrameDetachReason::Swap);
         mark_pending_frame_detached(&mut state, "child", "frame-a", FrameDetachReason::Swap);
         let pending = state.pending_frames.get(&1).unwrap();
@@ -3034,42 +3242,75 @@ mod ordered_position_tests {
     #[test]
     fn pending_attachment_closure_includes_indirect_children_only() {
         let mut state = ObserverState::default();
-        state.pending_children.insert("child".into(), ("parent".into(), 10));
-        state.pending_children.insert("grandchild".into(), ("child".into(), 11));
-        state.pending_children.insert("sibling".into(), ("parent".into(), 12));
+        state
+            .pending_children
+            .insert("child".into(), ("parent".into(), 10));
+        state
+            .pending_children
+            .insert("grandchild".into(), ("child".into(), 11));
+        state
+            .pending_children
+            .insert("sibling".into(), ("parent".into(), 12));
 
         let closure = attachment_session_closure(&state, ["parent".to_string()]);
 
         assert_eq!(
             closure,
             HashSet::from([
-                "parent".to_string(), "child".to_string(), "grandchild".to_string(), "sibling".to_string()
+                "parent".to_string(),
+                "child".to_string(),
+                "grandchild".to_string(),
+                "sibling".to_string()
             ]),
         );
     }
     #[test]
     fn frame_detach_retires_descendant_attachment_evidence_only() {
         let mut state = ObserverState::default();
-        state.frame_attached.insert(("page".into(), "root".into()), ("".into(), 1));
-        state.frame_attached.insert(("page".into(), "child".into()), ("root".into(), 2));
-        state.frame_attached.insert(("page".into(), "grandchild".into()), ("child".into(), 3));
-        state.frame_attached.insert(("page".into(), "sibling".into()), ("root".into(), 4));
-        state.frame_attached.insert(("other".into(), "child".into()), ("root".into(), 5));
+        state
+            .frame_attached
+            .insert(("page".into(), "root".into()), ("".into(), 1));
+        state
+            .frame_attached
+            .insert(("page".into(), "child".into()), ("root".into(), 2));
+        state
+            .frame_attached
+            .insert(("page".into(), "grandchild".into()), ("child".into(), 3));
+        state
+            .frame_attached
+            .insert(("page".into(), "sibling".into()), ("root".into(), 4));
+        state
+            .frame_attached
+            .insert(("other".into(), "child".into()), ("root".into(), 5));
 
         retire_frame_attachment_subtree(&mut state, "page", "child", None);
 
-        assert!(state.frame_attached.contains_key(&("page".into(), "root".into())));
-        assert!(!state.frame_attached.contains_key(&("page".into(), "child".into())));
-        assert!(!state.frame_attached.contains_key(&("page".into(), "grandchild".into())));
-        assert!(state.frame_attached.contains_key(&("page".into(), "sibling".into())));
-        assert!(state.frame_attached.contains_key(&("other".into(), "child".into())));
+        assert!(state
+            .frame_attached
+            .contains_key(&("page".into(), "root".into())));
+        assert!(!state
+            .frame_attached
+            .contains_key(&("page".into(), "child".into())));
+        assert!(!state
+            .frame_attached
+            .contains_key(&("page".into(), "grandchild".into())));
+        assert!(state
+            .frame_attached
+            .contains_key(&("page".into(), "sibling".into())));
+        assert!(state
+            .frame_attached
+            .contains_key(&("other".into(), "child".into())));
     }
 
     #[test]
     fn frame_swap_preserves_only_matching_attachment_parent_evidence() {
         let mut state = ObserverState::default();
-        state.frame_attached.insert(("page".into(), "child".into()), ("root".into(), 2));
-        state.frame_attached.insert(("page".into(), "grandchild".into()), ("child".into(), 3));
+        state
+            .frame_attached
+            .insert(("page".into(), "child".into()), ("root".into(), 2));
+        state
+            .frame_attached
+            .insert(("page".into(), "grandchild".into()), ("child".into(), 3));
 
         let preserved_parent =
             frame_detach_preserved_parent(&state, "page", "child", FrameDetachReason::Swap);
@@ -3084,28 +3325,42 @@ mod ordered_position_tests {
             state.frame_attached.get(&("page".into(), "child".into())),
             Some(&("root".into(), 2)),
         );
-        assert!(!state.frame_attached.contains_key(&("page".into(), "grandchild".into())));
+        assert!(!state
+            .frame_attached
+            .contains_key(&("page".into(), "grandchild".into())));
     }
     #[test]
     fn logical_frame_detach_retires_every_attached_target() {
         let mut state = ObserverState::default();
-        state.child_frame_roots.insert("old-target".into(), ChildFrameAttachment {
-            parent_session_id: "page".into(),
-            logical_frame_id: "iframe".into(),
-        });
-        state.child_frame_roots.insert("replacement-target".into(), ChildFrameAttachment {
-            parent_session_id: "page".into(),
-            logical_frame_id: "iframe".into(),
-        });
+        state.child_frame_roots.insert(
+            "old-target".into(),
+            ChildFrameAttachment {
+                parent_session_id: "page".into(),
+                logical_frame_id: "iframe".into(),
+            },
+        );
+        state.child_frame_roots.insert(
+            "replacement-target".into(),
+            ChildFrameAttachment {
+                parent_session_id: "page".into(),
+                logical_frame_id: "iframe".into(),
+            },
+        );
         let retired_frames = HashSet::from(["iframe".to_string()]);
         let mut retired = child_sessions_to_retire(&state, "page", &retired_frames);
         retired.sort();
-        assert_eq!(retired, ["old-target".to_string(), "replacement-target".to_string()]);
+        assert_eq!(
+            retired,
+            ["old-target".to_string(), "replacement-target".to_string()]
+        );
     }
 
     #[test]
     fn accepts_baseline_and_only_contiguous_positions_in_same_generation() {
-        let at = |generation, sequence| CdpStreamPosition { generation, sequence };
+        let at = |generation, sequence| CdpStreamPosition {
+            generation,
+            sequence,
+        };
         assert!(ordered_position_follows(None, at(2, 17)));
         assert!(ordered_position_follows(Some(at(2, 17)), at(2, 18)));
         assert!(!ordered_position_follows(Some(at(2, 17)), at(2, 19)));
@@ -3159,7 +3414,11 @@ mod ordered_position_tests {
             ("container".into(), 4),
         );
         assert!(child_root_matches_attachment(
-            &state, "parent-session", &nodes[0], 5, &owner,
+            &state,
+            "parent-session",
+            &nodes[0],
+            5,
+            &owner,
         ));
 
         state.frame_attached.insert(
@@ -3167,7 +3426,11 @@ mod ordered_position_tests {
             ("different-container".into(), 4),
         );
         assert!(!child_root_matches_attachment(
-            &state, "parent-session", &nodes[0], 5, &owner,
+            &state,
+            "parent-session",
+            &nodes[0],
+            5,
+            &owner,
         ));
         let mut invalid_nested = tree;
         invalid_nested["frameTree"]["childFrames"][0]["frame"]["parentId"] = json!("wrong");
@@ -3179,64 +3442,126 @@ mod ordered_position_tests {
         let fence = OwnershipFence::new();
         let token = fence.token(fence.start_next_generation().unwrap()).unwrap();
         let owner = download_owner();
-        assert!(fence.seed_snapshot(token, "parent", owner.clone(), &[
-            FrameSnapshotNode { frame_id: "root".into(), parent_frame_id: None },
-            FrameSnapshotNode { frame_id: "container".into(), parent_frame_id: Some("root".into()) },
-            FrameSnapshotNode { frame_id: "iframe".into(), parent_frame_id: Some("container".into()) },
-            FrameSnapshotNode { frame_id: "sibling".into(), parent_frame_id: Some("root".into()) },
-        ]));
+        assert!(fence.seed_snapshot(
+            token,
+            "parent",
+            owner.clone(),
+            &[
+                FrameSnapshotNode {
+                    frame_id: "root".into(),
+                    parent_frame_id: None
+                },
+                FrameSnapshotNode {
+                    frame_id: "container".into(),
+                    parent_frame_id: Some("root".into())
+                },
+                FrameSnapshotNode {
+                    frame_id: "iframe".into(),
+                    parent_frame_id: Some("container".into())
+                },
+                FrameSnapshotNode {
+                    frame_id: "sibling".into(),
+                    parent_frame_id: Some("root".into())
+                },
+            ]
+        ));
         assert!(fence.install(token, || true, || {}));
-        assert!(fence.seed_child_snapshot(token, "old-target", "parent", "container", "iframe",
-            &owner, &[
-                FrameSnapshotNode { frame_id: "iframe".into(), parent_frame_id: None },
-                FrameSnapshotNode { frame_id: "nested".into(), parent_frame_id: Some("iframe".into()) },
-            ]));
-        assert!(fence.seed_child_snapshot(token, "nested-target", "old-target", "iframe",
-            "nested-root", &owner, &[
-                FrameSnapshotNode { frame_id: "nested-root".into(), parent_frame_id: None },
-            ]));
+        assert!(fence.seed_child_snapshot(
+            token,
+            "old-target",
+            "parent",
+            "container",
+            "iframe",
+            &owner,
+            &[
+                FrameSnapshotNode {
+                    frame_id: "iframe".into(),
+                    parent_frame_id: None
+                },
+                FrameSnapshotNode {
+                    frame_id: "nested".into(),
+                    parent_frame_id: Some("iframe".into())
+                },
+            ]
+        ));
+        assert!(fence.seed_child_snapshot(
+            token,
+            "nested-target",
+            "old-target",
+            "iframe",
+            "nested-root",
+            &owner,
+            &[FrameSnapshotNode {
+                frame_id: "nested-root".into(),
+                parent_frame_id: None
+            },]
+        ));
 
         let mut state = ObserverState::default();
-        state.frame_attached.insert(
-            ("parent".into(), "iframe".into()), ("container".into(), 4),
+        state
+            .frame_attached
+            .insert(("parent".into(), "iframe".into()), ("container".into(), 4));
+        state.child_frame_roots.insert(
+            "old-target".into(),
+            ChildFrameAttachment {
+                parent_session_id: "parent".into(),
+                logical_frame_id: "iframe".into(),
+            },
         );
-        state.child_frame_roots.insert("old-target".into(), ChildFrameAttachment {
-            parent_session_id: "parent".into(),
-            logical_frame_id: "iframe".into(),
-        });
         state.owners.insert("old-target".into(), owner.clone());
         state.owners.insert("nested-target".into(), owner.clone());
         state.frame_sessions.insert("old-target".into());
         state.frame_sessions.insert("nested-target".into());
-        state.pending_children.insert("nested-target".into(), ("old-target".into(), 6));
-        state.child_frame_roots.insert("nested-target".into(), ChildFrameAttachment {
-            parent_session_id: "old-target".into(),
-            logical_frame_id: "iframe".into(),
-        });
+        state
+            .pending_children
+            .insert("nested-target".into(), ("old-target".into(), 6));
+        state.child_frame_roots.insert(
+            "nested-target".into(),
+            ChildFrameAttachment {
+                parent_session_id: "old-target".into(),
+                logical_frame_id: "iframe".into(),
+            },
+        );
         state.owners.insert("parent".into(), owner.clone());
         state.frame_sessions.insert("parent".into());
 
-        state.pending_frames.insert(7, PendingFrameTree {
-            session_id: "pending-target".into(),
-            owner: owner.clone(),
-            token,
-            child_parent_session: Some("parent".into()),
-            child_attach_sequence: Some(6),
-            barrier: None,
-            result: None,
-            changed: false,
-            detached: Vec::new(),
-            detach_overflow: false,
-            reseed_budget: MAX_CHILD_ROOT_RESEEDS,
-        });
+        state.pending_frames.insert(
+            7,
+            PendingFrameTree {
+                session_id: "pending-target".into(),
+                owner: owner.clone(),
+                token,
+                child_parent_session: Some("parent".into()),
+                child_attach_sequence: Some(6),
+                barrier: None,
+                result: None,
+                changed: false,
+                detached: Vec::new(),
+                detach_overflow: false,
+                reseed_budget: MAX_CHILD_ROOT_RESEEDS,
+            },
+        );
         retire_detached_frame(
-            &fence, &mut state, token, "parent", "iframe", Some("container"), FrameDetachReason::Swap,
+            &fence,
+            &mut state,
+            token,
+            "parent",
+            "iframe",
+            Some("container"),
+            FrameDetachReason::Swap,
         );
         let pending = state.pending_frames.get(&7).unwrap();
         assert!(pending.changed);
-        assert!(pending.detached.iter().any(|detach| detach.session_id == "parent" && detach.frame_id == "iframe" && !detach.removed));
+        assert!(pending
+            .detached
+            .iter()
+            .any(|detach| detach.session_id == "parent"
+                && detach.frame_id == "iframe"
+                && !detach.removed));
         assert!(!pending.detach_overflow);
-        assert!(state.frame_attached.contains_key(&("parent".into(), "iframe".into())));
+        assert!(state
+            .frame_attached
+            .contains_key(&("parent".into(), "iframe".into())));
         assert!(!state.child_frame_roots.contains_key("old-target"));
         assert!(!state.child_frame_roots.contains_key("nested-target"));
         assert!(!state.owners.contains_key("old-target"));
@@ -3244,11 +3569,22 @@ mod ordered_position_tests {
         assert_eq!(fence.lookup(token, "old-target", "iframe"), None);
         assert_eq!(fence.lookup(token, "old-target", "nested"), None);
         assert_eq!(fence.lookup(token, "nested-target", "nested-root"), None);
-        assert_eq!(fence.lookup(token, "parent", "container"), Some(owner.clone()));
-        assert_eq!(fence.lookup(token, "parent", "sibling"), Some(owner.clone()));
+        assert_eq!(
+            fence.lookup(token, "parent", "container"),
+            Some(owner.clone())
+        );
+        assert_eq!(
+            fence.lookup(token, "parent", "sibling"),
+            Some(owner.clone())
+        );
 
         assert!(record_frame_attachment(
-            &fence, &mut state, "parent", "iframe", "container", 10,
+            &fence,
+            &mut state,
+            "parent",
+            "iframe",
+            "container",
+            10,
         ));
         assert!(fence.attach_descendant(token, "parent", "iframe", "container"));
         let tree = json!({"frameTree": {
@@ -3258,23 +3594,52 @@ mod ordered_position_tests {
             }]
         }});
         let mut nodes = parse_child_frame_tree(&tree).unwrap();
-        assert!(child_root_matches_attachment(&state, "parent", &nodes[0], 11, &owner));
+        assert!(child_root_matches_attachment(
+            &state, "parent", &nodes[0], 11, &owner
+        ));
         nodes[0].parent_frame_id = None;
         assert!(fence.seed_child_snapshot(
-            token, "replacement-target", "parent", "container", "iframe", &owner, &nodes,
+            token,
+            "replacement-target",
+            "parent",
+            "container",
+            "iframe",
+            &owner,
+            &nodes,
         ));
-        state.child_frame_roots.insert("replacement-target".into(), ChildFrameAttachment {
-            parent_session_id: "parent".into(),
-            logical_frame_id: "iframe".into(),
-        });
-        state.owners.insert("replacement-target".into(), owner.clone());
+        state.child_frame_roots.insert(
+            "replacement-target".into(),
+            ChildFrameAttachment {
+                parent_session_id: "parent".into(),
+                logical_frame_id: "iframe".into(),
+            },
+        );
+        state
+            .owners
+            .insert("replacement-target".into(), owner.clone());
         state.frame_sessions.insert("replacement-target".into());
-        assert_eq!(fence.lookup(token, "replacement-target", "replacement-nested"), Some(owner.clone()));
+        assert_eq!(
+            fence.lookup(token, "replacement-target", "replacement-nested"),
+            Some(owner.clone())
+        );
 
-        retire_detached_frame(&fence, &mut state, token, "parent", "iframe", None, FrameDetachReason::Remove);
-        assert!(!state.frame_attached.contains_key(&("parent".into(), "iframe".into())));
+        retire_detached_frame(
+            &fence,
+            &mut state,
+            token,
+            "parent",
+            "iframe",
+            None,
+            FrameDetachReason::Remove,
+        );
+        assert!(!state
+            .frame_attached
+            .contains_key(&("parent".into(), "iframe".into())));
         assert!(!state.child_frame_roots.contains_key("replacement-target"));
-        assert_eq!(fence.lookup(token, "replacement-target", "replacement-nested"), None);
+        assert_eq!(
+            fence.lookup(token, "replacement-target", "replacement-nested"),
+            None
+        );
         assert_eq!(fence.lookup(token, "parent", "container"), Some(owner));
     }
 
@@ -3283,40 +3648,71 @@ mod ordered_position_tests {
         let fence = OwnershipFence::new();
         let token = fence.token(fence.start_next_generation().unwrap()).unwrap();
         let owner = download_owner();
-        assert!(fence.seed_snapshot(token, "parent-session", owner.clone(), &[
-            FrameSnapshotNode { frame_id: "container".into(), parent_frame_id: None },
-        ]));
+        assert!(fence.seed_snapshot(
+            token,
+            "parent-session",
+            owner.clone(),
+            &[FrameSnapshotNode {
+                frame_id: "container".into(),
+                parent_frame_id: None
+            },]
+        ));
         assert!(fence.install(token, || true, || {}));
         let mut state = ObserverState::default();
         for index in 0..MAX_OBSERVER_FRAME_ATTACHMENTS {
             assert!(record_frame_attachment(
-                &fence, &mut state, "parent-session", &format!("frame-{index}"),
-                "container", index as u64,
+                &fence,
+                &mut state,
+                "parent-session",
+                &format!("frame-{index}"),
+                "container",
+                index as u64,
             ));
         }
         assert_eq!(state.frame_attached.len(), MAX_OBSERVER_FRAME_ATTACHMENTS);
         assert!(record_frame_attachment(
-            &fence, &mut state, "parent-session", "frame-0", "replacement-container", 9_000,
+            &fence,
+            &mut state,
+            "parent-session",
+            "frame-0",
+            "replacement-container",
+            9_000,
         ));
         assert_eq!(
-            state.frame_attached.get(&("parent-session".into(), "frame-0".into())),
+            state
+                .frame_attached
+                .get(&("parent-session".into(), "frame-0".into())),
             Some(&("replacement-container".into(), 9_000)),
         );
-        assert_eq!(fence.lookup(token, "parent-session", "container"), Some(owner.clone()));
+        assert_eq!(
+            fence.lookup(token, "parent-session", "container"),
+            Some(owner.clone())
+        );
         assert!(!record_frame_attachment(
-            &fence, &mut state, "parent-session", "unretained-frame", "container", 9_001,
+            &fence,
+            &mut state,
+            "parent-session",
+            "unretained-frame",
+            "container",
+            9_001,
         ));
         assert_eq!(state.frame_attached.len(), MAX_OBSERVER_FRAME_ATTACHMENTS);
-        assert!(!state.frame_attached.contains_key(&(
-            "parent-session".into(), "unretained-frame".into(),
-        )));
+        assert!(!state
+            .frame_attached
+            .contains_key(&("parent-session".into(), "unretained-frame".into(),)));
         assert_eq!(fence.lookup(token, "parent-session", "container"), None);
         let mut stale_publish = false;
         assert!(!fence.commit(token, || stale_publish = true));
         assert!(!stale_publish);
-        assert!(!fence.seed_snapshot(token, "late-snapshot", owner, &[
-            FrameSnapshotNode { frame_id: "late".into(), parent_frame_id: None },
-        ]));
+        assert!(!fence.seed_snapshot(
+            token,
+            "late-snapshot",
+            owner,
+            &[FrameSnapshotNode {
+                frame_id: "late".into(),
+                parent_frame_id: None
+            },]
+        ));
     }
 
     fn download_owner() -> FrameOwner {
@@ -3349,16 +3745,33 @@ mod ordered_position_tests {
         let owner = download_owner();
         let token = connection_token();
         let binding = DownloadBinding::new(
-            owner.clone(), Some("page-a".into()), "frame-a".into(), token, "file.txt".into(),
+            owner.clone(),
+            Some("page-a".into()),
+            "frame-a".into(),
+            token,
+            "file.txt".into(),
         );
         let same_owner_other_session = DownloadBinding::new(
-            owner.clone(), Some("page-b".into()), "frame-b".into(), token, "different.txt".into(),
+            owner.clone(),
+            Some("page-b".into()),
+            "frame-b".into(),
+            token,
+            "different.txt".into(),
         );
         let conflicting = DownloadBinding::new(
-            FrameOwner { logical_session_id: "other".into(), ..owner },
-            Some("page-c".into()), "frame-c".into(), token, "other.txt".into(),
+            FrameOwner {
+                logical_session_id: "other".into(),
+                ..owner
+            },
+            Some("page-c".into()),
+            "frame-c".into(),
+            token,
+            "other.txt".into(),
         );
-        assert_eq!(classify_download_begin(None, &binding), DownloadBeginDisposition::New);
+        assert_eq!(
+            classify_download_begin(None, &binding),
+            DownloadBeginDisposition::New
+        );
         let retained = GuidEntry::Bound(binding.clone());
         assert_eq!(
             classify_download_begin(Some(&retained), &same_owner_other_session),
@@ -3373,7 +3786,10 @@ mod ordered_position_tests {
             classify_download_begin(Some(&poisoned), &binding),
             DownloadBeginDisposition::Poisoned,
         );
-        let pending = GuidEntry::Pending { reservation: 1, owner: binding.owner.clone() };
+        let pending = GuidEntry::Pending {
+            reservation: 1,
+            owner: binding.owner.clone(),
+        };
         assert_eq!(
             classify_download_begin(Some(&pending), &binding),
             DownloadBeginDisposition::Duplicate,
@@ -3391,37 +3807,86 @@ mod ordered_position_tests {
         let owner = download_owner();
         let token = connection_token();
         let binding = DownloadBinding::new(
-            owner.clone(), Some("source".into()), "frame".into(), token, "file.txt".into(),
+            owner.clone(),
+            Some("source".into()),
+            "frame".into(),
+            token,
+            "file.txt".into(),
         );
         let no_sessions = HashMap::new();
         assert!(download_progress_allowed(
-            &binding, token, Some("source"), &HashSet::new(), &no_sessions,
-            "inProgress", 0, 0, None,
+            &binding,
+            token,
+            Some("source"),
+            &HashSet::new(),
+            &no_sessions,
+            "inProgress",
+            0,
+            0,
+            None,
         ));
         assert!(!download_progress_allowed(
-            &binding, token, Some("foreign"), &HashSet::new(), &no_sessions,
-            "inProgress", 0, 0, None,
+            &binding,
+            token,
+            Some("foreign"),
+            &HashSet::new(),
+            &no_sessions,
+            "inProgress",
+            0,
+            0,
+            None,
         ));
         assert!(download_progress_allowed(
-            &binding, token, None, &HashSet::new(), &no_sessions,
-            "inProgress", 0, 0, None,
+            &binding,
+            token,
+            None,
+            &HashSet::new(),
+            &no_sessions,
+            "inProgress",
+            0,
+            0,
+            None,
         ));
         let new_token = connection_token();
-        let replacement = FrameOwner { attachment_generation: 8, ..owner.clone() };
+        let replacement = FrameOwner {
+            attachment_generation: 8,
+            ..owner.clone()
+        };
         let replacement_sessions = HashMap::from([("replacement".to_string(), replacement)]);
         let no_proven_sessions = HashSet::new();
         assert!(!download_progress_allowed(
-            &binding, new_token, Some("replacement"), &no_proven_sessions, &replacement_sessions,
-            "inProgress", 0, 0, None,
+            &binding,
+            new_token,
+            Some("replacement"),
+            &no_proven_sessions,
+            &replacement_sessions,
+            "inProgress",
+            0,
+            0,
+            None,
         ));
         let proven_sessions = HashSet::from(["replacement".to_string()]);
         assert!(download_progress_allowed(
-            &binding, new_token, Some("replacement"), &proven_sessions, &replacement_sessions,
-            "inProgress", 0, 0, None,
+            &binding,
+            new_token,
+            Some("replacement"),
+            &proven_sessions,
+            &replacement_sessions,
+            "inProgress",
+            0,
+            0,
+            None,
         ));
         assert!(!download_progress_allowed(
-            &binding, new_token, Some("source"), &no_proven_sessions, &no_sessions,
-            "inProgress", 0, 0, None,
+            &binding,
+            new_token,
+            Some("source"),
+            &no_proven_sessions,
+            &no_sessions,
+            "inProgress",
+            0,
+            0,
+            None,
         ));
 
         let mut completed = binding.clone();
@@ -3430,25 +3895,60 @@ mod ordered_position_tests {
         completed.terminal_received_bytes = Some(12);
         completed.terminal_total_bytes = Some(12);
         assert!(download_progress_allowed(
-            &completed, new_token, None, &HashSet::new(), &no_sessions,
-            "completed", 12, 12, Some("/tmp/file.txt"),
+            &completed,
+            new_token,
+            None,
+            &HashSet::new(),
+            &no_sessions,
+            "completed",
+            12,
+            12,
+            Some("/tmp/file.txt"),
         ));
         assert!(!download_progress_allowed(
-            &completed, new_token, None, &HashSet::new(), &no_sessions,
-            "completed", 12, 12, Some("/tmp/other.txt"),
+            &completed,
+            new_token,
+            None,
+            &HashSet::new(),
+            &no_sessions,
+            "completed",
+            12,
+            12,
+            Some("/tmp/other.txt"),
         ));
         assert!(!download_progress_allowed(
-            &completed, new_token, None, &HashSet::new(), &no_sessions,
-            "completed", 11, 12, Some("/tmp/file.txt"),
+            &completed,
+            new_token,
+            None,
+            &HashSet::new(),
+            &no_sessions,
+            "completed",
+            11,
+            12,
+            Some("/tmp/file.txt"),
         ));
         assert!(!download_progress_allowed(
-            &completed, new_token, None, &HashSet::new(), &no_sessions,
-            "inProgress", 12, 12, None,
+            &completed,
+            new_token,
+            None,
+            &HashSet::new(),
+            &no_sessions,
+            "inProgress",
+            12,
+            12,
+            None,
         ));
         completed.terminal = Some(DownloadTerminal::Canceled);
         assert!(!download_progress_allowed(
-            &completed, new_token, None, &HashSet::new(), &no_sessions,
-            "completed", 12, 12, Some("/tmp/file.txt"),
+            &completed,
+            new_token,
+            None,
+            &HashSet::new(),
+            &no_sessions,
+            "completed",
+            12,
+            12,
+            Some("/tmp/file.txt"),
         ));
     }
 
@@ -3459,17 +3959,26 @@ mod ordered_position_tests {
 
         let now = Instant::now();
         let binding = DownloadBinding::new(
-            download_owner(), Some("source".into()), "frame".into(),
-            connection_token(), "file.txt".into(),
+            download_owner(),
+            Some("source".into()),
+            "frame".into(),
+            connection_token(),
+            "file.txt".into(),
         );
         let mut expired_binding = binding.clone();
         expired_binding.terminal_at = Some(now - TERMINAL_GUID_RETENTION - Duration::from_secs(1));
         let mut live_binding = binding;
         live_binding.terminal_at = Some(now);
         let mut downloads = DownloadBindings::default();
-        downloads.entries.insert("expired".into(), GuidEntry::Bound(expired_binding));
-        downloads.entries.insert("live".into(), GuidEntry::Bound(live_binding));
-        downloads.entries.insert("tombstone".into(), GuidEntry::Tombstone);
+        downloads
+            .entries
+            .insert("expired".into(), GuidEntry::Bound(expired_binding));
+        downloads
+            .entries
+            .insert("live".into(), GuidEntry::Bound(live_binding));
+        downloads
+            .entries
+            .insert("tombstone".into(), GuidEntry::Tombstone);
 
         downloads.expire_terminal_entries(now);
 
@@ -3479,8 +3988,11 @@ mod ordered_position_tests {
         assert!(downloads.expired.contains("tombstone"));
         assert!(downloads.entries.contains_key("live"));
         let candidate = DownloadBinding::new(
-            download_owner(), Some("source".into()), "frame".into(),
-            connection_token(), "file.txt".into(),
+            download_owner(),
+            Some("source".into()),
+            "frame".into(),
+            connection_token(),
+            "file.txt".into(),
         );
         assert!(downloads.reserve_begin("expired", &candidate).is_none());
         assert!(downloads.reserve_begin("tombstone", &candidate).is_none());
@@ -3492,12 +4004,18 @@ mod ordered_position_tests {
         use super::DownloadBindings;
 
         let original = DownloadBinding::new(
-            download_owner(), Some("source-a".into()), "frame-a".into(),
-            connection_token(), "a.txt".into(),
+            download_owner(),
+            Some("source-a".into()),
+            "frame-a".into(),
+            connection_token(),
+            "a.txt".into(),
         );
         let mut competing = DownloadBinding::new(
-            download_owner(), Some("source-b".into()), "frame-b".into(),
-            connection_token(), "b.txt".into(),
+            download_owner(),
+            Some("source-b".into()),
+            "frame-b".into(),
+            connection_token(),
+            "b.txt".into(),
         );
         competing.frame_owner.native_target_id = "other-target".into();
         competing.owner.native_target_id = "other-target".into();
@@ -3506,7 +4024,10 @@ mod ordered_position_tests {
         assert!(downloads.reserve_begin("guid-a", &original).is_some());
         assert!(downloads.reserve_begin("guid-a", &original).is_none());
         assert!(downloads.reserve_begin("guid-a", &competing).is_none());
-        assert!(matches!(downloads.entries.get("guid-a"), Some(GuidEntry::Tombstone)));
+        assert!(matches!(
+            downloads.entries.get("guid-a"),
+            Some(GuidEntry::Tombstone)
+        ));
         assert!(downloads.reserve_begin("guid-a", &original).is_none());
     }
     #[test]
@@ -3514,8 +4035,11 @@ mod ordered_position_tests {
         use super::{DownloadBindings, ExpiredGuidFilter, GuidEntry, MAX_DOWNLOAD_GUIDS};
 
         let candidate = DownloadBinding::new(
-            download_owner(), Some("source".into()), "frame".into(),
-            connection_token(), "file.txt".into(),
+            download_owner(),
+            Some("source".into()),
+            "frame".into(),
+            connection_token(),
+            "file.txt".into(),
         );
         let mut downloads = DownloadBindings::default();
         for index in 0..MAX_DOWNLOAD_GUIDS {
@@ -3527,10 +4051,14 @@ mod ordered_position_tests {
                 },
             );
         }
-        assert!(downloads.reserve_begin("capacity-denied", &candidate).is_none());
+        assert!(downloads
+            .reserve_begin("capacity-denied", &candidate)
+            .is_none());
         assert!(downloads.expired.contains("capacity-denied"));
         downloads.entries.remove("active-0");
-        assert!(downloads.reserve_begin("capacity-denied", &candidate).is_none());
+        assert!(downloads
+            .reserve_begin("capacity-denied", &candidate)
+            .is_none());
 
         let mut saturated = ExpiredGuidFilter::default();
         for index in 0..20_000 {
@@ -3541,7 +4069,6 @@ mod ordered_position_tests {
         }
     }
 
-
     #[tokio::test]
     async fn manager_download_dispatch_isolates_owner_dtos_and_notifications() {
         let registry = SessionRegistry::new();
@@ -3550,24 +4077,35 @@ mod ordered_position_tests {
             let request = CreateSessionRequest {
                 creation_key: uuid::Uuid::new_v4().to_string(),
                 url: "about:blank".into(),
-                viewport: ViewportRequest { width: 800, height: 600, dpr: 1.0 },
+                viewport: ViewportRequest {
+                    width: 800,
+                    height: 600,
+                    dpr: 1.0,
+                },
             };
-            let (dto, _) = registry.insert_running_for_test(
-                "alice", true, "inc1", 1, &request, &[],
-            ).await.unwrap();
+            let (dto, _) = registry
+                .insert_running_for_test("alice", true, "inc1", 1, &request, &[])
+                .await
+                .unwrap();
             assert!(matches!(
-                registry.bind_native_target(&dto.browser_session_id, "inc1", target).await,
+                registry
+                    .bind_native_target(&dto.browser_session_id, "inc1", target)
+                    .await,
                 super::super::session::BindOutcome::Bound
             ));
-            owners.push((target, frame, FrameOwner {
-                principal: "alice".into(),
-                is_dev: true,
-                browser_incarnation: "inc1".into(),
-                profile_epoch: 1,
-                logical_session_id: dto.browser_session_id,
-                native_target_id: target.into(),
-                attachment_generation: generation,
-            }));
+            owners.push((
+                target,
+                frame,
+                FrameOwner {
+                    principal: "alice".into(),
+                    is_dev: true,
+                    browser_incarnation: "inc1".into(),
+                    profile_epoch: 1,
+                    logical_session_id: dto.browser_session_id,
+                    native_target_id: target.into(),
+                    attachment_generation: generation,
+                },
+            ));
         }
 
         let fence = OwnershipFence::new();
@@ -3576,8 +4114,13 @@ mod ordered_position_tests {
         let mut state = ObserverState::default();
         for (target, frame, owner) in &owners {
             assert!(fence.seed_snapshot(
-                token, target, owner.clone(),
-                &[FrameSnapshotNode { frame_id: (*frame).into(), parent_frame_id: None }],
+                token,
+                target,
+                owner.clone(),
+                &[FrameSnapshotNode {
+                    frame_id: (*frame).into(),
+                    parent_frame_id: None
+                }],
             ));
             state.frame_sessions.insert((*target).into());
             state.owners.insert((*target).into(), owner.clone());
@@ -3586,12 +4129,14 @@ mod ordered_position_tests {
 
         let (_, frame_a, owner_a) = &owners[0];
         let (target_b, frame_b, owner_b) = &owners[1];
-        let mut updates_a = registry.subscribe_session(
-            &owner_a.logical_session_id, "alice", true, 1, "inc1",
-        ).await.unwrap();
-        let mut updates_b = registry.subscribe_session(
-            &owner_b.logical_session_id, "alice", true, 1, "inc1",
-        ).await.unwrap();
+        let mut updates_a = registry
+            .subscribe_session(&owner_a.logical_session_id, "alice", true, 1, "inc1")
+            .await
+            .unwrap();
+        let mut updates_b = registry
+            .subscribe_session(&owner_b.logical_session_id, "alice", true, 1, "inc1")
+            .await
+            .unwrap();
         updates_a.borrow_and_update();
         updates_b.borrow_and_update();
         let downloads = StdMutex::new(DownloadBindings::default());
@@ -3625,52 +4170,105 @@ mod ordered_position_tests {
         }
 
         dispatch_download_lifecycle_event(
-            &registry, &downloads, &fence, token, &state,
+            &registry,
+            &downloads,
+            &fence,
+            token,
+            &state,
             &begin_event(frame_a, "guid-a", "a.txt"),
-        ).await;
+        )
+        .await;
         tokio::time::timeout(Duration::from_secs(1), updates_a.changed())
-            .await.expect("owner A begin notification timeout").unwrap();
+            .await
+            .expect("owner A begin notification timeout")
+            .unwrap();
         assert!(!updates_b.has_changed().unwrap());
 
         dispatch_download_lifecycle_event(
-            &registry, &downloads, &fence, token, &state,
+            &registry,
+            &downloads,
+            &fence,
+            token,
+            &state,
             &begin_event(frame_b, "guid-b", "b.txt"),
-        ).await;
+        )
+        .await;
         tokio::time::timeout(Duration::from_secs(1), updates_b.changed())
-            .await.expect("owner B begin notification timeout").unwrap();
+            .await
+            .expect("owner B begin notification timeout")
+            .unwrap();
         assert!(!updates_a.has_changed().unwrap());
 
         dispatch_download_lifecycle_event(
-            &registry, &downloads, &fence, token, &state,
+            &registry,
+            &downloads,
+            &fence,
+            token,
+            &state,
             &progress_event(Some(target_b), "guid-a", "inProgress", 4, 10, None),
-        ).await;
+        )
+        .await;
         assert!(!updates_a.has_changed().unwrap());
         assert!(!updates_b.has_changed().unwrap());
         dispatch_download_lifecycle_event(
-            &registry, &downloads, &fence, token, &state,
+            &registry,
+            &downloads,
+            &fence,
+            token,
+            &state,
             &progress_event(None, "guid-a", "completed", 10, 10, Some("/host/a.txt")),
-        ).await;
+        )
+        .await;
         tokio::time::timeout(Duration::from_secs(1), updates_a.changed())
-            .await.expect("owner A progress notification timeout").unwrap();
+            .await
+            .expect("owner A progress notification timeout")
+            .unwrap();
         assert!(!updates_b.has_changed().unwrap());
 
         dispatch_download_lifecycle_event(
-            &registry, &downloads, &fence, token, &state,
+            &registry,
+            &downloads,
+            &fence,
+            token,
+            &state,
             &progress_event(Some(target_b), "guid-b", "canceled", 4, 10, None),
-        ).await;
+        )
+        .await;
         tokio::time::timeout(Duration::from_secs(1), updates_b.changed())
-            .await.expect("owner B progress notification timeout").unwrap();
+            .await
+            .expect("owner B progress notification timeout")
+            .unwrap();
         assert!(!updates_a.has_changed().unwrap());
 
-        let download_a = registry.get_session(&owner_a.logical_session_id, "alice")
-            .await.unwrap().last_download.unwrap();
-        let download_b = registry.get_session(&owner_b.logical_session_id, "alice")
-            .await.unwrap().last_download.unwrap();
-        assert_eq!((download_a.guid.as_str(), download_a.suggested_filename.as_str(), download_a.state.as_str()),
-            ("guid-a", "a.txt", "completed"));
+        let download_a = registry
+            .get_session(&owner_a.logical_session_id, "alice")
+            .await
+            .unwrap()
+            .last_download
+            .unwrap();
+        let download_b = registry
+            .get_session(&owner_b.logical_session_id, "alice")
+            .await
+            .unwrap()
+            .last_download
+            .unwrap();
+        assert_eq!(
+            (
+                download_a.guid.as_str(),
+                download_a.suggested_filename.as_str(),
+                download_a.state.as_str()
+            ),
+            ("guid-a", "a.txt", "completed")
+        );
         assert_eq!(download_a.file_path.as_deref(), Some("/host/a.txt"));
-        assert_eq!((download_b.guid.as_str(), download_b.suggested_filename.as_str(), download_b.state.as_str()),
-            ("guid-b", "b.txt", "canceled"));
+        assert_eq!(
+            (
+                download_b.guid.as_str(),
+                download_b.suggested_filename.as_str(),
+                download_b.state.as_str()
+            ),
+            ("guid-b", "b.txt", "canceled")
+        );
         assert_eq!(download_b.file_path, None);
         let update_a = updates_a.borrow().clone();
         let super::super::protocol::ServerControlEvent::SessionUpdated { session } = update_a
@@ -3716,7 +4314,9 @@ mod ordered_position_tests {
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let commands = Arc::new(StdMutex::new(Vec::<(String, Option<String>, Option<String>)>::new()));
+        let commands = Arc::new(StdMutex::new(
+            Vec::<(String, Option<String>, Option<String>)>::new(),
+        ));
         let recorded = commands.clone();
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -3726,14 +4326,21 @@ mod ordered_position_tests {
                 let method = cmd["method"].as_str().unwrap().to_string();
                 let target_id = cmd["params"]["targetId"].as_str().map(str::to_string);
                 let session_id = cmd["sessionId"].as_str().map(str::to_string);
-                recorded.lock().unwrap().push((method.clone(), target_id, session_id));
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((method.clone(), target_id, session_id));
                 let result = if method == "Target.getTargets" {
                     json!({ "targetInfos": [] })
                 } else {
                     json!({ "success": true })
                 };
                 let reply = json!({ "id": cmd["id"], "result": result });
-                if ws.send(Message::Text(reply.to_string().into())).await.is_err() {
+                if ws
+                    .send(Message::Text(reply.to_string().into()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -3756,7 +4363,9 @@ mod ordered_position_tests {
             user_data_dir: profile.user_data_dir().to_path_buf(),
         };
         let control = Arc::new(
-            NativeControl::connect_unobserved(&handle, Arc::new(NativeFaults::default())).await.unwrap(),
+            NativeControl::connect_unobserved(&handle, Arc::new(NativeFaults::default()))
+                .await
+                .unwrap(),
         );
         let inst = Arc::new(Mutex::new(InnerInstance {
             profile,
@@ -3794,23 +4403,44 @@ mod ordered_position_tests {
         state.owners.insert("parent".into(), owner.clone());
         state.frame_sessions.insert("parent".into());
         for index in 0..64 {
-            state.pending_frames.insert(index + 1, child_root_pending(MAX_CHILD_ROOT_RESEEDS));
+            state
+                .pending_frames
+                .insert(index + 1, child_root_pending(MAX_CHILD_ROOT_RESEEDS));
         }
         for index in 0..MAX_PENDING_FRAME_TREE_RETRIES {
             assert!(state.queue_frame_tree_retry(
-                format!("queued-{index}"), owner.clone(), token, None, None, MAX_CHILD_ROOT_RESEEDS,
+                format!("queued-{index}"),
+                owner.clone(),
+                token,
+                None,
+                None,
+                MAX_CHILD_ROOT_RESEEDS,
             ));
         }
         state.owners.insert("overflow-child".into(), owner.clone());
-        state.pending_children.insert("overflow-child".into(), ("parent".into(), 5));
-        state.pending_child_resumes.insert("overflow-child".into(), PendingChildResume {
-            attach_sequence: 5,
-            target_id: "TARGET-OVERFLOW".into(),
-        });
-        shared.request_frame_tree_with_budget(
-            &control, &mut state, "overflow-child", owner.clone(), token,
-            Some("parent".into()), Some(5), MAX_CHILD_ROOT_RESEEDS, &frame_tx,
-        ).await;
+        state
+            .pending_children
+            .insert("overflow-child".into(), ("parent".into(), 5));
+        state.pending_child_resumes.insert(
+            "overflow-child".into(),
+            PendingChildResume {
+                attach_sequence: 5,
+                target_id: "TARGET-OVERFLOW".into(),
+            },
+        );
+        shared
+            .request_frame_tree_with_budget(
+                &control,
+                &mut state,
+                "overflow-child",
+                owner.clone(),
+                token,
+                Some("parent".into()),
+                Some(5),
+                MAX_CHILD_ROOT_RESEEDS,
+                &frame_tx,
+            )
+            .await;
         assert!(!state.pending_child_resumes.contains_key("overflow-child"));
         assert!(!state.pending_children.contains_key("overflow-child"));
         assert!(!state.owners.contains_key("overflow-child"));
@@ -3822,58 +4452,90 @@ mod ordered_position_tests {
         state.frame_sessions.insert("parent".into());
 
         // Owner mismatch
-        state.owners.insert("mismatch-child".into(), FrameOwner {
-            attachment_generation: 99, ..owner.clone()
-        });
-        state.pending_children.insert("mismatch-child".into(), ("parent".into(), 6));
-        state.pending_child_resumes.insert("mismatch-child".into(), PendingChildResume {
-            attach_sequence: 6,
-            target_id: "TARGET-MISMATCH".into(),
-        });
-        state.frame_tree_retries.insert("mismatch-child".into(), FrameTreeRetry {
-            owner: owner.clone(),
-            token,
-            child_parent_session: Some("parent".into()),
-            child_attach_sequence: Some(6),
-            reseed_budget: MAX_CHILD_ROOT_RESEEDS,
-            next_attempt: std::time::Instant::now() - Duration::from_secs(1),
-        });
+        state.owners.insert(
+            "mismatch-child".into(),
+            FrameOwner {
+                attachment_generation: 99,
+                ..owner.clone()
+            },
+        );
+        state
+            .pending_children
+            .insert("mismatch-child".into(), ("parent".into(), 6));
+        state.pending_child_resumes.insert(
+            "mismatch-child".into(),
+            PendingChildResume {
+                attach_sequence: 6,
+                target_id: "TARGET-MISMATCH".into(),
+            },
+        );
+        state.frame_tree_retries.insert(
+            "mismatch-child".into(),
+            FrameTreeRetry {
+                owner: owner.clone(),
+                token,
+                child_parent_session: Some("parent".into()),
+                child_attach_sequence: Some(6),
+                reseed_budget: MAX_CHILD_ROOT_RESEEDS,
+                next_attempt: std::time::Instant::now() - Duration::from_secs(1),
+            },
+        );
 
         // Unrecognized retry state (missing pending_children record)
-        state.owners.insert("unrecognized-child".into(), owner.clone());
-        state.pending_child_resumes.insert("unrecognized-child".into(), PendingChildResume {
-            attach_sequence: 7,
-            target_id: "TARGET-UNRECOGNIZED".into(),
-        });
-        state.frame_tree_retries.insert("unrecognized-child".into(), FrameTreeRetry {
-            owner: owner.clone(),
-            token,
-            child_parent_session: Some("parent".into()),
-            child_attach_sequence: Some(7),
-            reseed_budget: MAX_CHILD_ROOT_RESEEDS,
-            next_attempt: std::time::Instant::now() - Duration::from_secs(1),
-        });
+        state
+            .owners
+            .insert("unrecognized-child".into(), owner.clone());
+        state.pending_child_resumes.insert(
+            "unrecognized-child".into(),
+            PendingChildResume {
+                attach_sequence: 7,
+                target_id: "TARGET-UNRECOGNIZED".into(),
+            },
+        );
+        state.frame_tree_retries.insert(
+            "unrecognized-child".into(),
+            FrameTreeRetry {
+                owner: owner.clone(),
+                token,
+                child_parent_session: Some("parent".into()),
+                child_attach_sequence: Some(7),
+                reseed_budget: MAX_CHILD_ROOT_RESEEDS,
+                next_attempt: std::time::Instant::now() - Duration::from_secs(1),
+            },
+        );
 
         // Token invalidated
         assert!(control.ownership_fence.invalidate(conn));
         let fresh_token = control.ownership_fence.token(conn).unwrap();
-        state.owners.insert("stale-token-child".into(), owner.clone());
-        state.pending_children.insert("stale-token-child".into(), ("parent".into(), 8));
-        state.pending_child_resumes.insert("stale-token-child".into(), PendingChildResume {
-            attach_sequence: 8,
-            target_id: "TARGET-STALE-TOKEN".into(),
-        });
-        state.frame_tree_retries.insert("stale-token-child".into(), FrameTreeRetry {
-            owner,
-            token,
-            child_parent_session: Some("parent".into()),
-            child_attach_sequence: Some(8),
-            reseed_budget: MAX_CHILD_ROOT_RESEEDS,
-            next_attempt: std::time::Instant::now() - Duration::from_secs(1),
-        });
+        state
+            .owners
+            .insert("stale-token-child".into(), owner.clone());
+        state
+            .pending_children
+            .insert("stale-token-child".into(), ("parent".into(), 8));
+        state.pending_child_resumes.insert(
+            "stale-token-child".into(),
+            PendingChildResume {
+                attach_sequence: 8,
+                target_id: "TARGET-STALE-TOKEN".into(),
+            },
+        );
+        state.frame_tree_retries.insert(
+            "stale-token-child".into(),
+            FrameTreeRetry {
+                owner,
+                token,
+                child_parent_session: Some("parent".into()),
+                child_attach_sequence: Some(8),
+                reseed_budget: MAX_CHILD_ROOT_RESEEDS,
+                next_attempt: std::time::Instant::now() - Duration::from_secs(1),
+            },
+        );
         assert_ne!(token, fresh_token);
 
-        shared.retry_pending_frame_trees(&control, &mut state, &frame_tx).await;
+        shared
+            .retry_pending_frame_trees(&control, &mut state, &frame_tx)
+            .await;
 
         assert!(state.frame_tree_retries.is_empty());
         assert!(state.pending_child_resumes.is_empty());
@@ -3888,17 +4550,217 @@ mod ordered_position_tests {
         }
 
         let recorded = commands.lock().unwrap();
-        assert!(!recorded.iter().any(|(method, _, _)| method == "Runtime.runIfWaitingForDebugger"));
+        assert!(!recorded
+            .iter()
+            .any(|(method, _, _)| method == "Runtime.runIfWaitingForDebugger"));
         for target in [
             "TARGET-OVERFLOW",
             "TARGET-MISMATCH",
             "TARGET-UNRECOGNIZED",
             "TARGET-STALE-TOKEN",
         ] {
-            assert!(recorded.iter().any(|(method, tid, _)| {
-                method == "Target.closeTarget" && tid.as_deref() == Some(target)
-            }), "missing Target.closeTarget for {target}");
+            assert!(
+                recorded.iter().any(|(method, tid, _)| {
+                    method == "Target.closeTarget" && tid.as_deref() == Some(target)
+                }),
+                "missing Target.closeTarget for {target}"
+            );
         }
+    }
+
+    #[tokio::test]
+    async fn absent_target_during_recursive_setup_does_not_close_observer_while_live_target_fails_closed(
+    ) {
+        use super::{
+            BrowserHostConfig, BrowserHostManager, BrowserInstanceHandle, InnerInstance,
+            InstanceLifecycleState, NativeControl, NativeFaults, NetworkPolicy, ObserverShared,
+            ObserverState,
+        };
+        use futures_util::{SinkExt, StreamExt};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        use tokio::sync::{mpsc, Mutex};
+        use tokio_tungstenite::tungstenite::Message;
+        use tokio_util::sync::CancellationToken;
+
+        async fn spawn_mock_cdp(
+            target_still_present: Arc<AtomicBool>,
+            setup_error_code: i64,
+            setup_error_msg: &'static str,
+        ) -> std::net::SocketAddr {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                while let Some(Ok(Message::Text(text))) = ws.next().await {
+                    let cmd: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    let method = cmd["method"].as_str().unwrap();
+                    let reply = match method {
+                        "Page.enable" => json!({
+                            "id": cmd["id"],
+                            "error": { "code": setup_error_code, "message": setup_error_msg }
+                        }),
+                        "Target.getTargets" => {
+                            let infos = if target_still_present.load(Ordering::SeqCst) {
+                                json!([{ "targetId": "TARGET-GONE-RACE", "type": "page", "url": "about:blank" }])
+                            } else {
+                                json!([])
+                            };
+                            json!({ "id": cmd["id"], "result": { "targetInfos": infos } })
+                        }
+                        _ => json!({ "id": cmd["id"], "result": {} }),
+                    };
+                    if ws
+                        .send(Message::Text(reply.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+            addr
+        }
+
+        async fn setup_shared(
+            addr: std::net::SocketAddr,
+        ) -> (ObserverShared, Arc<NativeControl>, tempfile::TempDir) {
+            let tmp = tempfile::tempdir().unwrap();
+            let manager = BrowserHostManager::new(
+                BrowserHostConfig::default(),
+                Some(tmp.path().to_path_buf()),
+                CancellationToken::new(),
+            );
+            let profile = manager.profile_for("alice", true).unwrap();
+            let handle = BrowserInstanceHandle {
+                subject: "alice".into(),
+                is_dev: true,
+                pid: 1,
+                ws_endpoint: format!("ws://{addr}"),
+                browser_incarnation: "incarnation".into(),
+                profile_epoch: 1,
+                user_data_dir: profile.user_data_dir().to_path_buf(),
+            };
+            let control = Arc::new(
+                NativeControl::connect_unobserved(&handle, Arc::new(NativeFaults::default()))
+                    .await
+                    .unwrap(),
+            );
+            let inst = Arc::new(Mutex::new(InnerInstance {
+                profile,
+                state: InstanceLifecycleState::Running,
+                process: None,
+                browser_incarnation: Some("incarnation".into()),
+                profile_epoch: 1,
+                active_viewers: 0,
+                active_raw_cdp: 0,
+                _held_lock: None,
+                deletion_worker: None,
+            }));
+            let shared = ObserverShared {
+                key: BrowserHostManager::principal_key("alice", true),
+                subject: "alice".into(),
+                is_dev: true,
+                max_targets: 8,
+                request_policy: Arc::new(
+                    NetworkPolicy::from_config(&BrowserHostConfig::default(), true).unwrap(),
+                ),
+                inst,
+                native: manager.native.clone(),
+                faults: Arc::new(NativeFaults::default()),
+                downloads: manager.native.download_bindings_for("incarnation"),
+                token: 1,
+            };
+            (shared, control, tmp)
+        }
+
+        // Case 1: -32001 ("Session with given id not found.") + target absent -> no containment/close.
+        let addr_absent = spawn_mock_cdp(
+            Arc::new(AtomicBool::new(false)),
+            -32001,
+            "Session with given id not found.",
+        )
+        .await;
+        let (shared_absent, control_absent, _tmp1) = setup_shared(addr_absent).await;
+        let mut state = ObserverState::default();
+        let (frame_tx, _frame_rx) = mpsc::channel(4);
+        assert!(
+            !shared_absent
+                .retain_page_session(
+                    &control_absent,
+                    &mut state,
+                    "sess-absent",
+                    "TARGET-GONE-RACE",
+                    true,
+                    None,
+                    &frame_tx,
+                )
+                .await
+        );
+        tokio::task::yield_now().await;
+        assert!(
+            !control_absent.is_closed(),
+            "absent target during setup must not close observer client"
+        );
+
+        // Case 2: -32001 + target STILL present -> fail closed and close observer client.
+        let addr_present = spawn_mock_cdp(
+            Arc::new(AtomicBool::new(true)),
+            -32001,
+            "Session with given id not found.",
+        )
+        .await;
+        let (shared_present, control_present, _tmp2) = setup_shared(addr_present).await;
+        let mut state = ObserverState::default();
+        assert!(
+            !shared_present
+                .retain_page_session(
+                    &control_present,
+                    &mut state,
+                    "sess-present",
+                    "TARGET-GONE-RACE",
+                    true,
+                    None,
+                    &frame_tx,
+                )
+                .await
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), control_present.client.closed())
+                .await
+                .is_ok()
+                && control_present.is_closed(),
+            "live target failing recursive setup must close observer client"
+        );
+
+        // Case 3: non-gone error (-32603) even if target absent -> fail closed and close observer client.
+        let addr_other =
+            spawn_mock_cdp(Arc::new(AtomicBool::new(false)), -32603, "Internal error").await;
+        let (shared_other, control_other, _tmp3) = setup_shared(addr_other).await;
+        let mut state = ObserverState::default();
+        assert!(
+            !shared_other
+                .retain_page_session(
+                    &control_other,
+                    &mut state,
+                    "sess-other",
+                    "TARGET-GONE-RACE",
+                    true,
+                    None,
+                    &frame_tx,
+                )
+                .await
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), control_other.client.closed())
+                .await
+                .is_ok()
+                && control_other.is_closed(),
+            "unexpected protocol error during setup must close observer client"
+        );
     }
 }
 fn retire_target_frames(
@@ -3908,7 +4770,9 @@ fn retire_target_frames(
     target_id: &str,
     token: Option<ValidityToken>,
 ) {
-    let sessions: HashSet<String> = state.owners.iter()
+    let sessions: HashSet<String> = state
+        .owners
+        .iter()
         .filter(|(_, owner)| owner.native_target_id == target_id)
         .map(|(session, _)| session.clone())
         .collect();
@@ -3919,7 +4783,9 @@ fn retire_target_frames(
         state.owners.remove(session);
         state.frame_sessions.remove(session);
     }
-    state.frame_tree_retries.retain(|session, _| !sessions.contains(session));
+    state
+        .frame_tree_retries
+        .retain(|session, _| !sessions.contains(session));
     let mut downloads = downloads.lock().unwrap();
     downloads.expire_terminal_entries(Instant::now());
     for entry in downloads.entries.values_mut() {
@@ -3929,19 +4795,28 @@ fn retire_target_frames(
             *entry = GuidEntry::Tombstone;
         }
     }
-    state.frame_attached.retain(|(session, _), _| !sessions.contains(session));
+    state
+        .frame_attached
+        .retain(|(session, _), _| !sessions.contains(session));
     state.child_frame_roots.retain(|child, attachment| {
         !sessions.contains(child) && !sessions.contains(&attachment.parent_session_id)
     });
-    state.child_target_ids.retain(|child, _| !sessions.contains(child));
-    state.pending_children.retain(|child, (parent, _)| {
-        !sessions.contains(child) && !sessions.contains(parent)
-    });
+    state
+        .child_target_ids
+        .retain(|child, _| !sessions.contains(child));
+    state
+        .pending_children
+        .retain(|child, (parent, _)| !sessions.contains(child) && !sessions.contains(parent));
     state.pending_frames.retain(|_, pending| {
         !sessions.contains(&pending.session_id)
-            && pending.child_parent_session.as_ref().is_none_or(|parent| !sessions.contains(parent))
+            && pending
+                .child_parent_session
+                .as_ref()
+                .is_none_or(|parent| !sessions.contains(parent))
     });
-    state.pending_child_resumes.retain(|session, _| !sessions.contains(session));
+    state
+        .pending_child_resumes
+        .retain(|session, _| !sessions.contains(session));
 }
 
 fn retire_session_frames(
@@ -3959,7 +4834,10 @@ fn attachment_session_closure(
 ) -> HashSet<String> {
     let mut children_by_parent: HashMap<String, Vec<String>> = HashMap::new();
     for (child, (parent, _)) in &state.pending_children {
-        children_by_parent.entry(parent.clone()).or_default().push(child.clone());
+        children_by_parent
+            .entry(parent.clone())
+            .or_default()
+            .push(child.clone());
     }
     let mut sessions = HashSet::new();
     let mut pending = Vec::new();
@@ -4006,19 +4884,28 @@ fn clear_attachment_sessions(
         }
         state.frame_sessions.remove(session);
     }
-    state.frame_attached.retain(|(session, _), _| !sessions.contains(session));
-    state.pending_children.retain(|child, (parent, _)| {
-        !sessions.contains(child) && !sessions.contains(parent)
-    });
+    state
+        .frame_attached
+        .retain(|(session, _), _| !sessions.contains(session));
+    state
+        .pending_children
+        .retain(|child, (parent, _)| !sessions.contains(child) && !sessions.contains(parent));
     state.child_frame_roots.retain(|child, attachment| {
         !sessions.contains(child) && !sessions.contains(&attachment.parent_session_id)
     });
-    state.child_target_ids.retain(|child, _| !sessions.contains(child));
+    state
+        .child_target_ids
+        .retain(|child, _| !sessions.contains(child));
     state.pending_frames.retain(|_, pending| {
         !sessions.contains(&pending.session_id)
-            && pending.child_parent_session.as_ref().is_none_or(|parent| !sessions.contains(parent))
+            && pending
+                .child_parent_session
+                .as_ref()
+                .is_none_or(|parent| !sessions.contains(parent))
     });
-    state.frame_tree_retries.retain(|session, _| !sessions.contains(session));
+    state
+        .frame_tree_retries
+        .retain(|session, _| !sessions.contains(session));
     let mut orphaned_paused_targets = Vec::new();
     state.pending_child_resumes.retain(|session, resume| {
         if sessions.contains(session) {
@@ -4044,7 +4931,10 @@ fn revoke_pending_attachment(
     )
 }
 /// Budget for re-requesting a child root after its parent session swaps the root frame; `None` means revoke.
-fn child_root_swap_reseed_budget(pending: &PendingFrameTree, root_detaches: &[&PendingDetach]) -> Option<u8> {
+fn child_root_swap_reseed_budget(
+    pending: &PendingFrameTree,
+    root_detaches: &[&PendingDetach],
+) -> Option<u8> {
     let parent = pending.child_parent_session.as_deref()?;
     let [only] = root_detaches else { return None };
     (only.session_id.as_str() == parent && !only.removed && pending.reseed_budget > 0)
@@ -4052,13 +4942,20 @@ fn child_root_swap_reseed_budget(pending: &PendingFrameTree, root_detaches: &[&P
 }
 
 /// Records a detach against each pending tree it may affect; root relevance is decided at admission.
-fn mark_pending_frame_detached(state: &mut ObserverState, session_id: &str, frame_id: &str, reason: FrameDetachReason) {
+fn mark_pending_frame_detached(
+    state: &mut ObserverState,
+    session_id: &str,
+    frame_id: &str,
+    reason: FrameDetachReason,
+) {
     for pending in state.pending_frames.values_mut().filter(|pending| {
         pending.session_id == session_id
             || pending.child_parent_session.as_deref() == Some(session_id)
     }) {
         pending.changed = true;
-        if let Some(existing) = pending.detached.iter_mut()
+        if let Some(existing) = pending
+            .detached
+            .iter_mut()
             .find(|detach| detach.session_id == session_id && detach.frame_id == frame_id)
         {
             existing.removed |= reason != FrameDetachReason::Swap;
@@ -4082,7 +4979,10 @@ fn retire_frame_attachment_subtree(
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
     for ((session, child), (parent, _)) in &state.frame_attached {
         if session == session_id {
-            children.entry(parent.clone()).or_default().push(child.clone());
+            children
+                .entry(parent.clone())
+                .or_default()
+                .push(child.clone());
         }
     }
     let mut pending = vec![frame_id.to_string()];
@@ -4095,11 +4995,13 @@ fn retire_frame_attachment_subtree(
             pending.extend(descendants.iter().cloned());
         }
     }
-    state.frame_attached.retain(|(session, frame), (parent, _)| {
-        session != session_id
-            || !retired.contains(frame)
-            || (frame == frame_id && preserved_parent == Some(parent.as_str()))
-    });
+    state
+        .frame_attached
+        .retain(|(session, frame), (parent, _)| {
+            session != session_id
+                || !retired.contains(frame)
+                || (frame == frame_id && preserved_parent == Some(parent.as_str()))
+        });
     retired
 }
 fn frame_detach_preserved_parent(
@@ -4109,7 +5011,8 @@ fn frame_detach_preserved_parent(
     reason: FrameDetachReason,
 ) -> Option<String> {
     if reason == FrameDetachReason::Swap {
-        state.frame_attached
+        state
+            .frame_attached
             .get(&(session_id.to_string(), frame_id.to_string()))
             .map(|(parent, _)| parent.clone())
     } else {
@@ -4132,7 +5035,9 @@ fn record_frame_attachment(
         fence.retire_current();
         return false;
     }
-    state.frame_attached.insert(key, (parent_frame_id.to_string(), sequence));
+    state
+        .frame_attached
+        .insert(key, (parent_frame_id.to_string(), sequence));
     true
 }
 
@@ -4141,7 +5046,9 @@ fn child_sessions_to_retire(
     parent_session: &str,
     retired_frames: &HashSet<String>,
 ) -> Vec<String> {
-    state.child_frame_roots.iter()
+    state
+        .child_frame_roots
+        .iter()
         .filter(|(_, attachment)| {
             attachment.parent_session_id == parent_session
                 && retired_frames.contains(&attachment.logical_frame_id)
@@ -4166,7 +5073,11 @@ fn retire_detached_frame(
     let mut orphaned_paused_targets = Vec::new();
     if !child_sessions.is_empty() {
         orphaned_paused_targets.extend(clear_attachment_sessions(
-            fence, state, child_sessions, Some(token), true,
+            fence,
+            state,
+            child_sessions,
+            Some(token),
+            true,
         ));
     }
     if let Some((sessions, session_root_retired)) =
@@ -4176,20 +5087,28 @@ fn retire_detached_frame(
             let mut roots = sessions;
             roots.insert(session_id.to_string());
             orphaned_paused_targets.extend(clear_attachment_sessions(
-                fence, state, roots, Some(token), false,
+                fence,
+                state,
+                roots,
+                Some(token),
+                false,
             ));
         } else {
-            let child_sessions = sessions.into_iter()
+            let child_sessions = sessions
+                .into_iter()
                 .filter(|child| child != session_id)
                 .collect::<Vec<_>>();
             orphaned_paused_targets.extend(clear_attachment_sessions(
-                fence, state, child_sessions, Some(token), true,
+                fence,
+                state,
+                child_sessions,
+                Some(token),
+                true,
             ));
         }
     }
     orphaned_paused_targets
 }
-
 
 enum PageDisposition {
     Ignored,
@@ -4237,36 +5156,54 @@ async fn start_observer(
 async fn connect_control(
     shared: &ObserverShared,
     handle: &BrowserInstanceHandle,
-) -> Result<(Arc<NativeControl>, broadcast::Receiver<Arc<CdpOrderedRecord>>), ManagerError> {
+) -> Result<
+    (
+        Arc<NativeControl>,
+        broadcast::Receiver<Arc<CdpOrderedRecord>>,
+    ),
+    ManagerError,
+> {
     let ownership_fence = Arc::new(OwnershipFence::new());
-    let client = CdpClient::connect_with_ownership_fence(&handle.ws_endpoint, ownership_fence.clone()).await.map_err(|e| {
-        ManagerError::Internal(format!("native target observer connect failed: {e}"))
-    })?;
+    let client =
+        CdpClient::connect_with_ownership_fence(&handle.ws_endpoint, ownership_fence.clone())
+            .await
+            .map_err(|e| {
+                ManagerError::Internal(format!("native target observer connect failed: {e}"))
+            })?;
     // Subscribed before discovery is enabled so no lifecycle event can precede the receiver.
     let events = client.subscribe_ordered_events();
     // Fetch's browser handler applies to newly created factories; it does not refresh
     // factories that existed before this connection. Establish policy before exposing
     // any native control, then retire only the startup workers with unknown provenance.
     let escalate = shared.policy_containment(&handle.browser_incarnation);
-    client.install_browser_request_policy(shared.request_policy.clone(), escalate.clone())
-        .await.map_err(|err| ManagerError::Internal(format!("browser request policy setup: {err}")))?;
+    client
+        .install_browser_request_policy(shared.request_policy.clone(), escalate.clone())
+        .await
+        .map_err(|err| ManagerError::Internal(format!("browser request policy setup: {err}")))?;
     if let Err(err) = retire_pre_policy_workers(&client).await {
         escalate("pre-policy worker termination could not be proven");
         client.close().await;
-        return Err(ManagerError::Internal(format!("browser startup worker reconciliation: {err}")));
+        return Err(ManagerError::Internal(format!(
+            "browser startup worker reconciliation: {err}"
+        )));
     }
     let downloads_dir = super::cdp::resolve_host_downloads_dir();
-    if let Err(err) = client.send_command(
-        "Browser.setDownloadBehavior",
-        Some(json!({
-            "behavior": "allow",
-            "downloadPath": downloads_dir.to_string_lossy(),
-            "eventsEnabled": true,
-        })),
-        None,
-    ).await {
+    if let Err(err) = client
+        .send_command(
+            "Browser.setDownloadBehavior",
+            Some(json!({
+                "behavior": "allow",
+                "downloadPath": downloads_dir.to_string_lossy(),
+                "eventsEnabled": true,
+            })),
+            None,
+        )
+        .await
+    {
         client.close().await;
-        return Err(ManagerError::Internal(format!("native download event setup failed: {err}")));
+        return Err(ManagerError::Internal(format!(
+            "native download event setup failed: {err}"
+        )));
     }
     let control = Arc::new(NativeControl {
         subject: shared.subject.clone(),
@@ -4286,33 +5223,55 @@ async fn connect_control(
 /// pre-policy loader factory are stopped; later page navigation restarts them under Fetch.
 async fn retire_pre_policy_workers(client: &CdpClient) -> Result<(), CdpError> {
     let inventory = client.send_command("Target.getTargets", None, None).await?;
-    let infos = inventory.get("targetInfos").and_then(Value::as_array)
+    let infos = inventory
+        .get("targetInfos")
+        .and_then(Value::as_array)
         .ok_or_else(|| CdpError::MalformedResponse("getTargets without targetInfos".into()))?;
     let mut workers = Vec::new();
     for info in infos {
-        if matches!(info.get("type").and_then(Value::as_str),
-            Some("worker" | "service_worker" | "shared_worker")) {
+        if matches!(
+            info.get("type").and_then(Value::as_str),
+            Some("worker" | "service_worker" | "shared_worker")
+        ) {
             if workers.len() >= MAX_REJECTED_TARGETS {
-                return Err(CdpError::MalformedResponse("startup worker inventory exceeds bound".into()));
+                return Err(CdpError::MalformedResponse(
+                    "startup worker inventory exceeds bound".into(),
+                ));
             }
-            let id = info.get("targetId").and_then(Value::as_str)
+            let id = info
+                .get("targetId")
+                .and_then(Value::as_str)
                 .filter(|id| !id.is_empty() && id.len() <= MAX_TARGET_ID_LEN)
-                .ok_or_else(|| CdpError::MalformedResponse("startup worker has invalid targetId".into()))?;
+                .ok_or_else(|| {
+                    CdpError::MalformedResponse("startup worker has invalid targetId".into())
+                })?;
             workers.push(id.to_string());
         }
     }
-    if workers.is_empty() { return Ok(()); }
-    warn!(count = workers.len(), "retiring startup workers with pre-policy loader factories");
+    if workers.is_empty() {
+        return Ok(());
+    }
+    warn!(
+        count = workers.len(),
+        "retiring startup workers with pre-policy loader factories"
+    );
     for id in &workers {
         // The proof, not a successful close acknowledgement, establishes containment.
-        let _ = client.send_command("Target.closeTarget", Some(json!({"targetId": id})), None).await;
+        let _ = client
+            .send_command("Target.closeTarget", Some(json!({"targetId": id})), None)
+            .await;
     }
     for attempt in 0..CLOSE_VERIFY_ATTEMPTS {
         let inventory = client.send_command("Target.getTargets", None, None).await?;
-        let infos = inventory.get("targetInfos").and_then(Value::as_array)
+        let infos = inventory
+            .get("targetInfos")
+            .and_then(Value::as_array)
             .ok_or_else(|| CdpError::MalformedResponse("getTargets without targetInfos".into()))?;
-        workers.retain(|id| infos.iter().any(|info|
-            info.get("targetId").and_then(Value::as_str) == Some(id.as_str())));
+        workers.retain(|id| {
+            infos
+                .iter()
+                .any(|info| info.get("targetId").and_then(Value::as_str) == Some(id.as_str()))
+        });
         if workers.is_empty() {
             return Ok(());
         }
@@ -4322,13 +5281,15 @@ async fn retire_pre_policy_workers(client: &CdpClient) -> Result<(), CdpError> {
             // have policed factories and must keep running. Absence remains the proof.
             sleep(CLOSE_VERIFY_INTERVAL).await;
             for id in &workers {
-                let _ = client.send_command(
-                    "Target.closeTarget", Some(json!({"targetId": id})), None,
-                ).await;
+                let _ = client
+                    .send_command("Target.closeTarget", Some(json!({"targetId": id})), None)
+                    .await;
             }
         }
     }
-    Err(CdpError::Transport("pre-policy worker remains in native inventory".into()))
+    Err(CdpError::Transport(
+        "pre-policy worker remains in native inventory".into(),
+    ))
 }
 
 async fn run_observer(
@@ -4339,17 +5300,19 @@ async fn run_observer(
     initial: bool,
 ) {
     // Covers bounded observer provenance maps plus peak local traversal/staging scratch.
-    let _observer_state_reservation = match super::diagnostics::global_memory_controller()
-        .try_reserve(8 * 1024 * 1024)
-    {
-        Ok(reservation) => reservation,
-        Err(error) => {
-            let _ = ready.send(Err(format!("observer state memory admission failed: {error}")));
-            return;
-        }
-    };
+    let _observer_state_reservation =
+        match super::diagnostics::global_memory_controller().try_reserve(8 * 1024 * 1024) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let _ = ready.send(Err(format!(
+                    "observer state memory admission failed: {error}"
+                )));
+                return;
+            }
+        };
     let mut state = ObserverState::default();
-    let (frame_tx, mut frame_rx) = mpsc::channel::<(usize, ValidityToken, Option<CdpFrameTreeSnapshot>)>(64);
+    let (frame_tx, mut frame_rx) =
+        mpsc::channel::<(usize, ValidityToken, Option<CdpFrameTreeSnapshot>)>(64);
     let mut position = None;
     let mut sweep = tokio::time::interval(PENDING_CLOSE_SWEEP);
     sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -4479,32 +5442,53 @@ impl ObserverShared {
         let incarnation = incarnation.to_string();
         Arc::new(move |reason| {
             let (
-                Some(inst), Some(observers), Some(containments), Some(live_incarnations),
-                Some(global_process_count), Some(download_bindings),
+                Some(inst),
+                Some(observers),
+                Some(containments),
+                Some(live_incarnations),
+                Some(global_process_count),
+                Some(download_bindings),
             ) = (
-                inst.upgrade(), observers.upgrade(), containments.upgrade(),
-                live_incarnations.upgrade(), global_process_count.upgrade(),
+                inst.upgrade(),
+                observers.upgrade(),
+                containments.upgrade(),
+                live_incarnations.upgrade(),
+                global_process_count.upgrade(),
                 download_bindings.upgrade(),
-            ) else { return; };
+            )
+            else {
+                return;
+            };
             let mut tasks = containments.lock().unwrap();
             let slot = (key.clone(), incarnation.clone());
-            if tasks.get(&slot).is_some_and(|task| !task.is_finished()) { return; }
+            if tasks.get(&slot).is_some_and(|task| !task.is_finished()) {
+                return;
+            }
             warn!(reason, "containing browser request-policy incarnation");
             let native = NativeHandles {
-                observers, containments: containments.clone(), live_incarnations,
-                global_process_count, download_bindings, sinks: sinks.clone(),
+                observers,
+                containments: containments.clone(),
+                live_incarnations,
+                global_process_count,
+                download_bindings,
+                sinks: sinks.clone(),
             };
             let key = key.clone();
             let incarnation = incarnation.clone();
-            tasks.insert(slot, tokio::spawn(async move {
-                let mut inst = inst.lock().await;
-                if inst.browser_incarnation.as_deref() != Some(incarnation.as_str()) || inst.process.is_none() {
-                    return;
-                }
-                if let Err(err) = native.reap_dead_instance(&key, &mut inst, true).await {
-                    warn!(error = %err, "request-policy containment left cleanup pending");
-                }
-            }));
+            tasks.insert(
+                slot,
+                tokio::spawn(async move {
+                    let mut inst = inst.lock().await;
+                    if inst.browser_incarnation.as_deref() != Some(incarnation.as_str())
+                        || inst.process.is_none()
+                    {
+                        return;
+                    }
+                    if let Err(err) = native.reap_dead_instance(&key, &mut inst, true).await {
+                        warn!(error = %err, "request-policy containment left cleanup pending");
+                    }
+                }),
+            );
         })
     }
 
@@ -4800,123 +5784,279 @@ impl ObserverShared {
         }
     }
 
-    async fn configure_recursive_session(&self, control: &Arc<NativeControl>, session_id: &str) -> Result<(), CdpError> {
+    async fn configure_recursive_session(
+        &self,
+        control: &Arc<NativeControl>,
+        session_id: &str,
+    ) -> Result<(), CdpError> {
         let client = &control.client;
-        client.send_command("Page.enable", None, Some(session_id)).await?;
-        let version = client.send_command("Browser.getVersion", None, None).await.ok()
-            .and_then(|v| v.get("userAgent").or_else(|| v.get("product")).and_then(Value::as_str).map(str::to_string));
+        client
+            .send_command("Page.enable", None, Some(session_id))
+            .await?;
+        let version = client
+            .send_command("Browser.getVersion", None, None)
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("userAgent")
+                    .or_else(|| v.get("product"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
         let identity = super::stealth::ChromeIdentity::from_version_str(version.as_deref());
-        super::screencast::apply_stealth_before_resume(client, session_id, &identity.user_agent_override_params()).await?;
-        client.send_command("Target.setAutoAttach", Some(json!({
-            "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
-            "filter": [{ "type": "iframe" }, { "type": "worker" }, { "exclude": true }]
-        })), Some(session_id)).await?;
+        super::screencast::apply_stealth_before_resume(
+            client,
+            session_id,
+            &identity.user_agent_override_params(),
+        )
+        .await?;
+        client
+            .send_command(
+                "Target.setAutoAttach",
+                Some(json!({
+                    "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+                    "filter": [{ "type": "iframe" }, { "type": "worker" }, { "exclude": true }]
+                })),
+                Some(session_id),
+            )
+            .await?;
         Ok(())
     }
 
+    async fn confirm_gone_for_page_setup(
+        &self,
+        control: &Arc<NativeControl>,
+        state: &mut ObserverState,
+        target_id: &str,
+        token: Option<ValidityToken>,
+        error: &CdpError,
+    ) -> bool {
+        if is_session_or_target_gone_error(error) && control.confirm_target_absent(target_id).await
+        {
+            retire_target_frames(control, state, &self.downloads, target_id, token);
+            self.target_gone(control, target_id).await;
+            return true;
+        }
+        false
+    }
+
     async fn retain_page_session(
-        &self, control: &Arc<NativeControl>, state: &mut ObserverState, session_id: &str,
-        target_id: &str, waiting: bool, token: Option<ValidityToken>,
+        &self,
+        control: &Arc<NativeControl>,
+        state: &mut ObserverState,
+        session_id: &str,
+        target_id: &str,
+        waiting: bool,
+        token: Option<ValidityToken>,
         frame_tx: &mpsc::Sender<(usize, ValidityToken, Option<CdpFrameTreeSnapshot>)>,
     ) -> bool {
         if let Err(error) = self.configure_recursive_session(control, session_id).await {
+            if self
+                .confirm_gone_for_page_setup(control, state, target_id, token, &error)
+                .await
+            {
+                debug!(
+                    %error, session_id, target_id, target_type = "page",
+                    "page target closed before recursive session setup completed",
+                );
+                return false;
+            }
             warn!(
                 %error, session_id, target_id, target_type = "page", waiting_for_debugger = waiting,
                 "recursive page session setup failed",
             );
-            (self.policy_containment(&control.browser_incarnation))("page recursive attachment setup failed");
+            (self.policy_containment(&control.browser_incarnation))(
+                "page recursive attachment setup failed",
+            );
             control.client.close().await;
             return false;
         }
-        if let (Some(token), TargetClass::Session { session_id: logical_id, status }) = (
-            token, self.registry().classify_target(&control.browser_incarnation, target_id).await,
+        if let (
+            Some(token),
+            TargetClass::Session {
+                session_id: logical_id,
+                status,
+            },
+        ) = (
+            token,
+            self.registry()
+                .classify_target(&control.browser_incarnation, target_id)
+                .await,
         ) {
             if matches!(status, SessionStatus::Initializing | SessionStatus::Running) {
                 if let Ok(snapshot) = self.registry().snapshot(&logical_id, &self.subject).await {
-                    if snapshot.is_dev == self.is_dev && snapshot.browser_incarnation == control.browser_incarnation
+                    if snapshot.is_dev == self.is_dev
+                        && snapshot.browser_incarnation == control.browser_incarnation
                         && snapshot.profile_epoch == control.profile_epoch
                         && snapshot.native_target_id.as_deref() == Some(target_id)
-                        && matches!(snapshot.status, SessionStatus::Initializing | SessionStatus::Running)
+                        && matches!(
+                            snapshot.status,
+                            SessionStatus::Initializing | SessionStatus::Running
+                        )
                     {
-                        if let Ok(generation) = NEXT_ATTACHMENT_GENERATION.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1)) {
+                        if let Ok(generation) = NEXT_ATTACHMENT_GENERATION.fetch_update(
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                            |n| n.checked_add(1),
+                        ) {
                             let owner = FrameOwner {
-                                principal: self.subject.clone(), is_dev: self.is_dev,
-                                browser_incarnation: control.browser_incarnation.clone(), profile_epoch: control.profile_epoch,
-                                logical_session_id: logical_id, native_target_id: target_id.to_string(),
+                                principal: self.subject.clone(),
+                                is_dev: self.is_dev,
+                                browser_incarnation: control.browser_incarnation.clone(),
+                                profile_epoch: control.profile_epoch,
+                                logical_session_id: logical_id,
+                                native_target_id: target_id.to_string(),
                                 attachment_generation: generation,
                             };
                             state.owners.insert(session_id.to_string(), owner.clone());
-                            self.request_frame_tree(control, state, session_id, owner, token, None, None, frame_tx).await;
+                            self.request_frame_tree(
+                                control, state, session_id, owner, token, None, None, frame_tx,
+                            )
+                            .await;
                         }
                     }
                 }
             }
         }
-        if waiting && control.client.send_command("Runtime.runIfWaitingForDebugger", None, Some(session_id)).await.is_err() {
-            (self.policy_containment(&control.browser_incarnation))("page resume failed");
-            control.client.close().await;
-            return false;
+        if waiting {
+            if let Err(error) = control
+                .client
+                .send_command("Runtime.runIfWaitingForDebugger", None, Some(session_id))
+                .await
+            {
+                if self
+                    .confirm_gone_for_page_setup(control, state, target_id, token, &error)
+                    .await
+                {
+                    debug!(
+                        %error, session_id, target_id, target_type = "page",
+                        "page target closed before debugger resume completed",
+                    );
+                    return false;
+                }
+                warn!(
+                    %error, session_id, target_id, target_type = "page",
+                    "page debugger resume failed",
+                );
+                (self.policy_containment(&control.browser_incarnation))("page resume failed");
+                control.client.close().await;
+                return false;
+            }
         }
         true
     }
 
-
     async fn request_frame_tree(
         &self,
-        control: &Arc<NativeControl>, state: &mut ObserverState, session_id: &str, owner: FrameOwner,
-        token: ValidityToken, child_parent_session: Option<String>, child_attach_sequence: Option<u64>,
+        control: &Arc<NativeControl>,
+        state: &mut ObserverState,
+        session_id: &str,
+        owner: FrameOwner,
+        token: ValidityToken,
+        child_parent_session: Option<String>,
+        child_attach_sequence: Option<u64>,
         frame_tx: &mpsc::Sender<(usize, ValidityToken, Option<CdpFrameTreeSnapshot>)>,
     ) {
         self.request_frame_tree_with_budget(
-            control, state, session_id, owner, token, child_parent_session, child_attach_sequence,
-            MAX_CHILD_ROOT_RESEEDS, frame_tx,
-        ).await;
+            control,
+            state,
+            session_id,
+            owner,
+            token,
+            child_parent_session,
+            child_attach_sequence,
+            MAX_CHILD_ROOT_RESEEDS,
+            frame_tx,
+        )
+        .await;
     }
 
     async fn request_frame_tree_with_budget(
         &self,
-        control: &Arc<NativeControl>, state: &mut ObserverState, session_id: &str, owner: FrameOwner,
-        token: ValidityToken, child_parent_session: Option<String>, child_attach_sequence: Option<u64>,
-        reseed_budget: u8, frame_tx: &mpsc::Sender<(usize, ValidityToken, Option<CdpFrameTreeSnapshot>)>,
+        control: &Arc<NativeControl>,
+        state: &mut ObserverState,
+        session_id: &str,
+        owner: FrameOwner,
+        token: ValidityToken,
+        child_parent_session: Option<String>,
+        child_attach_sequence: Option<u64>,
+        reseed_budget: u8,
+        frame_tx: &mpsc::Sender<(usize, ValidityToken, Option<CdpFrameTreeSnapshot>)>,
     ) {
-        if state.pending_frames.values().any(|pending| pending.session_id == session_id) {
+        if state
+            .pending_frames
+            .values()
+            .any(|pending| pending.session_id == session_id)
+        {
             state.frame_tree_retries.remove(session_id);
             return;
         }
         let is_child = child_parent_session.is_some();
         if state.pending_frames.len() >= 64 {
             if !state.queue_frame_tree_retry(
-                session_id.to_string(), owner, token, child_parent_session, child_attach_sequence, reseed_budget,
+                session_id.to_string(),
+                owner,
+                token,
+                child_parent_session,
+                child_attach_sequence,
+                reseed_budget,
             ) {
-                self.revoke_frame_tree_session(control, state, session_id, Some(token), is_child).await;
+                self.revoke_frame_tree_session(control, state, session_id, Some(token), is_child)
+                    .await;
             }
             return;
         }
         let Ok(permit) = frame_tx.clone().try_reserve_owned() else {
             if !state.queue_frame_tree_retry(
-                session_id.to_string(), owner, token, child_parent_session, child_attach_sequence, reseed_budget,
+                session_id.to_string(),
+                owner,
+                token,
+                child_parent_session,
+                child_attach_sequence,
+                reseed_budget,
             ) {
-                self.revoke_frame_tree_session(control, state, session_id, Some(token), is_child).await;
+                self.revoke_frame_tree_session(control, state, session_id, Some(token), is_child)
+                    .await;
             }
             return;
         };
         let Ok(request) = control.client.begin_frame_tree_snapshot(Some(session_id)) else {
             if !state.queue_frame_tree_retry(
-                session_id.to_string(), owner, token, child_parent_session, child_attach_sequence, reseed_budget,
+                session_id.to_string(),
+                owner,
+                token,
+                child_parent_session,
+                child_attach_sequence,
+                reseed_budget,
             ) {
-                self.revoke_frame_tree_session(control, state, session_id, Some(token), is_child).await;
+                self.revoke_frame_tree_session(control, state, session_id, Some(token), is_child)
+                    .await;
             }
             return;
         };
         state.frame_tree_retries.remove(session_id);
         let id = request.command_id();
-        state.pending_frames.insert(id, PendingFrameTree {
-            session_id: session_id.to_string(), owner, token, child_parent_session, child_attach_sequence,
-            barrier: None, result: None, changed: false,
-            detached: Vec::new(), detach_overflow: false, reseed_budget,
-        });
+        state.pending_frames.insert(
+            id,
+            PendingFrameTree {
+                session_id: session_id.to_string(),
+                owner,
+                token,
+                child_parent_session,
+                child_attach_sequence,
+                barrier: None,
+                result: None,
+                changed: false,
+                detached: Vec::new(),
+                detach_overflow: false,
+                reseed_budget,
+            },
+        );
         tokio::spawn(async move {
-            let result = timeout(Duration::from_secs(10), request.wait()).await.ok().and_then(Result::ok);
+            let result = timeout(Duration::from_secs(10), request.wait())
+                .await
+                .ok()
+                .and_then(Result::ok);
             permit.send((id, token, result));
         });
     }
@@ -4928,19 +6068,28 @@ impl ObserverShared {
         frame_tx: &mpsc::Sender<(usize, ValidityToken, Option<CdpFrameTreeSnapshot>)>,
     ) {
         let now = Instant::now();
-        let due: Vec<String> = state.frame_tree_retries.iter()
+        let due: Vec<String> = state
+            .frame_tree_retries
+            .iter()
             .filter(|(_, retry)| retry.next_attempt <= now)
             .map(|(session_id, _)| session_id.clone())
             .collect();
         for session_id in due {
-            let Some(retry) = state.frame_tree_retries.remove(&session_id) else { continue };
+            let Some(retry) = state.frame_tree_retries.remove(&session_id) else {
+                continue;
+            };
             let is_child = retry.child_parent_session.is_some();
             if !control.ownership_fence.observe(retry.token, || {})
                 || state.owners.get(&session_id) != Some(&retry.owner)
             {
                 self.revoke_frame_tree_session(
-                    control, state, &session_id, Some(retry.token), is_child,
-                ).await;
+                    control,
+                    state,
+                    &session_id,
+                    Some(retry.token),
+                    is_child,
+                )
+                .await;
                 continue;
             }
             match (
@@ -4956,27 +6105,49 @@ impl ObserverShared {
                 {
                     if !state.frame_sessions.contains(parent) {
                         if !state.queue_frame_tree_retry(
-                            session_id.clone(), retry.owner.clone(), retry.token,
-                            retry.child_parent_session.clone(), retry.child_attach_sequence, retry.reseed_budget,
+                            session_id.clone(),
+                            retry.owner.clone(),
+                            retry.token,
+                            retry.child_parent_session.clone(),
+                            retry.child_attach_sequence,
+                            retry.reseed_budget,
                         ) {
                             self.revoke_frame_tree_session(
-                                control, state, &session_id, Some(retry.token), true,
-                            ).await;
+                                control,
+                                state,
+                                &session_id,
+                                Some(retry.token),
+                                true,
+                            )
+                            .await;
                         }
                         continue;
                     }
                 }
                 _ => {
                     self.revoke_frame_tree_session(
-                        control, state, &session_id, Some(retry.token), true,
-                    ).await;
+                        control,
+                        state,
+                        &session_id,
+                        Some(retry.token),
+                        true,
+                    )
+                    .await;
                     continue;
                 }
             }
             self.request_frame_tree_with_budget(
-                control, state, &session_id, retry.owner, retry.token,
-                retry.child_parent_session, retry.child_attach_sequence, retry.reseed_budget, frame_tx,
-            ).await;
+                control,
+                state,
+                &session_id,
+                retry.owner,
+                retry.token,
+                retry.child_parent_session,
+                retry.child_attach_sequence,
+                retry.reseed_budget,
+                frame_tx,
+            )
+            .await;
         }
     }
 
@@ -5007,7 +6178,8 @@ impl ObserverShared {
             token,
             remove_owners,
         );
-        self.refuse_and_close_targets(control, state, paused_targets).await;
+        self.refuse_and_close_targets(control, state, paused_targets)
+            .await;
     }
 
     async fn revoke_pending_frame_tree(
@@ -5027,7 +6199,8 @@ impl ObserverShared {
                 }
             }
         }
-        self.refuse_and_close_targets(control, state, paused_targets).await;
+        self.refuse_and_close_targets(control, state, paused_targets)
+            .await;
     }
     async fn resume_proven_child(
         &self,
@@ -5035,113 +6208,182 @@ impl ObserverShared {
         state: &mut ObserverState,
         session_id: &str,
         attach_sequence: u64,
+        token: ValidityToken,
     ) {
-        let Some((parent_session, current_sequence)) = state.pending_children.get(session_id) else {
+        let Some((parent_session, current_sequence)) = state.pending_children.get(session_id)
+        else {
             return;
         };
-        let Some(owner) = state.owners.get(session_id) else { return };
+        let Some(owner) = state.owners.get(session_id) else {
+            return;
+        };
         if *current_sequence != attach_sequence
             || state.owners.get(parent_session) != Some(owner)
             || !state.frame_sessions.contains(session_id)
-            || !state.pending_child_resumes.get(session_id)
+            || !state
+                .pending_child_resumes
+                .get(session_id)
                 .is_some_and(|resume| resume.attach_sequence == attach_sequence)
         {
             return;
         }
         state.pending_child_resumes.remove(session_id);
-        if let Err(error) = control.client.send_command(
-            "Runtime.runIfWaitingForDebugger", None, Some(session_id),
-        ).await {
+        let child_target_id = state.child_target_ids.get(session_id).cloned();
+        if let Err(error) = control
+            .client
+            .send_command("Runtime.runIfWaitingForDebugger", None, Some(session_id))
+            .await
+        {
+            if is_session_or_target_gone_error(&error) {
+                if let Some(target_id) = child_target_id.as_deref() {
+                    if control.confirm_target_absent(target_id).await {
+                        debug!(
+                            %error, session_id, target_id,
+                            "proven iframe closed before debugger resume completed",
+                        );
+                        let paused_targets =
+                            retire_session_frames(control, state, session_id, Some(token));
+                        self.refuse_and_close_targets(control, state, paused_targets)
+                            .await;
+                        return;
+                    }
+                }
+            }
             warn!(%error, session_id, "proven iframe debugger resume failed");
             (self.policy_containment(&control.browser_incarnation))("iframe resume failed");
             control.client.close().await;
         }
     }
-    async fn finish_frame_tree(&self, control: &Arc<NativeControl>, state: &mut ObserverState, id: usize,
-        frame_tx: &mpsc::Sender<(usize, ValidityToken, Option<CdpFrameTreeSnapshot>)>) {
-        if !state.pending_frames.get(&id).is_some_and(|p| p.barrier.is_some() && p.result.is_some()) {
+    async fn finish_frame_tree(
+        &self,
+        control: &Arc<NativeControl>,
+        state: &mut ObserverState,
+        id: usize,
+        frame_tx: &mpsc::Sender<(usize, ValidityToken, Option<CdpFrameTreeSnapshot>)>,
+    ) {
+        if !state
+            .pending_frames
+            .get(&id)
+            .is_some_and(|p| p.barrier.is_some() && p.result.is_some())
+        {
             return;
         }
         let mut pending = state.pending_frames.remove(&id).unwrap();
         let result = pending.result.take().unwrap();
-        if pending.barrier != Some(result.position) || result.command_id != id
-            || state.owners.get(&pending.session_id) != Some(&pending.owner) {
-            self.revoke_pending_frame_tree(control, state, &pending).await;
+        if pending.barrier != Some(result.position)
+            || result.command_id != id
+            || state.owners.get(&pending.session_id) != Some(&pending.owner)
+        {
+            self.revoke_pending_frame_tree(control, state, &pending)
+                .await;
             return;
         }
         if pending.changed {
             if pending.detach_overflow {
-                self.revoke_pending_frame_tree(control, state, &pending).await;
+                self.revoke_pending_frame_tree(control, state, &pending)
+                    .await;
                 return;
             }
-            let root_frame_id = if !pending.detached.is_empty()
-                || pending.child_parent_session.is_some()
-            {
-                let tree = if pending.child_parent_session.is_some() {
-                    parse_child_frame_tree(&result.result)
-                } else {
-                    parse_frame_tree(&result.result)
-                };
-                let Some(nodes) = tree else {
-                    self.revoke_pending_frame_tree(control, state, &pending).await;
-                    return;
-                };
-                let Some(root) = nodes.first() else {
-                    self.revoke_pending_frame_tree(control, state, &pending).await;
-                    return;
-                };
-                if let Some(parent_session) = pending.child_parent_session.as_deref() {
-                    let Some(attach_sequence) = pending.child_attach_sequence else {
-                        self.revoke_pending_frame_tree(control, state, &pending).await;
+            let root_frame_id =
+                if !pending.detached.is_empty() || pending.child_parent_session.is_some() {
+                    let tree = if pending.child_parent_session.is_some() {
+                        parse_child_frame_tree(&result.result)
+                    } else {
+                        parse_frame_tree(&result.result)
+                    };
+                    let Some(nodes) = tree else {
+                        self.revoke_pending_frame_tree(control, state, &pending)
+                            .await;
                         return;
                     };
-                    if !child_root_matches_attachment(
-                        state, parent_session, root, attach_sequence, &pending.owner,
-                    ) {
-                        self.revoke_pending_frame_tree(control, state, &pending).await;
+                    let Some(root) = nodes.first() else {
+                        self.revoke_pending_frame_tree(control, state, &pending)
+                            .await;
                         return;
+                    };
+                    if let Some(parent_session) = pending.child_parent_session.as_deref() {
+                        let Some(attach_sequence) = pending.child_attach_sequence else {
+                            self.revoke_pending_frame_tree(control, state, &pending)
+                                .await;
+                            return;
+                        };
+                        if !child_root_matches_attachment(
+                            state,
+                            parent_session,
+                            root,
+                            attach_sequence,
+                            &pending.owner,
+                        ) {
+                            self.revoke_pending_frame_tree(control, state, &pending)
+                                .await;
+                            return;
+                        }
                     }
-                }
-                Some(root.frame_id.clone())
-            } else {
-                None
-            };
+                    Some(root.frame_id.clone())
+                } else {
+                    None
+                };
             let mut reseed_budget = pending.reseed_budget;
             if let Some(root_frame_id) = root_frame_id.as_ref() {
-                let root_detaches: Vec<&PendingDetach> = pending.detached.iter()
+                let root_detaches: Vec<&PendingDetach> = pending
+                    .detached
+                    .iter()
                     .filter(|detach| {
                         &detach.frame_id == root_frame_id
                             && (detach.session_id == pending.session_id
-                                || pending.child_parent_session.as_deref() == Some(detach.session_id.as_str()))
+                                || pending.child_parent_session.as_deref()
+                                    == Some(detach.session_id.as_str()))
                     })
                     .collect();
                 if !root_detaches.is_empty() {
-                    let Some(next_budget) = child_root_swap_reseed_budget(&pending, &root_detaches) else {
-                        self.revoke_pending_frame_tree(control, state, &pending).await;
+                    let Some(next_budget) = child_root_swap_reseed_budget(&pending, &root_detaches)
+                    else {
+                        self.revoke_pending_frame_tree(control, state, &pending)
+                            .await;
                         return;
                     };
                     reseed_budget = next_budget;
                 }
             }
             if pending.child_parent_session.is_some() && root_frame_id.is_none() {
-                self.revoke_pending_frame_tree(control, state, &pending).await;
+                self.revoke_pending_frame_tree(control, state, &pending)
+                    .await;
                 return;
             }
             self.request_frame_tree_with_budget(
-                control, state, &pending.session_id, pending.owner, pending.token,
-                pending.child_parent_session, pending.child_attach_sequence, reseed_budget, frame_tx,
-            ).await;
+                control,
+                state,
+                &pending.session_id,
+                pending.owner,
+                pending.token,
+                pending.child_parent_session,
+                pending.child_attach_sequence,
+                reseed_budget,
+                frame_tx,
+            )
+            .await;
             return;
         }
-        let Ok(snapshot) = self.registry().snapshot(&pending.owner.logical_session_id, &pending.owner.principal).await else {
-            self.revoke_pending_frame_tree(control, state, &pending).await;
+        let Ok(snapshot) = self
+            .registry()
+            .snapshot(&pending.owner.logical_session_id, &pending.owner.principal)
+            .await
+        else {
+            self.revoke_pending_frame_tree(control, state, &pending)
+                .await;
             return;
         };
-        if snapshot.is_dev != pending.owner.is_dev || snapshot.browser_incarnation != pending.owner.browser_incarnation
+        if snapshot.is_dev != pending.owner.is_dev
+            || snapshot.browser_incarnation != pending.owner.browser_incarnation
             || snapshot.profile_epoch != pending.owner.profile_epoch
             || snapshot.native_target_id.as_deref() != Some(pending.owner.native_target_id.as_str())
-            || !matches!(snapshot.status, SessionStatus::Initializing | SessionStatus::Running) {
-            self.revoke_pending_frame_tree(control, state, &pending).await;
+            || !matches!(
+                snapshot.status,
+                SessionStatus::Initializing | SessionStatus::Running
+            )
+        {
+            self.revoke_pending_frame_tree(control, state, &pending)
+                .await;
             return;
         }
         let parsed = if pending.child_parent_session.is_some() {
@@ -5150,34 +6392,44 @@ impl ObserverShared {
             parse_frame_tree(&result.result)
         };
         let Some(mut nodes) = parsed else {
-            self.revoke_pending_frame_tree(control, state, &pending).await;
+            self.revoke_pending_frame_tree(control, state, &pending)
+                .await;
             return;
         };
         let mut child_attachment = None;
         let installed = if let Some(parent_session) = pending.child_parent_session.as_deref() {
             let Some(root_frame) = nodes.first() else {
-                self.revoke_pending_frame_tree(control, state, &pending).await;
+                self.revoke_pending_frame_tree(control, state, &pending)
+                    .await;
                 return;
             };
             let Some(attach_sequence) = pending.child_attach_sequence else {
-                self.revoke_pending_frame_tree(control, state, &pending).await;
+                self.revoke_pending_frame_tree(control, state, &pending)
+                    .await;
                 return;
             };
             if !child_root_matches_attachment(
-                state, parent_session, root_frame, attach_sequence, &pending.owner,
+                state,
+                parent_session,
+                root_frame,
+                attach_sequence,
+                &pending.owner,
             ) {
-                self.revoke_pending_frame_tree(control, state, &pending).await;
+                self.revoke_pending_frame_tree(control, state, &pending)
+                    .await;
                 return;
             }
             if state.child_frame_roots.len() >= MAX_OBSERVER_CHILD_FRAME_ROOTS
                 && !state.child_frame_roots.contains_key(&pending.session_id)
             {
-                self.revoke_pending_frame_tree(control, state, &pending).await;
+                self.revoke_pending_frame_tree(control, state, &pending)
+                    .await;
                 return;
             }
             let root_frame_id = root_frame.frame_id.clone();
             let Some(containing_parent_frame_id) = root_frame.parent_frame_id.clone() else {
-                self.revoke_pending_frame_tree(control, state, &pending).await;
+                self.revoke_pending_frame_tree(control, state, &pending)
+                    .await;
                 return;
             };
             child_attachment = Some(ChildFrameAttachment {
@@ -5185,47 +6437,84 @@ impl ObserverShared {
                 logical_frame_id: root_frame_id.clone(),
             });
             nodes[0].parent_frame_id = None;
-            let child_target_id = state.child_target_ids.get(&pending.session_id).map(String::as_str);
+            let child_target_id = state
+                .child_target_ids
+                .get(&pending.session_id)
+                .map(String::as_str);
             control.ownership_fence.seed_child_snapshot_with_target(
-                pending.token, &pending.session_id, parent_session, &containing_parent_frame_id,
-                &root_frame_id, child_target_id, &pending.owner, &nodes,
+                pending.token,
+                &pending.session_id,
+                parent_session,
+                &containing_parent_frame_id,
+                &root_frame_id,
+                child_target_id,
+                &pending.owner,
+                &nodes,
             )
         } else {
             control.ownership_fence.seed_snapshot(
-                pending.token, &pending.session_id, pending.owner.clone(), &nodes,
+                pending.token,
+                &pending.session_id,
+                pending.owner.clone(),
+                &nodes,
             )
         };
         if installed {
             if let Some(attachment) = child_attachment {
-                state.child_frame_roots.insert(pending.session_id.clone(), attachment);
+                state
+                    .child_frame_roots
+                    .insert(pending.session_id.clone(), attachment);
             }
             state.frame_sessions.insert(pending.session_id.clone());
-            state.owners.insert(pending.session_id.clone(), pending.owner.clone());
+            state
+                .owners
+                .insert(pending.session_id.clone(), pending.owner.clone());
             if pending.child_parent_session.is_some() {
                 if let Some(attach_sequence) = pending.child_attach_sequence {
-                    self.resume_proven_child(control, state, &pending.session_id, attach_sequence).await;
+                    self.resume_proven_child(
+                        control,
+                        state,
+                        &pending.session_id,
+                        attach_sequence,
+                        pending.token,
+                    )
+                    .await;
                 }
             }
-            let children: Vec<_> = state.pending_children.iter()
+            let children: Vec<_> = state
+                .pending_children
+                .iter()
                 .filter(|(_, (parent, _))| parent == &pending.session_id)
                 .map(|(child, (_, sequence))| (child.clone(), *sequence))
                 .collect();
             for (child, attach_sequence) in children {
                 if state.owners.get(&child) == Some(&pending.owner) {
                     self.request_frame_tree(
-                        control, state, &child, pending.owner.clone(), pending.token,
-                        Some(pending.session_id.clone()), Some(attach_sequence), frame_tx,
-                    ).await;
+                        control,
+                        state,
+                        &child,
+                        pending.owner.clone(),
+                        pending.token,
+                        Some(pending.session_id.clone()),
+                        Some(attach_sequence),
+                        frame_tx,
+                    )
+                    .await;
                 }
             }
         } else {
-            self.revoke_pending_frame_tree(control, state, &pending).await;
+            self.revoke_pending_frame_tree(control, state, &pending)
+                .await;
         }
     }
 
     async fn dispatch_lifecycle(
-        &self, control: &Arc<NativeControl>, state: &mut ObserverState, token: ValidityToken,
-        position: CdpStreamPosition, event: &CdpLifecycleEvent,
+        &self,
+        control: &Arc<NativeControl>,
+        state: &mut ObserverState,
+        token: ValidityToken,
+        position: CdpStreamPosition,
+        event: &CdpLifecycleEvent,
         frame_tx: &mpsc::Sender<(usize, ValidityToken, Option<CdpFrameTreeSnapshot>)>,
     ) {
         let fence = &control.ownership_fence;
@@ -5243,7 +6532,12 @@ impl ObserverShared {
                 pending.changed = true;
             }
         }
-        if let CdpLifecycleEvent::DownloadWillBegin { session_id, frame_id, .. } = event {
+        if let CdpLifecycleEvent::DownloadWillBegin {
+            session_id,
+            frame_id,
+            ..
+        } = event
+        {
             debug!(
                 sequence = position.sequence,
                 session_id = ?session_id,
@@ -5252,119 +6546,208 @@ impl ObserverShared {
             );
         }
         match event {
-            CdpLifecycleEvent::FrameAttached { session_id: Some(session), frame_id, parent_frame_id, .. } => {
-                if !record_frame_attachment(fence, state, session, frame_id, parent_frame_id, position.sequence) {
+            CdpLifecycleEvent::FrameAttached {
+                session_id: Some(session),
+                frame_id,
+                parent_frame_id,
+                ..
+            } => {
+                if !record_frame_attachment(
+                    fence,
+                    state,
+                    session,
+                    frame_id,
+                    parent_frame_id,
+                    position.sequence,
+                ) {
                     self.drop_entry();
                     control.client.close().await;
                     return;
                 }
                 fence.attach_descendant(token, session, frame_id, parent_frame_id);
             }
-            CdpLifecycleEvent::FrameDetached { session_id: Some(session), frame_id, reason, .. } => {
+            CdpLifecycleEvent::FrameDetached {
+                session_id: Some(session),
+                frame_id,
+                reason,
+                ..
+            } => {
                 let preserved_parent =
                     frame_detach_preserved_parent(state, session, frame_id, *reason);
                 let paused_targets = retire_detached_frame(
-                    fence, state, token, session, frame_id, preserved_parent.as_deref(), *reason,
+                    fence,
+                    state,
+                    token,
+                    session,
+                    frame_id,
+                    preserved_parent.as_deref(),
+                    *reason,
                 );
-                self.refuse_and_close_targets(control, state, paused_targets).await;
+                self.refuse_and_close_targets(control, state, paused_targets)
+                    .await;
             }
-CdpLifecycleEvent::FrameNavigated { session_id: Some(session), .. }
-    if frame_navigation_reseeds_snapshot(state, event) => {
-    if let Some(owner) = state.owners.get(session).cloned() {
-        if let Some((parent_session, attach_sequence)) = state.pending_children.get(session).cloned() {
-            let mut sessions = HashSet::from([session.clone()]);
-            loop {
-                let children: Vec<_> = state.pending_children.iter()
-                    .filter(|(_, (parent, _))| sessions.contains(parent))
-                    .map(|(child, _)| child.clone())
-                    .collect();
-                let before = sessions.len();
-                sessions.extend(children);
-                if sessions.len() == before { break; }
-            }
-            for child_session in &sessions {
-                if child_session == session {
-                    fence.retire_session_for_reseed(token, child_session);
-                } else {
-                    fence.retire_session(token, child_session);
+            CdpLifecycleEvent::FrameNavigated {
+                session_id: Some(session),
+                ..
+            } if frame_navigation_reseeds_snapshot(state, event) => {
+                if let Some(owner) = state.owners.get(session).cloned() {
+                    if let Some((parent_session, attach_sequence)) =
+                        state.pending_children.get(session).cloned()
+                    {
+                        let mut sessions = HashSet::from([session.clone()]);
+                        loop {
+                            let children: Vec<_> = state
+                                .pending_children
+                                .iter()
+                                .filter(|(_, (parent, _))| sessions.contains(parent))
+                                .map(|(child, _)| child.clone())
+                                .collect();
+                            let before = sessions.len();
+                            sessions.extend(children);
+                            if sessions.len() == before {
+                                break;
+                            }
+                        }
+                        for child_session in &sessions {
+                            if child_session == session {
+                                fence.retire_session_for_reseed(token, child_session);
+                            } else {
+                                fence.retire_session(token, child_session);
+                            }
+                        }
+                        state.pending_frames.retain(|_, pending| {
+                            !sessions.contains(&pending.session_id)
+                                && pending
+                                    .child_parent_session
+                                    .as_ref()
+                                    .is_none_or(|parent| !sessions.contains(parent))
+                        });
+                        state.pending_children.retain(|child, (parent, _)| {
+                            child == session
+                                || (!sessions.contains(child) && !sessions.contains(parent))
+                        });
+                        state
+                            .frame_tree_retries
+                            .retain(|child_session, _| !sessions.contains(child_session));
+                        state
+                            .frame_sessions
+                            .retain(|child_session| !sessions.contains(child_session));
+                        state
+                            .frame_attached
+                            .retain(|(child_session, _), _| !sessions.contains(child_session));
+                        state.child_frame_roots.retain(|child, attachment| {
+                            !sessions.contains(child)
+                                && !sessions.contains(&attachment.parent_session_id)
+                        });
+                        state
+                            .child_target_ids
+                            .retain(|child, _| child == session || !sessions.contains(child));
+                        state.owners.retain(|child_session, _| {
+                            child_session == session || !sessions.contains(child_session)
+                        });
+                        let mut paused_targets = Vec::new();
+                        state.pending_child_resumes.retain(|child_session, resume| {
+                            if child_session != session && sessions.contains(child_session) {
+                                paused_targets.push(resume.target_id.clone());
+                                false
+                            } else {
+                                true
+                            }
+                        });
+                        self.refuse_and_close_targets(control, state, paused_targets)
+                            .await;
+                        self.request_frame_tree(
+                            control,
+                            state,
+                            session,
+                            owner,
+                            token,
+                            Some(parent_session),
+                            Some(attach_sequence),
+                            frame_tx,
+                        )
+                        .await;
+                    } else {
+                        let owned_sessions: HashSet<_> = state
+                            .owners
+                            .iter()
+                            .filter(|(_, candidate)| *candidate == &owner)
+                            .map(|(owned_session, _)| owned_session.clone())
+                            .collect();
+                        state
+                            .pending_frames
+                            .retain(|_, pending| pending.owner != owner);
+                        state
+                            .frame_tree_retries
+                            .retain(|_, retry| retry.owner != owner);
+                        state
+                            .frame_sessions
+                            .retain(|owned_session| !owned_sessions.contains(owned_session));
+                        state.frame_attached.retain(|(owned_session, _), _| {
+                            !owned_sessions.contains(owned_session)
+                        });
+                        state
+                            .child_frame_roots
+                            .retain(|child, _| !owned_sessions.contains(child));
+                        state
+                            .child_target_ids
+                            .retain(|child, _| child == session || !owned_sessions.contains(child));
+                        state.pending_children.retain(|child, (parent, _)| {
+                            !owned_sessions.contains(child) && !owned_sessions.contains(parent)
+                        });
+                        state.owners.retain(|owned_session, _| {
+                            owned_session == session || !owned_sessions.contains(owned_session)
+                        });
+                        let mut paused_targets = Vec::new();
+                        state.pending_child_resumes.retain(|owned_session, resume| {
+                            if owned_session != session && owned_sessions.contains(owned_session) {
+                                paused_targets.push(resume.target_id.clone());
+                                false
+                            } else {
+                                true
+                            }
+                        });
+                        self.refuse_and_close_targets(control, state, paused_targets)
+                            .await;
+                        fence.retire_owner(token, &owner);
+                        self.request_frame_tree(
+                            control, state, session, owner, token, None, None, frame_tx,
+                        )
+                        .await;
+                    }
                 }
             }
-            state.pending_frames.retain(|_, pending| {
-                !sessions.contains(&pending.session_id)
-                    && pending.child_parent_session.as_ref().is_none_or(|parent| !sessions.contains(parent))
-            });
-            state.pending_children.retain(|child, (parent, _)| {
-                child == session || (!sessions.contains(child) && !sessions.contains(parent))
-            });
-            state.frame_tree_retries.retain(|child_session, _| !sessions.contains(child_session));
-            state.frame_sessions.retain(|child_session| !sessions.contains(child_session));
-            state.frame_attached.retain(|(child_session, _), _| !sessions.contains(child_session));
-            state.child_frame_roots.retain(|child, attachment| {
-                !sessions.contains(child) && !sessions.contains(&attachment.parent_session_id)
-            });
-            state.child_target_ids.retain(|child, _| child == session || !sessions.contains(child));
-            state.owners.retain(|child_session, _| {
-                child_session == session || !sessions.contains(child_session)
-            });
-            let mut paused_targets = Vec::new();
-            state.pending_child_resumes.retain(|child_session, resume| {
-                if child_session != session && sessions.contains(child_session) {
-                    paused_targets.push(resume.target_id.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-            self.refuse_and_close_targets(control, state, paused_targets).await;
-            self.request_frame_tree(
-                control, state, session, owner, token,
-                Some(parent_session), Some(attach_sequence), frame_tx,
-            ).await;
-        } else {
-            let owned_sessions: HashSet<_> = state.owners.iter()
-                .filter(|(_, candidate)| *candidate == &owner)
-                .map(|(owned_session, _)| owned_session.clone())
-                .collect();
-            state.pending_frames.retain(|_, pending| pending.owner != owner);
-            state.frame_tree_retries.retain(|_, retry| retry.owner != owner);
-            state.frame_sessions.retain(|owned_session| !owned_sessions.contains(owned_session));
-            state.frame_attached.retain(|(owned_session, _), _| !owned_sessions.contains(owned_session));
-            state.child_frame_roots.retain(|child, _| !owned_sessions.contains(child));
-            state.child_target_ids.retain(|child, _| child == session || !owned_sessions.contains(child));
-            state.pending_children.retain(|child, (parent, _)| {
-                !owned_sessions.contains(child) && !owned_sessions.contains(parent)
-            });
-            state.owners.retain(|owned_session, _| {
-                owned_session == session || !owned_sessions.contains(owned_session)
-            });
-            let mut paused_targets = Vec::new();
-            state.pending_child_resumes.retain(|owned_session, resume| {
-                if owned_session != session && owned_sessions.contains(owned_session) {
-                    paused_targets.push(resume.target_id.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-            self.refuse_and_close_targets(control, state, paused_targets).await;
-            fence.retire_owner(token, &owner);
-            self.request_frame_tree(control, state, session, owner, token, None, None, frame_tx).await;
-        }
-    }
-}
-            CdpLifecycleEvent::FrameNavigated { session_id: Some(session), frame_id: Some(frame_id), parent_frame_id: Some(parent), .. } => {
+            CdpLifecycleEvent::FrameNavigated {
+                session_id: Some(session),
+                frame_id: Some(frame_id),
+                parent_frame_id: Some(parent),
+                ..
+            } => {
                 let paused_targets = retire_detached_frame(
-                    fence, state, token, session, frame_id, Some(parent), FrameDetachReason::Remove,
+                    fence,
+                    state,
+                    token,
+                    session,
+                    frame_id,
+                    Some(parent),
+                    FrameDetachReason::Remove,
                 );
-                self.refuse_and_close_targets(control, state, paused_targets).await;
+                self.refuse_and_close_targets(control, state, paused_targets)
+                    .await;
                 fence.attach_descendant(token, session, frame_id, parent);
             }
-CdpLifecycleEvent::DownloadWillBegin { .. }
-| CdpLifecycleEvent::DownloadProgress { .. } => {
-    dispatch_download_lifecycle_event(
-        self.registry(), &self.downloads, fence, token, state, event,
-    ).await;
-}
+            CdpLifecycleEvent::DownloadWillBegin { .. }
+            | CdpLifecycleEvent::DownloadProgress { .. } => {
+                dispatch_download_lifecycle_event(
+                    self.registry(),
+                    &self.downloads,
+                    fence,
+                    token,
+                    state,
+                    event,
+                )
+                .await;
+            }
             _ => {}
         }
     }
@@ -5390,9 +6773,30 @@ CdpLifecycleEvent::DownloadWillBegin { .. }
             } => {
                 let disposition = self.observe_page(control, state, info).await;
                 if matches!(disposition, PageDisposition::Popup) {
-                    if let Some((parent_session_id, session)) = self.adopt_popup(control, state, info, session_id, *waiting_for_debugger).await {
-                        if self.retain_page_session(control, state, session_id, &info.target_id, *waiting_for_debugger, token, frame_tx).await {
-                            let _ = self.native.sinks.events.send(NativeTargetEvent::PopupAdmitted { parent_session_id, session });
+                    if let Some((parent_session_id, session)) = self
+                        .adopt_popup(control, state, info, session_id, *waiting_for_debugger)
+                        .await
+                    {
+                        if self
+                            .retain_page_session(
+                                control,
+                                state,
+                                session_id,
+                                &info.target_id,
+                                *waiting_for_debugger,
+                                token,
+                                frame_tx,
+                            )
+                            .await
+                        {
+                            let _ =
+                                self.native
+                                    .sinks
+                                    .events
+                                    .send(NativeTargetEvent::PopupAdmitted {
+                                        parent_session_id,
+                                        session,
+                                    });
                         }
                     }
                 } else if matches!(disposition, PageDisposition::Rejected) {
@@ -5404,76 +6808,115 @@ CdpLifecycleEvent::DownloadWillBegin { .. }
                             .await;
                     }
                 } else if matches!(disposition, PageDisposition::Managed | PageDisposition::Raw) {
-                    self.retain_page_session(control, state, session_id, &info.target_id, *waiting_for_debugger, token, frame_tx).await;
+                    self.retain_page_session(
+                        control,
+                        state,
+                        session_id,
+                        &info.target_id,
+                        *waiting_for_debugger,
+                        token,
+                        frame_tx,
+                    )
+                    .await;
                 } else {
                     release_attached(control, session_id, *waiting_for_debugger).await;
                 }
             }
-CdpTargetEvent::ChildAttached { parent_session_id, session_id, info, waiting_for_debugger, .. } => {
-    if info.target_type == "iframe" {
-        if let Err(error) = self.configure_recursive_session(control, session_id).await {
-            warn!(
-                %error, session_id, parent_session_id, target_id = %info.target_id,
-                target_type = %info.target_type, waiting_for_debugger = waiting_for_debugger,
-                "iframe recursive session setup failed",
-            );
-            (self.policy_containment(&control.browser_incarnation))("iframe recursive attachment setup failed");
-            control.client.close().await;
-        } else {
-            let owner = state.owners.get(parent_session_id).cloned();
-            let tracked = owner.is_some() && state.pending_children.len() < 64;
-            let paused_admitted = token.is_some() && state.frame_sessions.contains(parent_session_id);
-            if *waiting_for_debugger && !(tracked && paused_admitted) {
-                // Paused without exact admission: never resumed, closed instead.
-                self.close_refused(state, &info.target_id);
-                self.close_refused_page(control, state, &info.target_id).await;
-            } else if let (true, Some(owner)) = (tracked, owner) {
-                state.pending_children.insert(
-                    session_id.clone(), (parent_session_id.clone(), position.sequence),
-                );
-                state.child_target_ids.insert(session_id.clone(), info.target_id.clone());
-                state.owners.insert(session_id.clone(), owner.clone());
-                if *waiting_for_debugger {
-                    state.pending_child_resumes.insert(
-                        session_id.clone(),
-                        PendingChildResume {
-                            attach_sequence: position.sequence,
-                            target_id: info.target_id.clone(),
-                        },
-                    );
+            CdpTargetEvent::ChildAttached {
+                parent_session_id,
+                session_id,
+                info,
+                waiting_for_debugger,
+                ..
+            } => {
+                if info.target_type == "iframe" {
+                    if let Err(error) = self.configure_recursive_session(control, session_id).await
+                    {
+                        if is_session_or_target_gone_error(&error)
+                            && control.confirm_target_absent(&info.target_id).await
+                        {
+                            debug!(
+                                %error, session_id, parent_session_id, target_id = %info.target_id,
+                                "iframe target closed before recursive session setup completed",
+                            );
+                            return;
+                        }
+                        warn!(
+                            %error, session_id, parent_session_id, target_id = %info.target_id,
+                            target_type = %info.target_type, waiting_for_debugger = waiting_for_debugger,
+                            "iframe recursive session setup failed",
+                        );
+                        (self.policy_containment(&control.browser_incarnation))(
+                            "iframe recursive attachment setup failed",
+                        );
+                        control.client.close().await;
+                    } else {
+                        let owner = state.owners.get(parent_session_id).cloned();
+                        let tracked = owner.is_some() && state.pending_children.len() < 64;
+                        let paused_admitted =
+                            token.is_some() && state.frame_sessions.contains(parent_session_id);
+                        if *waiting_for_debugger && !(tracked && paused_admitted) {
+                            // Paused without exact admission: never resumed, closed instead.
+                            self.close_refused(state, &info.target_id);
+                            self.close_refused_page(control, state, &info.target_id)
+                                .await;
+                        } else if let (true, Some(owner)) = (tracked, owner) {
+                            state.pending_children.insert(
+                                session_id.clone(),
+                                (parent_session_id.clone(), position.sequence),
+                            );
+                            state
+                                .child_target_ids
+                                .insert(session_id.clone(), info.target_id.clone());
+                            state.owners.insert(session_id.clone(), owner.clone());
+                            if *waiting_for_debugger {
+                                state.pending_child_resumes.insert(
+                                    session_id.clone(),
+                                    PendingChildResume {
+                                        attach_sequence: position.sequence,
+                                        target_id: info.target_id.clone(),
+                                    },
+                                );
+                            }
+                            if state.frame_sessions.contains(parent_session_id) {
+                                if let Some(token) = token {
+                                    self.request_frame_tree(
+                                        control,
+                                        state,
+                                        session_id,
+                                        owner,
+                                        token,
+                                        Some(parent_session_id.clone()),
+                                        Some(position.sequence),
+                                        frame_tx,
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    release_attached(control, session_id, *waiting_for_debugger).await;
                 }
-                if state.frame_sessions.contains(parent_session_id) {
-                    if let Some(token) = token {
-                        self.request_frame_tree(
-                            control, state, session_id, owner, token,
-                            Some(parent_session_id.clone()), Some(position.sequence), frame_tx,
-                        ).await;
+            }
+            CdpTargetEvent::Destroyed { target_id, .. } => {
+                retire_target_frames(control, state, &self.downloads, target_id, token);
+                state.rejected.remove(target_id);
+                state.pending_close.remove(target_id);
+                state.pending_popups.remove(target_id);
+                self.target_gone(control, target_id).await;
+            }
+            CdpTargetEvent::Crashed { target_id, .. } => {
+                // Crash retires attribution immediately; native capacity remains occupied until absence
+                // is independently proven.
+                retire_target_frames(control, state, &self.downloads, target_id, token);
+                match control.close_page(target_id).await {
+                    NativeCloseOutcome::Absent => self.target_gone(control, target_id).await,
+                    NativeCloseOutcome::Unconfirmed(reason) => {
+                        warn!(error = %reason, "crashed native page could not be proven closed");
                     }
                 }
             }
-        }
-    } else {
-        release_attached(control, session_id, *waiting_for_debugger).await;
-    }
-}
-CdpTargetEvent::Destroyed { target_id, .. } => {
-    retire_target_frames(control, state, &self.downloads, target_id, token);
-    state.rejected.remove(target_id);
-    state.pending_close.remove(target_id);
-    state.pending_popups.remove(target_id);
-    self.target_gone(control, target_id).await;
-}
-CdpTargetEvent::Crashed { target_id, .. } => {
-    // Crash retires attribution immediately; native capacity remains occupied until absence
-    // is independently proven.
-    retire_target_frames(control, state, &self.downloads, target_id, token);
-    match control.close_page(target_id).await {
-        NativeCloseOutcome::Absent => self.target_gone(control, target_id).await,
-        NativeCloseOutcome::Unconfirmed(reason) => {
-            warn!(error = %reason, "crashed native page could not be proven closed");
-        }
-    }
-}
             CdpTargetEvent::Overflow => {
                 if let Err(msg) = self.reconcile_inventory(control, state, false).await {
                     warn!(error = %msg, "native target re-inventory failed after event loss");
@@ -5555,7 +6998,10 @@ CdpTargetEvent::Crashed { target_id, .. } => {
     async fn recover(
         &self,
         control: &Arc<NativeControl>,
-    ) -> Option<(Arc<NativeControl>, broadcast::Receiver<Arc<CdpOrderedRecord>>)> {
+    ) -> Option<(
+        Arc<NativeControl>,
+        broadcast::Receiver<Arc<CdpOrderedRecord>>,
+    )> {
         for attempt in 0..=OBSERVER_RECONNECT_ATTEMPTS {
             if !self.is_registered() {
                 return None;
@@ -5669,9 +7115,7 @@ mod startup_policy_tests {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    async fn startup_browser(
-        disappears: bool,
-    ) -> (Arc<CdpClient>, mpsc::UnboundedReceiver<Value>) {
+    async fn startup_browser(disappears: bool) -> (Arc<CdpClient>, mpsc::UnboundedReceiver<Value>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
@@ -5686,18 +7130,23 @@ mod startup_policy_tests {
                     "Target.getTargets" => {
                         inventories += 1;
                         let mut infos = vec![json!({"targetId":"PAGE","type":"page"})];
-                        for (id, kind) in [("OLD-SW", "service_worker"), ("OLD-SHARED", "shared_worker")] {
+                        for (id, kind) in [
+                            ("OLD-SW", "service_worker"),
+                            ("OLD-SHARED", "shared_worker"),
+                        ] {
                             if !disappears || closes.get(id).copied().unwrap_or(0) < 2 {
                                 infos.push(json!({"targetId":id,"type":kind}));
                             }
                         }
                         if inventories > 1 {
-                            infos.push(json!({"targetId":"NEW-POLICED-SW","type":"service_worker"}));
+                            infos
+                                .push(json!({"targetId":"NEW-POLICED-SW","type":"service_worker"}));
                         }
                         json!({"targetInfos":infos})
                     }
                     "Target.closeTarget" => {
-                        *closes.entry(command["params"]["targetId"].as_str().unwrap().to_string())
+                        *closes
+                            .entry(command["params"]["targetId"].as_str().unwrap().to_string())
                             .or_default() += 1;
                         // First close succeeds while still starting. Only a second close
                         // stops it; persistent survivors never disappear.
@@ -5707,10 +7156,19 @@ mod startup_policy_tests {
                 };
                 let reply = json!({"id":command["id"],"result":result});
                 tx.send(command).unwrap();
-                if ws.send(Message::Text(reply.to_string().into())).await.is_err() { break; }
+                if ws
+                    .send(Message::Text(reply.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
             }
         });
-        (CdpClient::connect(&format!("ws://{addr}")).await.unwrap(), rx)
+        (
+            CdpClient::connect(&format!("ws://{addr}")).await.unwrap(),
+            rx,
+        )
     }
 
     #[tokio::test]
@@ -5729,6 +7187,9 @@ mod startup_policy_tests {
     #[tokio::test]
     async fn startup_reconciliation_rejects_worker_that_survives_successful_close() {
         let (client, _commands) = startup_browser(false).await;
-        assert!(matches!(retire_pre_policy_workers(&client).await, Err(CdpError::Transport(_))));
+        assert!(matches!(
+            retire_pre_policy_workers(&client).await,
+            Err(CdpError::Transport(_))
+        ));
     }
 }
