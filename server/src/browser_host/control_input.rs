@@ -148,6 +148,26 @@ pub(crate) async fn drain_control_input(
             }
         };
         let kind = event_kind(&msg.event);
+        // Arm before sleeping or waiting on the gate: a dequeued release must not
+        // disappear if the socket handler is cancelled while pacing or while another
+        // native operation owns the gate.
+        let mut abandon = DispatchAbandonGuard {
+            manager: ctx.input_manager.clone(),
+            token: Some(msg.lease_token.clone()),
+            gate: None,
+            pending: None,
+            pending_op: None,
+            cancellation: None,
+        };
+        if origin.is_some() {
+            if let Some(delay) = ctx
+                .input_manager
+                .compute_human_mouse_pacing_delay(&msg.event)
+                .await
+            {
+                tokio::time::sleep(delay).await;
+            }
+        }
         // Pointer fractions are projected through the producer geometry; without native
         // evidence for it nothing is dispatched (no guessed projection).
         let projects = matches!(
@@ -157,16 +177,6 @@ pub(crate) async fn drain_control_input(
                 | InputEvent::PointerMove { .. }
                 | InputEvent::Wheel { .. }
         );
-        // Arm before waiting on the gate: a dequeued release must not disappear if
-        // the socket handler is cancelled while another native operation owns it.
-        let mut abandon = DispatchAbandonGuard {
-            manager: ctx.input_manager.clone(),
-            token: Some(msg.lease_token.clone()),
-            gate: None,
-            pending: None,
-            pending_op: None,
-            cancellation: None,
-        };
         // Resolve only after the claim is armed, so cancellation cannot lose a release.
         let native = match get_producer(ctx.session_id).await {
             Some(producer) => match producer.ensure_page_session().await {

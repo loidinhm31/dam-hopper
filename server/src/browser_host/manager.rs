@@ -5044,6 +5044,18 @@ mod ordered_position_tests {
                 && s.as_deref() == Some("worker-ok")
                 && p["userAgentMetadata"]["fullVersion"] == "156.0.8078.79"
         }));
+        assert!(cmds.iter().any(|(m, s, p)| {
+            m == "Target.setAutoAttach"
+                && s.as_deref() == Some("worker-ok")
+                && p["waitForDebuggerOnStart"] == true
+        }));
+        assert!(cmds.iter().any(|(m, s, p)| {
+            m == "Runtime.evaluate"
+                && s.as_deref() == Some("worker-ok")
+                && p["expression"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("Symbol.for('dh.ws')"))
+        }));
         assert!(cmds.iter().any(|(m, s, _)| {
             m == "Runtime.runIfWaitingForDebugger" && s.as_deref() == Some("worker-ok")
         }));
@@ -5057,6 +5069,29 @@ mod ordered_position_tests {
         assert!(cmds.iter().any(|(m, _, p)| {
             m == "Target.closeTarget" && p["targetId"] == "OOPIF-REVOKED"
         }));
+
+        // 4. Pre-existing child frame seeded from parent Page.getFrameTree at sequence 0
+        // predates an OOPIF ChildAttached that arrived while the snapshot was in flight (seq 10).
+        state.frame_sessions.insert("page-sess".into());
+        assert!(record_frame_attachment(
+            &control.ownership_fence,
+            &mut state,
+            "page-sess",
+            "CHILD-FRAME-1",
+            "MAIN-FRAME",
+            0,
+        ));
+        let child_root = FrameSnapshotNode {
+            frame_id: "CHILD-FRAME-1".into(),
+            parent_frame_id: Some("MAIN-FRAME".into()),
+        };
+        assert!(child_root_matches_attachment(
+            &state,
+            "page-sess",
+            &child_root,
+            10,
+            &owner,
+        ));
     }
 }
 fn retire_target_frames(
@@ -6747,6 +6782,28 @@ impl ObserverShared {
             )
         };
         if installed {
+            // Seed pre-existing child frames discovered inside this snapshot with sequence 0
+            // (predating all ordered stream events `attach_sequence >= 1`) so an OOPIF that
+            // attached before this snapshot completed still satisfies `parent_frame_predates_child_attach`.
+            for node in &nodes {
+                if let Some(parent_frame_id) = node.parent_frame_id.as_deref() {
+                    let key = (pending.session_id.clone(), node.frame_id.clone());
+                    if !state.frame_attached.contains_key(&key)
+                        && !record_frame_attachment(
+                            &control.ownership_fence,
+                            state,
+                            &pending.session_id,
+                            &node.frame_id,
+                            parent_frame_id,
+                            0,
+                        )
+                    {
+                        self.revoke_pending_frame_tree(control, state, &pending)
+                            .await;
+                        return;
+                    }
+                }
+            }
             if let Some(attachment) = child_attachment {
                 state
                     .child_frame_roots
@@ -7190,34 +7247,59 @@ impl ObserverShared {
                             }
                         }
                     }
-                } else if matches!(info.target_type.as_str(), "worker" | "shared_worker") {
+                } else if info.target_type.as_str() == "worker" {
                     let ua_params = control.ua_override_params().await;
-                    if let Err(error) = control
-                        .client
-                        .send_command(
-                            "Emulation.setUserAgentOverride",
-                            Some(ua_params),
-                            Some(session_id),
-                        )
-                        .await
-                    {
-                        debug!(
-                            %error, session_id, target_type = %info.target_type,
-                            "worker Emulation.setUserAgentOverride skipped"
-                        );
-                    }
+                    let ua_fut = control.client.send_command(
+                        "Emulation.setUserAgentOverride",
+                        Some(ua_params),
+                        Some(session_id),
+                    );
+                    let auto_attach_fut = control.client.send_command(
+                        "Target.setAutoAttach",
+                        Some(json!({
+                            "autoAttach": true,
+                            "waitForDebuggerOnStart": true,
+                            "flatten": true,
+                            "filter": [{ "type": "worker" }, { "exclude": true }]
+                        })),
+                        Some(session_id),
+                    );
+                    let eval_fut = control.client.send_command(
+                        "Runtime.evaluate",
+                        Some(json!({ "expression": super::stealth::WORKER_STEALTH_SCRIPT })),
+                        Some(session_id),
+                    );
                     // Resume without detaching: Target.detachFromTarget disables Blink's
                     // InspectorEmulationAgent on the worker and reverts userAgentMetadata.
                     // The flattened session retires naturally on Target.detachedFromTarget.
                     if *waiting_for_debugger {
-                        let _ = control
-                            .client
-                            .send_command(
-                                "Runtime.runIfWaitingForDebugger",
-                                None,
-                                Some(session_id),
-                            )
-                            .await;
+                        let resume_fut = control.client.send_command(
+                            "Runtime.runIfWaitingForDebugger",
+                            None,
+                            Some(session_id),
+                        );
+                        let (ua_res, _, _, resume_res) =
+                            tokio::join!(ua_fut, auto_attach_fut, eval_fut, resume_fut);
+                        if let Err(error) = ua_res {
+                            debug!(
+                                %error, session_id, target_type = %info.target_type,
+                                "worker Emulation.setUserAgentOverride skipped"
+                            );
+                        }
+                        if let Err(error) = resume_res {
+                            debug!(
+                                %error, session_id, target_type = %info.target_type,
+                                "worker Runtime.runIfWaitingForDebugger failed"
+                            );
+                        }
+                    } else {
+                        let (ua_res, _, _) = tokio::join!(ua_fut, auto_attach_fut, eval_fut);
+                        if let Err(error) = ua_res {
+                            debug!(
+                                %error, session_id, target_type = %info.target_type,
+                                "worker Emulation.setUserAgentOverride skipped"
+                            );
+                        }
                     }
                 } else {
                     release_attached(control, session_id, *waiting_for_debugger).await;

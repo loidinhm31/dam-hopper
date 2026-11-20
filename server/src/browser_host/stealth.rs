@@ -71,7 +71,7 @@ impl ChromeIdentity {
     pub fn user_agent_override_params(&self) -> Value {
         json!({
             "userAgent": self.user_agent,
-            "acceptLanguage": "en-US,en;q=0.9",
+            "acceptLanguage": "en-US,en",
             "platform": self.navigator_platform,
             "userAgentMetadata": {
                 "brands": [
@@ -184,7 +184,12 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
       Object.defineProperty(Function.prototype, 'toString', { value: wrappedToStr, writable: true, configurable: true });
     }
   } catch (_) {}
-  try { if (Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')) delete Navigator.prototype.webdriver; if (Object.getOwnPropertyDescriptor(navigator, 'webdriver')) delete navigator.webdriver; } catch (_) {}
+  try {
+    if (Object.prototype.hasOwnProperty.call(navigator, 'webdriver')) delete navigator.webdriver;
+    if (navigator.webdriver !== false && typeof Navigator !== 'undefined' && Navigator.prototype) {
+      Object.defineProperty(Navigator.prototype, 'webdriver', { get: maskGetter('webdriver', function() { return false; }), configurable: true, enumerable: true });
+    }
+  } catch (_) {}
   const m = navigator.userAgent.match(/(?:Headless)?Chrome\/([\d.]+)/); const fullVer = m ? m[1] : '136.0.0.0'; const major = fullVer.split('.')[0] || '136';
   const isMob = /\bMobile\b|Android/.test(navigator.userAgent); const plat = isMob ? 'Android' : /Windows/.test(navigator.userAgent) ? 'Windows' : /Linux|X11/.test(navigator.userAgent) ? 'Linux' : 'macOS';
   try {
@@ -293,6 +298,28 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
         if (origMse(type)) return true;
         return checkMediaType(type, true) === 'probably';
       }, 'isTypeSupported');
+    }
+  } catch (_) {}
+  try {
+    const glVendor = plat === 'macOS' ? 'Google Inc. (Apple)' : 'Google Inc. (AMD)';
+    const glRenderer = plat === 'macOS' ? 'ANGLE (Apple, Apple M3, OpenGL 4.1)' : plat === 'Windows' ? 'ANGLE (AMD, AMD Radeon Graphics (0x000015BF) Direct3D11 vs_5_0 ps_5_0, D3D11)' : 'ANGLE (AMD, Mesa AMD Radeon 780M (radeonsi, gfx1103_r1, LLVM 19.1.4, DRM 3.61, 6.12.0-amd64), OpenGL 4.6)';
+    for (const Ctx of [window.WebGLRenderingContext, window.WebGL2RenderingContext]) {
+      if (Ctx && Ctx.prototype && typeof Ctx.prototype.getParameter === 'function') {
+        const origGetParam = Ctx.prototype.getParameter;
+        Object.defineProperty(Ctx.prototype, 'getParameter', {
+          value: maskFn(function getParameter(pname) {
+            const val = Reflect.apply(origGetParam, this, arguments);
+            if (pname === 37445 && typeof val === 'string') {
+              const r = Reflect.apply(origGetParam, this, [37446]);
+              if ((typeof r === 'string' && /SwiftShader/i.test(r)) || /Google Inc\. \(Google\)|SwiftShader/i.test(val)) return glVendor;
+            }
+            if (pname === 37446 && typeof val === 'string' && /SwiftShader/i.test(val)) return glRenderer;
+            return val;
+          }, 'getParameter'),
+          writable: true,
+          configurable: true
+        });
+      }
     }
   } catch (_) {}
   const sym = Symbol.for('dh.a');
@@ -789,9 +816,17 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
   };
   installBridge(window);
   try {
-    if (window.outerWidth === 0 || window.outerHeight === 0) {
-      Object.defineProperty(window, 'outerWidth', { get: maskGetter('outerWidth', function() { return window.innerWidth || 1280; }), configurable: true });
-      Object.defineProperty(window, 'outerHeight', { get: maskGetter('outerHeight', function() { return (window.innerHeight || 900) + 85; }), configurable: true });
+    let isTop = false;
+    try { isTop = window === window.top; } catch (_) {}
+    if (!isTop || window.outerWidth === 0 || window.outerHeight === 0 || window.outerWidth < (window.innerWidth || 0) || window.outerHeight <= (window.innerHeight || 0)) {
+      Object.defineProperty(window, 'outerWidth', { get: maskGetter('outerWidth', function() { if (isTop) return Math.max(window.innerWidth || 1280, 1280); try { if (window.top && window.top.outerWidth >= 1280) return window.top.outerWidth; } catch (_) {} return 1280; }), configurable: true, enumerable: true });
+      Object.defineProperty(window, 'outerHeight', { get: maskGetter('outerHeight', function() { if (isTop) return Math.max((window.innerHeight || 900) + 85, 985); try { if (window.top && window.top.outerHeight >= 985) return window.top.outerHeight; } catch (_) {} return 985; }), configurable: true, enumerable: true });
+    }
+    if (typeof Screen !== 'undefined' && Screen.prototype && window.screen && (window.screen.width < 1280 || window.screen.height < 900)) {
+      Object.defineProperty(Screen.prototype, 'width', { get: maskGetter('width', function() { return 1920; }), configurable: true, enumerable: true });
+      Object.defineProperty(Screen.prototype, 'height', { get: maskGetter('height', function() { return 1080; }), configurable: true, enumerable: true });
+      Object.defineProperty(Screen.prototype, 'availWidth', { get: maskGetter('availWidth', function() { return 1920; }), configurable: true, enumerable: true });
+      Object.defineProperty(Screen.prototype, 'availHeight', { get: maskGetter('availHeight', function() { return 1048; }), configurable: true, enumerable: true });
     }
     if (typeof Document !== 'undefined' && Document.prototype && typeof Document.prototype.hasFocus === 'function') {
       const hf = maskFn(function hasFocus() { return true; }, 'hasFocus');
@@ -801,9 +836,51 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
   try {
     const desc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
     if (desc && desc.get) {
-      const cwGet = maskGetter('contentWindow', function() { const cw = desc.get.call(this); if (cw) { try { if (!cw.chrome && window.chrome) cw.chrome = window.chrome; if (cw.Navigator?.prototype && Object.getOwnPropertyDescriptor(cw.Navigator.prototype, 'webdriver')) delete cw.Navigator.prototype.webdriver; installBridge(cw); } catch (_) {} } return cw; });
-      Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', { get: cwGet, configurable: true });
+      const cwGet = maskGetter('contentWindow', function() { const cw = desc.get.call(this); if (cw) { try { if (!cw.chrome && window.chrome) cw.chrome = window.chrome; if (cw.navigator && Object.prototype.hasOwnProperty.call(cw.navigator, 'webdriver')) delete cw.navigator.webdriver; if (cw.navigator && cw.navigator.webdriver !== false && cw.Navigator?.prototype) Object.defineProperty(cw.Navigator.prototype, 'webdriver', { get: maskGetter('webdriver', function() { return false; }), configurable: true, enumerable: true }); installBridge(cw); } catch (_) {} } return cw; });
+      Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', { get: cwGet, configurable: true, enumerable: true });
     }
   } catch (_) {}
   try { for (const k of ['__playwright', '__puppeteer', 'domAutomation', 'domAutomationController', '_phantom', 'callPhantom']) delete window[k]; for (const p of Object.getOwnPropertyNames(window)) if (p.startsWith('cdc_') || p.startsWith('__cdc_')) delete window[p]; } catch (_) {}
+})();"#;
+
+pub const WORKER_STEALTH_SCRIPT: &str = r#"(() => {
+  try {
+    const sym = Symbol.for('dh.ws');
+    if (self[sym]) return;
+    Object.defineProperty(self, sym, { value: 1, enumerable: false, configurable: false, writable: false });
+    const nativeFns = new WeakMap();
+    const origToStr = Function.prototype.toString;
+    const maskFn = (fn, name) => {
+      if (typeof fn === 'function') nativeFns.set(fn, 'function ' + (name || fn.name || '') + '() { [native code] }');
+      return fn;
+    };
+    if (typeof origToStr === 'function') {
+      const wrapped = maskFn(function toString() {
+        if (typeof this === 'function' && nativeFns.has(this)) return nativeFns.get(this);
+        return Reflect.apply(origToStr, this, arguments);
+      }, 'toString');
+      Object.defineProperty(Function.prototype, 'toString', { value: wrapped, writable: true, configurable: true });
+    }
+    const ua = self.navigator?.userAgent || '';
+    const glVendor = /Macintosh|Mac OS/.test(ua) ? 'Google Inc. (Apple)' : 'Google Inc. (AMD)';
+    const glRenderer = /Macintosh|Mac OS/.test(ua) ? 'ANGLE (Apple, Apple M3, OpenGL 4.1)' : /Windows/.test(ua) ? 'ANGLE (AMD, AMD Radeon Graphics (0x000015BF) Direct3D11 vs_5_0 ps_5_0, D3D11)' : 'ANGLE (AMD, Mesa AMD Radeon 780M (radeonsi, gfx1103_r1, LLVM 19.1.4, DRM 3.61, 6.12.0-amd64), OpenGL 4.6)';
+    for (const Ctx of [self.WebGLRenderingContext, self.WebGL2RenderingContext]) {
+      if (Ctx && Ctx.prototype && typeof Ctx.prototype.getParameter === 'function') {
+        const origGetParam = Ctx.prototype.getParameter;
+        Object.defineProperty(Ctx.prototype, 'getParameter', {
+          value: maskFn(function getParameter(pname) {
+            const val = Reflect.apply(origGetParam, this, arguments);
+            if (pname === 37445 && typeof val === 'string') {
+              const r = Reflect.apply(origGetParam, this, [37446]);
+              if ((typeof r === 'string' && /SwiftShader/i.test(r)) || /Google Inc\. \(Google\)|SwiftShader/i.test(val)) return glVendor;
+            }
+            if (pname === 37446 && typeof val === 'string' && /SwiftShader/i.test(val)) return glRenderer;
+            return val;
+          }, 'getParameter'),
+          writable: true,
+          configurable: true
+        });
+      }
+    }
+  } catch (_) {}
 })();"#;

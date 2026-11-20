@@ -1375,6 +1375,10 @@ async fn test_automation_controlled_allowlist_and_chrome_identity() {
     assert_eq!(from_payload.full_version, "156.0.8078.79");
     assert_eq!(from_payload.major_version, "156");
     assert!(from_payload.user_agent.contains("Chrome/156.0.0.0"));
+    assert_eq!(
+        from_payload.user_agent_override_params()["acceptLanguage"],
+        "en-US,en"
+    );
 
     for malformed in [None, Some(""), Some("HeadlessChrome/not-a-version"), Some("0.0.0")] {
         let fallback = ChromeIdentity::from_version_str(malformed);

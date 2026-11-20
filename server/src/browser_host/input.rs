@@ -543,6 +543,8 @@ pub struct MouseDispatchContext {
 struct MouseDispatchTracker {
     held_buttons: HashSet<MouseButton>,
     last_click: Option<(MouseButton, f64, f64, Instant, u32)>,
+    last_move_at: Option<Instant>,
+    last_down_at: Option<(MouseButton, Instant)>,
 }
 
 impl MouseDispatchTracker {
@@ -1689,6 +1691,9 @@ impl SessionInputManager {
                     for event in &events {
                         if let ReleaseInputEvent::PointerUp { button, .. } = event {
                             dm.held_buttons.remove(button);
+                            if dm.last_down_at.is_some_and(|(b, _)| b == *button) {
+                                dm.last_down_at = None;
+                            }
                         }
                     }
                 }
@@ -2484,6 +2489,37 @@ impl SessionInputManager {
         Ok(self.selected_text.lock().await.clone())
     }
 
+    /// Computes any server-side pacing delay needed when reverse-proxy/tunnel packet batching
+    /// delivers mouse move/down/up frames in a sub-human 0 ms burst.
+    pub async fn compute_human_mouse_pacing_delay(&self, event: &InputEvent) -> Option<Duration> {
+        let dm = self.dispatch_mouse.lock().await;
+        let now = Instant::now();
+        match event {
+            InputEvent::PointerMove { .. } => {
+                let prev = dm.last_move_at?;
+                let elapsed = now.saturating_duration_since(prev);
+                let min_gap = Duration::from_millis(8);
+                (elapsed < min_gap).then(|| min_gap - elapsed)
+            }
+            InputEvent::PointerDown { .. } => {
+                let prev = dm.last_move_at?;
+                let elapsed = now.saturating_duration_since(prev);
+                let min_gap = Duration::from_millis(14);
+                (elapsed < min_gap).then(|| min_gap - elapsed)
+            }
+            InputEvent::PointerUp { button, .. } => {
+                let (prev_btn, prev_at) = dm.last_down_at?;
+                if prev_btn != *button {
+                    return None;
+                }
+                let elapsed = now.saturating_duration_since(prev_at);
+                let min_dwell = Duration::from_millis(55);
+                (elapsed < min_dwell).then(|| min_dwell - elapsed)
+            }
+            _ => None,
+        }
+    }
+
     /// Computes CDP mouse button/buttons/clickCount state at native dispatch time.
     pub async fn prepare_mouse_dispatch(
         &self,
@@ -2511,18 +2547,27 @@ impl SessionInputManager {
                 };
                 dm.last_click = (*button != MouseButton::None)
                     .then_some((*button, x, y, now, click_count));
+                if *button != MouseButton::None {
+                    dm.last_down_at = Some((*button, now));
+                }
                 MouseDispatchContext {
                     buttons: dm.buttons_mask() | button.bitmask(),
                     move_button: None,
                     click_count,
                 }
             }
-            InputEvent::PointerMove { .. } => MouseDispatchContext {
-                buttons: dm.buttons_mask(),
-                move_button: dm.primary_held_button(),
-                click_count: 1,
-            },
+            InputEvent::PointerMove { .. } => {
+                dm.last_move_at = Some(Instant::now());
+                MouseDispatchContext {
+                    buttons: dm.buttons_mask(),
+                    move_button: dm.primary_held_button(),
+                    click_count: 1,
+                }
+            }
             InputEvent::PointerUp { button, .. } => {
+                if dm.last_down_at.is_some_and(|(b, _)| b == *button) {
+                    dm.last_down_at = None;
+                }
                 let click_count = dm
                     .last_click
                     .filter(|(prev_btn, ..)| prev_btn == button)
@@ -3496,5 +3541,71 @@ mod tests {
             Err(InputError::LeaseNotFound)
         ));
         assert!(mgr_fence.try_acquire_devtools_op_permit(fepoch, "viewer-f").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn compute_human_mouse_pacing_delay_enforces_move_down_up_spacing() {
+        let mgr = SessionInputManager::new();
+        let geom = TargetGeometry {
+            css_width: 1280.0,
+            css_height: 900.0,
+            offset_top: 0.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            page_scale: 1.0,
+            visual_offset_x: 0.0,
+            visual_offset_y: 0.0,
+            dpr: 1.0,
+        };
+        let move_ev = InputEvent::PointerMove {
+            u: 0.1,
+            v: 0.1,
+            modifiers: 0,
+        };
+        let down_ev = InputEvent::PointerDown {
+            u: 0.1,
+            v: 0.1,
+            button: MouseButton::Left,
+            modifiers: 0,
+        };
+        let up_ev = InputEvent::PointerUp {
+            u: 0.1,
+            v: 0.1,
+            button: MouseButton::Left,
+            modifiers: 0,
+        };
+
+        // No prior events -> no pacing delay
+        assert_eq!(mgr.compute_human_mouse_pacing_delay(&move_ev).await, None);
+        assert_eq!(mgr.compute_human_mouse_pacing_delay(&down_ev).await, None);
+        assert_eq!(mgr.compute_human_mouse_pacing_delay(&up_ev).await, None);
+
+        // Dispatch a PointerMove -> records last_move_at
+        let _ = mgr.prepare_mouse_dispatch(&move_ev, &geom).await;
+
+        let move_delay = mgr
+            .compute_human_mouse_pacing_delay(&move_ev)
+            .await
+            .expect("immediate move after move should be paced");
+        assert!(move_delay <= Duration::from_millis(8));
+
+        let down_delay = mgr
+            .compute_human_mouse_pacing_delay(&down_ev)
+            .await
+            .expect("immediate down after move should be paced");
+        assert!(down_delay <= Duration::from_millis(14));
+
+        // Dispatch a PointerDown -> records last_down_at
+        let _ = mgr.prepare_mouse_dispatch(&down_ev, &geom).await;
+
+        let up_delay = mgr
+            .compute_human_mouse_pacing_delay(&up_ev)
+            .await
+            .expect("immediate up after down should be paced");
+        assert!(up_delay > Duration::from_millis(20) && up_delay <= Duration::from_millis(55));
+
+        // Dispatch a PointerUp -> clears last_down_at
+        let _ = mgr.prepare_mouse_dispatch(&up_ev, &geom).await;
+        assert_eq!(mgr.compute_human_mouse_pacing_delay(&up_ev).await, None);
     }
 }
