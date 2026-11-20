@@ -3710,10 +3710,9 @@ fn zone_centroid(rgb: &[u8], w: usize, h: usize, pred: fn(u8, u8, u8) -> bool) -
 }
 
 /// Decodes the JPEG and locates every hot zone's centroid on the blocking pool. A debug-build
-/// decode plus the per-pixel scans take hundreds of milliseconds of CPU; run on an async worker
-/// (four layouts do this in lock-step) they starve the production run tasks, the capacity-2
-/// screencast ingress overflows and the producer aborts the run into recovery (which re-attaches
-/// the page session the rig still addresses).
+/// decode plus the per-pixel scans take hundreds of milliseconds of CPU; keeping that work off
+/// async workers prevents it from starving the producer run tasks, overflowing ingress, and
+/// aborting the run into recovery.
 async fn decode_zone_centroids(jpeg: Vec<u8>) -> Vec<(&'static str, f64, f64)> {
     let work = tokio::task::spawn_blocking(move || {
         let (w, h, rgb) = decode_rgb(&jpeg);
@@ -3921,10 +3920,10 @@ async fn real_engine_dom_click_oracle_qualifies_downscaled_input_and_can_fail() 
         Layout { name: "ultrawide-21x9", css: (1280.0, 720.0), dpr: 1.0, canvas: (1680.0, 720.0) },
         Layout { name: "square-odd-css-dpr2", css: (1366.0, 768.0), dpr: 2.0, canvas: (900.0, 900.0) },
     ];
-    let handles: Vec<_> = layouts.into_iter().map(|l| (l.name, tokio::spawn(oracle_layout(l)))).collect();
     let mut failed = Vec::new();
-    for (name, handle) in handles {
-        if let Err(e) = handle.await {
+    for layout in layouts {
+        let name = layout.name;
+        if let Err(e) = tokio::spawn(oracle_layout(layout)).await {
             failed.push(format!("{name}: {e}"));
         }
     }

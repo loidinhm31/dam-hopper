@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   acquireBrowserControl,
+  buildBrowserDevToolsUrl,
   closeBrowserSession,
+  createBrowserDevToolsLease,
   createBrowserSession,
   findInBrowserPage,
   getBrowserCapabilities,
@@ -20,6 +22,7 @@ import {
   resetBrowserProfile,
   resetBrowserProfileForOrigin,
   respondBrowserDialog,
+  revokeBrowserDevToolsLease,
   setBrowserViewport,
   requestBrowserHostJson,
 } from "./browser-host-client.js";
@@ -605,6 +608,85 @@ describe("browser-host-client", () => {
           kind: "protocol",
         });
       }
+    });
+  });
+
+  describe("DevTools lease API and URL builder", () => {
+    it("creates and revokes target-scoped DevTools leases with auth and no-store headers", async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            token: "dt-tok-1",
+            expiresAtUnixMs: 1234567890,
+            browserSessionId: "sess-1",
+            browserIncarnation: "inc-1",
+            profileEpoch: "2",
+            viewerId: "viewer-1",
+            controlEpoch: "4",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+
+      const lease = await createBrowserDevToolsLease(mockOwner, "sess/1", {
+        viewerId: "viewer-1",
+        leaseToken: "ctrl-lease-1",
+      });
+      expect(lease.token).toBe("dt-tok-1");
+      expect(lease.viewerId).toBe("viewer-1");
+      expect(lease.controlEpoch).toBe("4");
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "http://127.0.0.1:4801/api/browser/sessions/sess%2F1/devtools",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ viewerId: "viewer-1", leaseToken: "ctrl-lease-1" }),
+          headers: expect.objectContaining({
+            Authorization: "Bearer test-token-xyz",
+            "Cache-Control": "no-store",
+            "Content-Type": "application/json",
+          }),
+        }),
+      );
+
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ revoked: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      await revokeBrowserDevToolsLease(mockOwner, "sess/1", "tok+a/b");
+      expect(fetchSpy).toHaveBeenLastCalledWith(
+        "http://127.0.0.1:4801/api/browser/sessions/sess%2F1/devtools/tok%2Ba%2Fb",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+
+    it("builds devtools_app.html URL using ws for http and wss for https", () => {
+      const httpUrl = buildBrowserDevToolsUrl(mockOwner, "tok+1/2");
+      const parsedHttp = new URL(httpUrl);
+      expect(parsedHttp.origin).toBe("http://127.0.0.1:4801");
+      expect(parsedHttp.pathname).toBe("/api/browser/devtools/tok%2B1%2F2/devtools_app.html");
+      expect(parsedHttp.searchParams.get("ws")).toBe(
+        "127.0.0.1:4801/api/browser/devtools/tok%2B1%2F2/ws",
+      );
+      expect(parsedHttp.searchParams.get("panel")).toBe("console");
+
+      vi.spyOn(connections, "getConnectionSnapshot").mockReturnValueOnce({
+        owner: mockOwner,
+        status: "connected",
+        intent: true,
+        serverUrl: "https://hub.example.com:8443/sub",
+        error: null,
+      });
+      const httpsUrl = buildBrowserDevToolsUrl(mockOwner, "tok-2", "network");
+      const parsedHttps = new URL(httpsUrl);
+      expect(parsedHttps.pathname).toBe("/sub/api/browser/devtools/tok-2/devtools_app.html");
+      expect(parsedHttps.searchParams.get("wss")).toBe(
+        "hub.example.com:8443/sub/api/browser/devtools/tok-2/ws",
+      );
+      expect(parsedHttps.searchParams.get("ws")).toBeNull();
+      expect(parsedHttps.searchParams.get("panel")).toBe("network");
     });
   });
 });

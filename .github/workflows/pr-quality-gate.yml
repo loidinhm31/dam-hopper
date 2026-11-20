@@ -190,7 +190,11 @@ jobs:
       - name: Clippy production targets
         run: cargo clippy --manifest-path server/Cargo.toml --lib --bins
       - name: Server tests
-        run: cargo test --manifest-path server/Cargo.toml
+        run: |
+          # Keep real-Chromium qualifications out of the parallel harness; each remains required.
+          cargo test --manifest-path server/Cargo.toml -- --skip test_real_chromium_media_stealth_and_pcm_audio_bridge --skip real_engine_dom_click_oracle_qualifies_downscaled_input_and_can_fail
+          cargo test --manifest-path server/Cargo.toml --test browser_host_media test_real_chromium_media_stealth_and_pcm_audio_bridge
+          cargo test --manifest-path server/Cargo.toml --test browser_host_screencast real_engine_dom_click_oracle_qualifies_downscaled_input_and_can_fail
 
   server_windows:
     name: Rust server - Windows

@@ -29,7 +29,9 @@ import {
   type AcquireControlResponse,
   type BrowserCapabilitiesResponse,
   type BrowserSessionDto,
+  type CreateDevToolsLeaseRequest,
   type CreateSessionRequest,
+  type DevToolsLeaseResponse,
   type DialogResponseRequest,
   type FindRequest,
   type FindResponse,
@@ -432,6 +434,64 @@ export async function issueAttachmentTicket(
     body: req,
     signal,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Target-Scoped Native Chromium DevTools Leases
+// ---------------------------------------------------------------------------
+
+/** Mints a target-scoped DevTools capability lease for the current controller. */
+export async function createBrowserDevToolsLease(
+  owner: ConnectionRef,
+  sessionId: string,
+  req: CreateDevToolsLeaseRequest,
+  signal?: AbortSignal,
+): Promise<DevToolsLeaseResponse> {
+  return requestBrowserHostJson<DevToolsLeaseResponse>(
+    owner,
+    `/api/browser/sessions/${encodeURIComponent(sessionId)}/devtools`,
+    {
+      method: "POST",
+      body: req,
+      signal,
+    },
+  );
+}
+
+/** Revokes an active target-scoped DevTools capability lease on the owning server. */
+export async function revokeBrowserDevToolsLease(
+  owner: ConnectionRef,
+  sessionId: string,
+  token: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await requestBrowserHostJson<void>(
+    owner,
+    `/api/browser/sessions/${encodeURIComponent(sessionId)}/devtools/${encodeURIComponent(token)}`,
+    {
+      method: "DELETE",
+      signal,
+    },
+  );
+}
+
+/** Builds the proxied `devtools_app.html` URL for an active capability token. */
+export function buildBrowserDevToolsUrl(
+  owner: ConnectionRef,
+  token: string,
+  panel: string = "console",
+): string {
+  const { serverUrl } = assertValidConnection(owner);
+  const parsed = new URL(serverUrl);
+  const encodedToken = encodeURIComponent(token);
+  const basePath = parsed.pathname.replace(/\/+$/, "");
+  const wsParam = parsed.protocol === "https:" ? "wss" : "ws";
+  const wsTarget = `${parsed.host}${basePath}/api/browser/devtools/${encodedToken}/ws`;
+  const params = new URLSearchParams({
+    [wsParam]: wsTarget,
+    panel,
+  });
+  return `${serverUrl}/api/browser/devtools/${encodedToken}/devtools_app.html?${params.toString()}`;
 }
 
 export interface ProfileResetStatusResponse extends ProfileResetResponse {

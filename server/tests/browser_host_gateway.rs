@@ -409,7 +409,7 @@ async fn test_write_with_cancel_aborts_immediately() {
         Ok::<(), std::io::Error>(())
     };
 
-    let (outcome, aborted) = write_with_cancel(pending_write, &mut abort_rx, None).await;
+    let (outcome, aborted) = write_with_cancel(pending_write, &mut abort_rx, None, None).await;
     assert_eq!(outcome, WriteOutcome::Failed);
     assert!(aborted, "write_with_cancel should flag aborted == true");
 
@@ -420,7 +420,7 @@ async fn test_write_with_cancel_aborts_immediately() {
         Ok::<(), std::io::Error>(())
     };
     let deadline_at = tokio::time::Instant::now() + std::time::Duration::from_millis(50);
-    let (outcome2, aborted2) = write_with_cancel(long_write, &mut rx, Some(deadline_at)).await;
+    let (outcome2, aborted2) = write_with_cancel(long_write, &mut rx, Some(deadline_at), None).await;
     assert_eq!(outcome2, WriteOutcome::DeadlineElapsed);
     assert!(
         aborted2,
@@ -730,14 +730,7 @@ async fn test_raw_page_socket_sessionless_resize_and_clear_fence_its_target() {
 }
 
 fn find_test_browser() -> Option<PathBuf> {
-    [
-        "/usr/bin/google-chrome",
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-    ]
-    .iter()
-    .map(PathBuf::from)
-    .find(|p| p.is_file())
+    dam_hopper_server::browser_host::process::find_browser_executable(None).ok()
 }
 
 async fn get_json(app: &axum::Router, uri: &str, token: &str, host: &str) -> (StatusCode, String) {

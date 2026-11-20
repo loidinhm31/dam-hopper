@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use super::network_policy::{validate_navigation_url, NetworkPolicyError, MAX_TITLE_BYTES};
 use super::protocol::{ServerControlEvent, TargetGeometry};
+use super::target_ownership::{OwnershipFence, ValidityToken};
 
 pub const MAX_IDEMPOTENCY_RECORDS_PER_PRINCIPAL: usize = 128;
 pub const IDEMPOTENCY_TTL: Duration = Duration::from_secs(600); // 10 minutes
@@ -233,6 +234,18 @@ pub struct SessionDialogSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct BrowserDownloadSummaryDto {
+    pub guid: String,
+    pub suggested_filename: String,
+    pub state: String,
+    pub received_bytes: u64,
+    pub total_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct BrowserSessionDto {
     pub browser_session_id: String,
     pub browser_incarnation: String,
@@ -253,6 +266,8 @@ pub struct BrowserSessionDto {
     pub active_popup_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_download: Option<BrowserDownloadSummaryDto>,
 }
 
 #[derive(Debug, Clone)]
@@ -292,6 +307,7 @@ pub struct BrowserSession {
     pub popup_blocked: bool,
     pub active_popup_session_id: Option<String>,
     pub parent_session_id: Option<String>,
+    pub last_download: Option<BrowserDownloadSummaryDto>,
     pub created_at: Instant,
     /// Set when the session becomes `Closed` or `Lost`; drives TTL reaping.
     pub retired_at: Option<Instant>,
@@ -338,6 +354,7 @@ impl BrowserSession {
             popup_blocked: if self.popup_blocked { Some(true) } else { None },
             active_popup_session_id: self.active_popup_session_id.clone(),
             parent_session_id: self.parent_session_id.clone(),
+            last_download: self.last_download.clone(),
         }
     }
 
@@ -494,6 +511,29 @@ impl RegistryInner {
             self.viewport_coalescers.remove(id);
         }
         expired.len()
+    }
+}
+
+/// Immutable identity captured when a download GUID is attributed to a native target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadOwner {
+    pub principal: String,
+    pub is_dev: bool,
+    pub browser_incarnation: String,
+    pub profile_epoch: u64,
+    pub session_id: String,
+    pub native_target_id: String,
+}
+
+impl DownloadOwner {
+    fn matches(&self, session: &BrowserSession) -> bool {
+        session.browser_session_id == self.session_id
+            && session.owner_principal == self.principal
+            && session.is_dev == self.is_dev
+            && session.browser_incarnation == self.browser_incarnation
+            && session.profile_epoch == self.profile_epoch
+            && session.native_target_id.as_deref() == Some(self.native_target_id.as_str())
+            && matches!(session.status, SessionStatus::Initializing | SessionStatus::Running)
     }
 }
 
@@ -726,6 +766,7 @@ impl SessionRegistry {
             popup_blocked: false,
             active_popup_session_id: None,
             parent_session_id: None,
+            last_download: None,
             pending_api_navigation_at: None,
             created_at: now,
             retired_at: None,
@@ -930,6 +971,30 @@ impl SessionRegistry {
             .sessions
             .get(session_id)
             .and_then(|s| s.native_target_id.clone())
+    }
+
+    /// Returns `(BrowserSessionDto, native_target_id)` for a `Running` session owned by
+    /// `(principal, is_dev)`. Foreign sessions fail with `NotFound`.
+    pub async fn owned_running_target(
+        &self,
+        session_id: &str,
+        principal: &str,
+        is_dev: bool,
+    ) -> Result<(BrowserSessionDto, String), SessionError> {
+        let inner = self.inner.read().await;
+        let session = inner.sessions.get(session_id).ok_or(SessionError::NotFound)?;
+        if session.owner_principal != principal || session.is_dev != is_dev {
+            return Err(SessionError::NotFound);
+        }
+        if session.status != SessionStatus::Running {
+            return Err(SessionError::Conflict(
+                "browser session is not running".to_string(),
+            ));
+        }
+        let target_id = session.native_target_id.clone().ok_or_else(|| {
+            SessionError::NativeUnavailable("browser session has no native target".to_string())
+        })?;
+        Ok((session.to_dto(), target_id))
     }
 
     /// Offers a native page as the identity of a session awaiting one. Idempotent for the same
@@ -1249,6 +1314,7 @@ impl SessionRegistry {
             popup_blocked: false,
             active_popup_session_id: None,
             parent_session_id: Some(parent_id.clone()),
+            last_download: None,
             pending_api_navigation_at: None,
             created_at: Instant::now(),
             retired_at: None,
@@ -1812,6 +1878,74 @@ impl SessionRegistry {
         Some(session.navigation_revision)
     }
 
+    /// Records a GUID begin only while its captured owner and actor token remain live.
+    /// Lock order is registry then fence. The fence callback is synchronous and must not
+    /// await or call back into the session registry.
+    pub(crate) async fn record_download_will_begin_fenced(
+        &self,
+        fence: &OwnershipFence,
+        token: ValidityToken,
+        owner: &DownloadOwner,
+        guid: String,
+        suggested_filename: String,
+    ) -> bool {
+        let mut inner = self.inner.write().await;
+        let Some(session) = inner.sessions.get_mut(&owner.session_id).filter(|s| owner.matches(s)) else {
+            return false;
+        };
+        fence.commit(token, || {
+            session.last_download = Some(BrowserDownloadSummaryDto {
+                guid,
+                suggested_filename,
+                state: "inProgress".to_string(),
+                received_bytes: 0,
+                total_bytes: 0,
+                file_path: None,
+            });
+            session.publish_update();
+        })
+    }
+
+    /// Records progress using the GUID filename, under the same registry-then-fence lock order.
+    pub(crate) async fn record_download_progress_fenced(
+        &self,
+        fence: &OwnershipFence,
+        token: ValidityToken,
+        owner: &DownloadOwner,
+        guid: String,
+        suggested_filename: String,
+        state: String,
+        received_bytes: u64,
+        total_bytes: u64,
+        file_path: Option<String>,
+    ) -> bool {
+        let mut inner = self.inner.write().await;
+        let Some(session) = inner.sessions.get_mut(&owner.session_id)
+            .filter(|session| owner.matches(session))
+        else {
+            return false;
+        };
+        fence.commit(token, || {
+            let Some(previous) = session.last_download.as_ref().filter(|previous| previous.guid == guid) else {
+                return;
+            };
+            let file_path = file_path.or_else(|| previous.file_path.clone());
+            let next = BrowserDownloadSummaryDto {
+                guid,
+                suggested_filename,
+                state,
+                received_bytes,
+                total_bytes,
+                file_path,
+            };
+            if Some(&next) != session.last_download.as_ref() {
+                session.last_download = Some(next);
+                session.publish_update();
+            }
+        })
+    }
+
+
     /// Session ids whose native page is `target_id` (every session of the principal when the
     /// raw command could not be correlated to a target).
     pub async fn sessions_for_native_target(
@@ -2078,6 +2212,321 @@ mod tests {
         let late = Instant::now() + IDEMPOTENCY_TTL + Duration::from_secs(5);
         assert_eq!(registry.reap_expired_at(late).await, 1);
         assert_eq!(registry.retained_session_count().await, 0);
+    }
+
+    async fn download_test_owner(registry: &SessionRegistry) -> DownloadOwner {
+        download_test_owner_for(registry, "alice", "T1", 1).await
+    }
+
+    async fn download_test_owner_for(
+        registry: &SessionRegistry,
+        principal: &str,
+        target_id: &str,
+        max_targets: usize,
+    ) -> DownloadOwner {
+        let req = request(&Uuid::new_v4().to_string(), "about:blank");
+        let session_id = pending_id(
+            reserve(registry, &params(principal, &req, &[], max_targets)).await.unwrap(),
+        );
+        assert_eq!(
+            registry.bind_native_target(&session_id, "inc1", target_id).await,
+            BindOutcome::Bound
+        );
+        DownloadOwner {
+            principal: principal.to_string(),
+            is_dev: true,
+            browser_incarnation: "inc1".to_string(),
+            profile_epoch: 1,
+            session_id,
+            native_target_id: target_id.to_string(),
+        }
+    }
+
+    fn download_test_fence() -> (OwnershipFence, ValidityToken) {
+        let fence = OwnershipFence::new();
+        let connection = fence.start_next_generation().unwrap();
+        let token = fence.token(connection).unwrap();
+        assert!(fence.install(token, || true, || {}));
+        (fence, token)
+    }
+
+    #[tokio::test]
+    async fn fenced_download_rejects_stale_owner_and_nonlive_status() {
+        let registry = SessionRegistry::new();
+        let owner = download_test_owner(&registry).await;
+        let (fence, token) = download_test_fence();
+        assert!(registry.record_download_will_begin_fenced(
+            &fence, token, &owner, "guid".into(), "original.txt".into()
+        ).await);
+        let updates = registry.subscribe_session(
+            &owner.session_id, "alice", true, 1, "inc1"
+        ).await.unwrap();
+
+        let mut stale = Vec::new();
+        let mut changed = owner.clone();
+        changed.principal = "bob".into();
+        stale.push(changed);
+        let mut changed = owner.clone();
+        changed.is_dev = false;
+        stale.push(changed);
+        let mut changed = owner.clone();
+        changed.browser_incarnation = "inc2".into();
+        stale.push(changed);
+        let mut changed = owner.clone();
+        changed.profile_epoch = 2;
+        stale.push(changed);
+        let mut changed = owner.clone();
+        changed.session_id = "unknown".into();
+        stale.push(changed);
+        let mut changed = owner.clone();
+        changed.native_target_id = "T2".into();
+        stale.push(changed);
+        for changed in &stale {
+            assert!(!registry.record_download_will_begin_fenced(
+                &fence, token, changed, "other".into(), "other.txt".into()
+            ).await);
+            assert!(!registry.record_download_progress_fenced(
+                &fence, token, changed, "other".into(), "other.txt".into(), "completed".into(), 1, 1, None
+            ).await);
+        }
+        assert!(!updates.has_changed().unwrap());
+
+        registry.commit_running(&owner.session_id, &|| true).await.unwrap();
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner, "guid".into(), "original.txt".into(), "inProgress".into(), 2, 3, None
+        ).await);
+        // A once-valid owner must also fail after the registry record changes.
+        {
+            let mut inner = registry.inner.write().await;
+            inner.sessions.get_mut(&owner.session_id).unwrap().native_target_id = Some("T2".into());
+        }
+        assert!(!registry.record_download_will_begin_fenced(
+            &fence, token, &owner, "other".into(), "other.txt".into()
+        ).await);
+        {
+            let mut inner = registry.inner.write().await;
+            let session = inner.sessions.get_mut(&owner.session_id).unwrap();
+            session.native_target_id = Some("T1".into());
+            session.browser_incarnation = "inc2".into();
+        }
+        assert!(!registry.record_download_progress_fenced(
+            &fence, token, &owner, "other".into(), "other.txt".into(), "completed".into(), 1, 1, None
+        ).await);
+        {
+            let mut inner = registry.inner.write().await;
+            inner.sessions.get_mut(&owner.session_id).unwrap().browser_incarnation = "inc1".into();
+        }
+        for status in [SessionStatus::Closing, SessionStatus::Closed, SessionStatus::Lost] {
+            {
+                let mut inner = registry.inner.write().await;
+                inner.sessions.get_mut(&owner.session_id).unwrap().status = status;
+            }
+            assert!(!registry.record_download_will_begin_fenced(
+                &fence, token, &owner, "other".into(), "other.txt".into()
+            ).await);
+            assert!(!registry.record_download_progress_fenced(
+                &fence, token, &owner, "other".into(), "other.txt".into(), "completed".into(), 1, 1, None
+            ).await);
+        }
+        let inner = registry.inner.read().await;
+        let download = inner.sessions[&owner.session_id].last_download.as_ref().unwrap();
+        assert_eq!(download.guid, "guid");
+        assert_eq!(download.suggested_filename, "original.txt");
+        assert_eq!(download.received_bytes, 2);
+    }
+
+    #[tokio::test]
+    async fn retired_observer_rejects_downloads_waiting_for_registry_write() {
+        let registry = Arc::new(SessionRegistry::new());
+        let owner = download_test_owner(&registry).await;
+        let fence = Arc::new(OwnershipFence::new());
+        let connection = fence.start_next_generation().unwrap();
+        let token = fence.token(connection).unwrap();
+        assert!(fence.install(token, || true, || {}));
+        let mut updates = registry.subscribe_session(
+            &owner.session_id, "alice", true, 1, "inc1"
+        ).await.unwrap();
+        assert!(registry.record_download_will_begin_fenced(
+            &fence, token, &owner, "guid".into(), "original.txt".into()
+        ).await);
+        updates.borrow_and_update();
+
+        let guard = registry.inner.write().await;
+        let begin = registry.record_download_will_begin_fenced(
+            &fence, token, &owner, "other".into(), "other.txt".into()
+        );
+        let progress = registry.record_download_progress_fenced(
+            &fence, token, &owner, "guid".into(), "original.txt".into(),
+            "completed".into(), 1, 1, Some("/host/private".into())
+        );
+        tokio::pin!(begin, progress);
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(begin.as_mut(), cx).is_pending());
+            assert!(std::future::Future::poll(progress.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        }).await;
+        fence.retire_current();
+        drop(guard);
+        assert!(!begin.await);
+        assert!(!progress.await);
+        assert!(!updates.has_changed().unwrap());
+        let download = registry.get_session(&owner.session_id, "alice").await.unwrap().last_download.unwrap();
+        assert_eq!(download.guid, "guid");
+        assert_eq!(download.state, "inProgress");
+        assert_eq!(download.received_bytes, 0);
+        assert_eq!(download.file_path, None);
+        let (successor_fence, successor_token) = download_test_fence();
+        assert!(registry.record_download_will_begin_fenced(
+            &successor_fence, successor_token, &owner, "successor".into(), "next.txt".into()
+        ).await);
+        let successor = registry.get_session(&owner.session_id, "alice").await.unwrap();
+        assert_eq!(successor.last_download.unwrap().guid, "successor");
+    }
+
+    #[tokio::test]
+    async fn fenced_download_progress_uses_guid_filename_and_same_guid_path_only() {
+        let registry = SessionRegistry::new();
+        let owner = download_test_owner(&registry).await;
+        let (fence, token) = download_test_fence();
+        assert!(registry.record_download_will_begin_fenced(
+            &fence, token, &owner, "first".into(), "first.txt".into()
+        ).await);
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner, "first".into(), "first.txt".into(), "completed".into(), 1, 1,
+            Some("/host/opaque-native-name".into())
+        ).await);
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner, "first".into(), "first.txt".into(), "completed".into(), 1, 1, None
+        ).await);
+        let download = registry.get_session(&owner.session_id, "alice").await.unwrap().last_download.unwrap();
+        assert_eq!(download.file_path.as_deref(), Some("/host/opaque-native-name"));
+
+        assert!(registry.record_download_will_begin_fenced(
+            &fence, token, &owner, "second".into(), "second.txt".into()
+        ).await);
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner, "second".into(), "second.txt".into(), "inProgress".into(), 0, 1, None
+        ).await);
+        let download = registry.get_session(&owner.session_id, "alice").await.unwrap().last_download.unwrap();
+        assert_eq!(download.suggested_filename, "second.txt");
+        assert_eq!(download.file_path, None);
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner, "first".into(), "first.txt".into(), "completed".into(), 1, 1, None
+        ).await);
+        let download = registry.get_session(&owner.session_id, "alice").await.unwrap().last_download.unwrap();
+        assert_eq!(download.guid, "second");
+        assert!(registry.record_download_will_begin_fenced(
+            &fence, token, &owner, "third".into(), "actual-name.txt".into()
+        ).await);
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner, "third".into(), "actual-name.txt".into(), "completed".into(), 1, 1,
+            Some("/host/different-name".into())
+        ).await);
+        let download = registry.get_session(&owner.session_id, "alice").await.unwrap().last_download.unwrap();
+        assert_eq!(download.suggested_filename, "actual-name.txt");
+        assert_eq!(download.file_path.as_deref(), Some("/host/different-name"));
+    }
+
+    #[tokio::test]
+    async fn download_progress_preserves_browser_path_across_pathless_page_updates() {
+        let registry = SessionRegistry::new();
+        let owner = download_test_owner(&registry).await;
+        let (fence, token) = download_test_fence();
+        let session_id = owner.session_id.clone();
+        let guid = "download-guid".to_string();
+        let host_path = "/host/Downloads/blob-dl.txt".to_string();
+
+        assert!(registry.record_download_will_begin_fenced(
+            &fence, token, &owner, guid.clone(), "blob-dl.txt".into(),
+        ).await);
+        // A Page completion has no filePath on this Chromium event.
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner, guid.clone(), "blob-dl.txt".into(),
+            "completed".into(), 1, 1, None,
+        ).await);
+        assert!(registry
+            .get_session(&session_id, "alice")
+            .await
+            .unwrap()
+            .last_download
+            .unwrap()
+            .file_path
+            .is_none());
+
+        // The Browser event supplies the host path; a later pathless Page update must preserve it.
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner, guid.clone(), "blob-dl.txt".into(),
+            "completed".into(), 1, 1, Some(host_path.clone()),
+        ).await);
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner, guid, "blob-dl.txt".into(),
+            "completed".into(), 1, 1, None,
+        ).await);
+
+        let download = registry
+            .get_session(&session_id, "alice")
+            .await
+            .unwrap()
+            .last_download
+            .unwrap();
+        assert_eq!(download.suggested_filename, "blob-dl.txt");
+        assert_eq!(download.file_path.as_deref(), Some(host_path.as_str()));
+    }
+
+    #[tokio::test]
+    async fn interleaved_downloads_publish_only_to_the_bound_session() {
+        let registry = SessionRegistry::new();
+        let owner_a = download_test_owner_for(&registry, "alice", "T1", 2).await;
+        let owner_b = download_test_owner_for(&registry, "alice", "T2", 2).await;
+        let (fence, token) = download_test_fence();
+        let mut events_a = registry.subscribe_session(
+            &owner_a.session_id, "alice", true, 1, "inc1",
+        ).await.unwrap();
+        let mut events_b = registry.subscribe_session(
+            &owner_b.session_id, "alice", true, 1, "inc1",
+        ).await.unwrap();
+        events_a.borrow_and_update();
+        events_b.borrow_and_update();
+
+        assert!(registry.record_download_will_begin_fenced(
+            &fence, token, &owner_a, "guid-a".into(), "a.txt".into(),
+        ).await);
+        tokio::time::timeout(Duration::from_secs(1), events_a.changed())
+            .await.expect("owner A notification timeout").unwrap();
+        assert!(!events_b.has_changed().unwrap());
+        assert!(registry.record_download_will_begin_fenced(
+            &fence, token, &owner_b, "guid-b".into(), "b.txt".into(),
+        ).await);
+        tokio::time::timeout(Duration::from_secs(1), events_b.changed())
+            .await.expect("owner B notification timeout").unwrap();
+        assert!(!events_a.has_changed().unwrap());
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner_a, "guid-a".into(), "a.txt".into(),
+            "completed".into(), 10, 10, Some("/host/a.txt".into()),
+        ).await);
+        tokio::time::timeout(Duration::from_secs(1), events_a.changed())
+            .await.expect("owner A progress notification timeout").unwrap();
+        assert!(!events_b.has_changed().unwrap());
+        assert!(registry.record_download_progress_fenced(
+            &fence, token, &owner_b, "guid-b".into(), "b.txt".into(),
+            "canceled".into(), 4, 10, None,
+        ).await);
+        tokio::time::timeout(Duration::from_secs(1), events_b.changed())
+            .await.expect("owner B progress notification timeout").unwrap();
+        assert!(!events_a.has_changed().unwrap());
+
+        let a = registry.get_session(&owner_a.session_id, "alice").await.unwrap();
+        let b = registry.get_session(&owner_b.session_id, "alice").await.unwrap();
+        let download_a = a.last_download.unwrap();
+        let download_b = b.last_download.unwrap();
+        assert_eq!(download_a.guid, "guid-a");
+        assert_eq!(download_a.suggested_filename, "a.txt");
+        assert_eq!(download_a.state, "completed");
+        assert_eq!(download_a.file_path.as_deref(), Some("/host/a.txt"));
+        assert_eq!(download_b.guid, "guid-b");
+        assert_eq!(download_b.suggested_filename, "b.txt");
+        assert_eq!(download_b.state, "canceled");
+        assert_eq!(download_b.file_path, None);
     }
 }
 

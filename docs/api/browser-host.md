@@ -8,9 +8,9 @@ For process containment, supervisory death pipes, and binary wire framing (BHJF 
 
 ## 1. Admission Security Model
 
-All `/api/browser/*` routes require caller admission through `evaluate_browser_admission`. The handler strictly rejects ambiguous credentials, unapproved origins, and unauthorized roles.
+Browser management routes require caller admission through `evaluate_browser_admission`. The DevTools asset and WebSocket routes instead redeem a path capability and revalidate the admission captured when it was minted. Admission rejects ambiguous credentials, unapproved origins, and unauthorized roles.
 
-All successful and error responses from `/api/browser/*` set `Cache-Control: no-store`.
+Browser management responses and DevTools HTML responses use `Cache-Control: no-store`; proxied non-HTML DevTools assets use private caching as described below.
 
 ### Production Admission Rules
 
@@ -44,6 +44,7 @@ All errors return JSON with HTTP status $\ge 400$:
 | HTTP Status | Error Kind | Description |
 | --- | --- | --- |
 | 400 Bad Request | `invalidInput` | Missing or malformed parameters; oversized payload |
+| 400 Bad Request | `invalidPath` | Malformed or traversal DevTools asset path |
 | 400 Bad Request | `policyViolation` | URL violates network policy or contains credentials |
 | 400 Bad Request | `purposeMismatch` | Ticket purpose does not match requested attachment endpoint |
 | 400 Bad Request | `sequenceViolation` | Input sequence gap or stale sequence counter |
@@ -54,6 +55,8 @@ All errors return JSON with HTTP status $\ge 400$:
 | 401 Unauthorized | `sessionExpired` | Session deadline has elapsed |
 | 401 Unauthorized | `ticketNotFound` | Capability ticket not found or already consumed (single-use) |
 | 401 Unauthorized | `ticketExpired` | Capability ticket 30s TTL expired |
+| 401 Unauthorized | `invalidDevToolsToken` | Missing, expired, or revoked target-scoped DevTools capability token |
+| 401 Unauthorized | `staleTarget` | Native target ID rotated since the DevTools lease was minted |
 | 403 Forbidden | `forbidden` | Session belongs to another principal |
 | 403 Forbidden | `adminRequired` | Caller lacks the required Admin role |
 | 403 Forbidden | `devBypassDenied` | Non-loopback peer or unapproved Origin in `--no-auth` mode |
@@ -62,15 +65,25 @@ All errors return JSON with HTTP status $\ge 400$:
 | 403 Forbidden | `leaseNotFound` | No active control lease held for this session |
 | 403 Forbidden | `leaseExpired` | Control lease has expired (30s TTL elapsed) |
 | 403 Forbidden | `notLeaseHolder` | Caller lease token does not match active lease holder |
+| 403 Forbidden | `viewerNotAdmitted` | Viewer lacks an active admitted attachment pair matching caller admission |
+| 403 Forbidden | `controlAuthorityLost` | DevTools capability control epoch/viewer authority expired or transferred |
 | 404 Not Found | `sessionNotFound` | Browser session ID does not exist |
+| 404 Not Found | `assetNotFound` | Upstream Chromium DevTools asset returned non-2xx |
 | 409 Conflict | `sessionConflict` | Conflicting session operation or state mismatch |
 | 409 Conflict | `leaseConflict` | Control lease currently held by another active viewer |
+| 409 Conflict | `leaseInUse` | DevTools WebSocket already active for this lease token |
+| 409 Conflict | `staleIncarnation` | Browser instance is no longer live or incarnation/profileEpoch mismatch |
 | 429 Too Many Requests | `browserBusy` | Principal/global process limit or concurrent agent CDP ceiling (`max_raw_cdp_connections`, cap 8) reached |
+| 429 Too Many Requests | `tooManyDevToolsLeases` | DevTools lease limit reached (`8` per principal / `32` global) |
+| 429 Too Many Requests | `tooManyConnections` | Concurrent target-scoped DevTools WebSocket ceiling (`4`) reached |
 | 429 Too Many Requests | `ticketCapacityExceeded` | Unconsumed ticket limit reached (16 principal / 64 global) |
 | 429 Too Many Requests | `queueOverflow` | Input queue limit exceeded (128 records or 256 KiB) |
 | 502 Bad Gateway | `nativeCloseUnconfirmed` | Native close unconfirmed; session remains in `closing` status holding target capacity |
+| 502 Bad Gateway | `nativeTargetUnavailable` | Session has no bound native target |
 | 502 Bad Gateway | `cdpError` | Upstream CDP inspect or screenshot command failed |
+| 502 Bad Gateway | `badGateway` | Upstream DevTools asset fetch failed or exceeded 4 MiB ceiling |
 | 503 Service Unavailable | `authUnavailable` | Database unavailable during admission check or live check timeout (2s) |
+| 503 Service Unavailable | `browserUnavailable` | Browser instance unavailable when resolving DevTools proxy target |
 | 503 Service Unavailable | `inputUnavailable` | Viewport geometry not yet available for coordinate mapping |
 | 503 Service Unavailable | `publicOriginUnavailable` | Raw CDP discovery requires trusted `DAM_HOPPER_PUBLIC_SERVER_ORIGIN`; request `Host` never reflected |
 | 401 Unauthorized | `mfaRequired` / `invalidSession` | MFA verification required or claims version mismatch |
@@ -112,7 +125,7 @@ Returns the browser host capability summary for the calling principal.
 
 ### GET /api/browser/sessions
 
-Lists all active and transitioning browser sessions (`initializing`, `running`, `closing`, `lost`) owned by the authenticated principal. `closing` sessions hold target capacity until native absence is proven; `lost` reflects unexpected native page destruction. (Note: UI TypeScript `BrowserSessionStatus` union does not yet include `closing` or `lost`).
+Lists all active and transitioning browser sessions (`initializing`, `running`, `closing`, `lost`) owned by the authenticated principal. `closing` sessions hold target capacity until native absence is proven; `lost` reflects unexpected native page destruction.
 
 **Response (200 OK):** Array of `BrowserSessionDto` objects.
 
@@ -180,6 +193,9 @@ Retrieves current metadata, viewport epoch, navigation revision, active lease, a
 
 - `activePopupSessionId` *(optional)*: Present when an admitted popup child session opened by this session is currently `running`. Automatically cleared and published via `sessionUpdated` when the popup session closes or is lost.
 - `parentSessionId` *(optional)*: Present on admitted popup sessions, identifying the opener `browserSessionId` so the Browser App can display the popup session and restore the opener when OAuth sign-in completes (`window.close()`) or when the user clicks **Return to Page**.
+- `lastDownload` *(optional `BrowserDownloadSummaryDto`)*: Present once a native host download begins on the session (`{ "guid": "...", "suggestedFilename": "...", "state": "inProgress" | "completed" | "canceled", "receivedBytes": 0, "totalBytes": 0, "filePath": "/path/to/file" }`; `filePath` omitted when absent). Updated from CDP `Browser/Page.downloadWillBegin` and `Browser/Page.downloadProgress` events and broadcast via `sessionUpdated`.
+
+The summary reports the latest download for the session, not a download history. `filePath` is optional even on completion and refers to the server host, not the viewer device. The exact-path assertion in the real-Chromium qualification test applies when Linux Chromium is installed; other platforms must tolerate omission.
 
 ### DELETE /api/browser/sessions/{id}
 
@@ -315,7 +331,12 @@ Explicitly surrenders the control lease.
 - Generates synthetic release events for any currently held mouse buttons and keyboard keys to prevent stuck state in Chromium.
 - Revokes the lease in the input manager and session registry.
 
-**Response:** 204 No Content.
+**Response:** 200 OK (`Cache-Control: no-store`):
+```json
+{
+  "status": "released"
+}
+```
 
 ### POST /api/browser/sessions/{id}/dialog
 
@@ -504,6 +525,57 @@ WebSocket upgrade route for raw CDP access to a specific target `{target_id}` (`
 
 - Connects dedicated upstream WebSocket to `ws://127.0.0.1:{chrome_port}/devtools/page/{target_id}`.
 
+### POST /api/browser/sessions/{id}/devtools
+
+Mints a target-scoped Chromium DevTools capability lease for an owned `running` browser session whose `browserIncarnation` is live.
+
+- **Token & Storage:** 256-bit `OsRng` token encoded as URL-safe unpadded Base64; server stores only its SHA-256 hash (`DevToolsLeaseManager`).
+- **TTL & Capacity:** `300` seconds (`DEVTOOLS_LEASE_TTL`), clipped to caller auth `effective_deadline`. Capped at `8` active leases per principal (`MAX_LEASES_PER_PRINCIPAL`) and `32` globally (`MAX_LEASES_GLOBAL`); excess returns HTTP 429 `kind: "tooManyDevToolsLeases"`.
+- **Errors:** Foreign session returns HTTP 404 `sessionNotFound`; non-running session returns HTTP 409 `sessionConflict`; stale browser incarnation returns HTTP 409 `staleIncarnation`.
+
+**Request Body (`CreateDevToolsLeaseRequest`, `deny_unknown_fields`):** `{ "viewerId": "...", "leaseToken": "..." }` (bounded non-empty identifiers: `viewerId <= 128`, `leaseToken <= 256`). Validates existing `SessionInputManager` control authority (`verify_control_authority_for_mint` with `subtle::ConstantTimeEq`, returning `403 leaseNotFound` if absent or `503 inputUnavailable` during recovery/uncertain state), `has_admitted_viewer_pair` (`403 viewerNotAdmitted`), links `DevToolsLease::cancel` to epoch cancellation, and rechecks post-insert. Stores only SHA-256 hash + `(viewer_id, control_epoch)`, never `leaseToken`.
+
+**Response (200 OK, `Cache-Control: no-store`):**
+```json
+{
+  "token": "43-character-url-safe-base64-token",
+  "expiresAtUnixMs": 1794143100000,
+  "browserSessionId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "viewerId": "viewer-uuid-or-id",
+  "controlEpoch": "1",
+  "browserIncarnation": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "profileEpoch": "1"
+}
+```
+
+### DELETE /api/browser/sessions/{id}/devtools/{token}
+
+Revokes a DevTools capability lease owned by the calling principal for session `{id}` and cancels any active DevTools WebSocket bound to it. Foreign sessions return HTTP 404 `sessionNotFound`.
+
+**Response (200 OK, `Cache-Control: no-store`):**
+```json
+{
+  "revoked": true
+}
+```
+
+### GET /api/browser/devtools/{token}/{*path}
+
+Proxies Chromium's bundled DevTools frontend assets from `http://127.0.0.1:{chrome_port}/devtools/{path}` using the minted capability `{token}` (path token acts as capability credential; no `Authorization` header required).
+
+- **Path Validation (`validate_devtools_asset_path`):** Rejects empty paths, leading/trailing `/`, `\`, `..`, `?`, `#`, empty/dot segments, or characters outside `[A-Za-z0-9._/-]` with HTTP 400 `invalidPath`.
+- **Authority & TTL Refresh:** Validates token, live auth (`verify_live_admission`), live control authority (`is_control_authority_live` -> `403 controlAuthorityLost`), live admitted viewer pair (`has_admitted_viewer_pair` -> `403 viewerNotAdmitted`), live incarnation/epoch, and matching `native_target_id` (stale/revoked/expired returns HTTP 401 `invalidDevToolsToken`, `invalidSession`, `staleIncarnation`, or `staleTarget`; failures revoke the lease), refreshing the 300s sliding TTL clipped to auth deadline.
+- **Bounds & Headers:** 2s upstream timeout (`DEVTOOLS_ASSET_TIMEOUT`), redirects disabled, 4 MiB ceiling (`MAX_DEVTOOLS_ASSET_BYTES`). `text/html*` responses rewrite `ws://127.0.0.1:*` in CSP to `'self' ws: wss: ws://127.0.0.1:*` with `Cache-Control: no-store`; non-HTML assets return `Cache-Control: private, max-age=300`. All responses set `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`.
+
+### GET /api/browser/devtools/{token}/ws
+
+Target-scoped WebSocket relay connecting to `ws://127.0.0.1:{chrome_port}/devtools/page/{native_target_id}` (`UPSTREAM_CONNECT_TIMEOUT = 5s`, `MAX_WS_MESSAGE_BYTES = 4 MiB`).
+
+- **Single Claim & Concurrency:** Each lease token admits at most one active WebSocket (`ws_active = true`; duplicate upgrade returns HTTP 409 `leaseInUse`), rechecks control authority & viewer pair post-upstream-connect, and caps global concurrent DevTools WebSockets at `4` (`MAX_DEVTOOLS_CONNECTIONS` -> `429 tooManyConnections`).
+- **Live Auth & Revocation:** Runs 5s periodic `verify_live_admission`, `refresh_ws`, `is_control_authority_live`, and `has_admitted_viewer_pair` checks, global payload reservation (`global_memory_controller`), and `write_with_cancel(..., Some(&lease.cancel))` (raw CDP gateway retains `None`). Auth session revocation, control transfer/reacquire (`revoke_by_control_epoch`), viewer revocation (`revoke_by_viewer`), principal fencing, and session retirement cancel active sockets immediately.
+- **Client->Upstream Filter & Shared `Input.*` Ledger (`DevToolsSessionFilter::classify_client_message`):** Rejects batch arrays, validates `sessionId` against root or positively `Owned` child sessions before method policy, and rejects `Browser.*`, `ServiceWorker.*`, `BackgroundService.*`, `Storage.*`, `Page.setDownloadBehavior`, cookie/cache `Network.*`, `GEOMETRY_METHODS`, and disallowed `Target.*` methods on root and children with `-32601` (`Target.getTargetInfo`, `Target.attachToTarget`, `Target.detachFromTarget`, and `Target.setAutoAttach` with rewritten `iframe`+`worker` filter are permitted strictly for owned targets/sessions). Admits `Input.dispatchKeyEvent` (`keyDown`/`rawKeyDown`/`keyUp`/`char`), `Input.dispatchMouseEvent` (`mousePressed`/`mouseReleased`/`mouseMoved`/`mouseWheel`, `pointerType: "mouse"`), and `Input.insertText` (`<= 4096` bytes) under `MAX_INFLIGHT_DEVTOOLS_OPS = 64` into shared `HeldInputState` keyed by `(Option<String>, u64)` `(sessionId, call_id)` (`prepare_cdp_input_op` -> `confirm`/`reject`/`mark_ambiguous`); child detaches settle cleanly via `ProxyWriteOutcome::NotWrittenChildDetached` and `-32601`, while touch/drag/gesture/IME/`setIgnoreInputEvents`/unknown `Input.*` return `-32601`. Unresolved DevTools WS close triggers `fence_devtools_authority` and releases held inputs via `DevToolsProxyReleaseRoute` / `NativeInputTarget`.
+- **Upstream->Client Filter & Quarantine (`DevToolsSessionFilter::process_upstream_message`):** Enforces positive target/child-session ownership grounded in `DevToolsOwnershipSource` (`OwnershipFence` `watch` notifications + `owns_child_target` + `retire_session_for_reseed`) and signed 32-bit CDP request ID partitioning (`CLIENT_CALL_ID_MAX = 1_000_000_000`, cleanup `1_000_000_001..1_500_000_000`, internal filter `INTERNAL_FILTER_ID_BASE = 1_500_000_000 ..= i32::MAX`). Suppresses `ServiceWorker.*`, `BackgroundService.*`, `Storage.*`, `Browser.*`, `Target.receivedMessageFromTarget`, and non-owned target metadata/events; quarantines `Target.attachedToTarget` for `iframe`/`worker` as `PendingAttach` (2s `PENDING_ATTACH_TIMEOUT`) until positively promoted; and detaches unowned/colliding/expired/shared-or-service-worker attachments via internal `Target.detachFromTarget` without resuming paused targets or closing foreign targets.
+
 ---
 
 ## 3. Single-Use Capability Tickets (`AttachmentManager`)
@@ -554,7 +626,7 @@ User input is routed exclusively through the active control lease holder:
 - **Lease Duration:** 30 seconds (`LEASE_TTL = Duration::from_secs(30)`).
 - **Renewal Window:** 5 seconds (`LEASE_RENEWAL_WINDOW = Duration::from_secs(5)`).
 - **Single Active Holder:** Only one viewer (`holderKind: "human" | "agent"`) may hold control per session.
-- **Fail-Safe Release:** When a lease is released, expires, or drops due to connection loss, `HeldInputState::generate_release_events` automatically generates synthetic `PointerUp` and `KeyUp` events for all currently held buttons and keys, preventing stuck input in the browser.
+- **Fail-Safe Release & Ordered Transitions:** Control lease transitions (`acquire_lease`, `end_lease_owned`, `suspend_for_recovery_owned`, `fail_native_dispatch_owned`) fence old authority & revoke epoch DevTools capabilities, drain bounded DevTools ops (`DEVTOOLS_OP_DRAIN_TIMEOUT = 5s`), release pending + confirmed holds in shared `HeldInputState` (`CapturedNativeIdentity`), run `lease_end_hook`, and confirm before publishing a successor (`BrowserApp` / `BrowserDevToolsDock` show `browser-devtools-control-required` without auto-stealing).
 
 ### Reliable Input Queue
 
@@ -591,17 +663,24 @@ When native CDP commands (such as `Emulation.setDeviceMetricsOverride`) alter vi
 
 ---
 
-## 5. Navigation & HTTP Network Policy (`network_policy.rs`)
+## 5. Navigation, Network Policy & Native Downloads (`network_policy.rs`, `selection.rs`)
 
-URLs submitted to `POST /api/browser/sessions` and `POST /api/browser/sessions/{id}/navigate` undergo strict policy validation:
+URLs submitted to `POST /api/browser/sessions` and `POST /api/browser/sessions/{id}/navigate` (`validate_navigation_url`) and browser-initiated requests intercepted by CDP Fetch (`NetworkPolicy::check_request`) undergo strict policy validation:
 
 - **Length Bounds:** Maximum URL length 4096 bytes (`MAX_URL_BYTES`); maximum page title 512 bytes (`MAX_TITLE_BYTES`).
-- **Scheme Allowlist:** Strictly `http`, `https`, and `about:blank`. All other schemes (`file:`, `javascript:`, `chrome:`, `data:`) are rejected.
+- **REST Navigation Schemes (`validate_navigation_url`):** Strictly `http`, `https`, and `about:blank`. All other schemes (`file:`, `javascript:`, `chrome:`, `data:`, `blob:`) are rejected.
+- **CDP Fetch Interceptor Schemes (`NetworkPolicy::check_request`):**
+  - `http` / `https`: Evaluated against `evaluate_network_url` (`Navigation` vs `Subresource`).
+  - `data:`: Allowed for subresources and navigation/download fetches (such as `<a download>` document triggers).
+  - `blob:`: Allowed unconditionally for subresources; for `RequestKind::Navigation`, parses the embedded inner URL and requires an `http` or `https` inner scheme passing `evaluate_network_url(..., RequestKind::Navigation)` (denying `blob:null/...`, `blob:file:///...`, and metadata/denied origins).
+  - `about:`: Allowed for `about:blank` and `about:srcdoc` (and any `about:` subresource).
+  - All other schemes (`file:`, `ftp:`, `javascript:`, `chrome:`, extension schemes) are denied.
 - **Credentials Forbidden:** URLs containing embedded username or password fields (e.g. `https://actor:token@domain.example`) are rejected.
 - **Loopback Access:** HTTP(S) destinations on `localhost`, `.localhost`, IPv4 loopback (`127.0.0.0/8`), and IPv6 loopback (`::1`, including mapped IPv4) are allowed on any port without an origin entry, in both production and development. Loopback refers to the server-hosted browser's network namespace, not necessarily the user's device. Navigations and subresources are subject to explicit `denied_destinations` entries.
 - **Private & Metadata Blocking:** Other private, link-local, broadcast, unspecified, and documentation IP ranges require an explicitly allowed target origin (or asset origin for subresources). Cloud metadata destinations remain denied even when explicitly allowed. Configured destination denies take precedence over all allowances.
 - **Security:** Any page opened in the hosted browser may attempt requests to server-loopback services. Protect sensitive local services with authentication and origin checks; loopback binding alone is not an access-control boundary. Browser network policy is not a complete egress sandbox and does not cover DNS resolution, WebSocket, or WebRTC.
 - **Public Internet:** HTTP(S) public destinations are permitted in both production and development.
+- **Native Host Downloads (`Browser.setDownloadBehavior`):** `install_navigation_watcher` (`selection.rs`) enables native Chromium downloads (`behavior: "allow"`, `eventsEnabled: true`) into `resolve_host_downloads_dir()` (`XDG_DOWNLOAD_DIR` if absolute, else `$HOME`/`$USERPROFILE/Downloads`, fallback `$TMPDIR/dam-hopper-downloads`). `Browser/Page.downloadWillBegin` and `downloadProgress` CDP events update `BrowserSessionDto.lastDownload` and emit `sessionUpdated`.
 
 ---
 
@@ -741,6 +820,7 @@ Frontend client API and stream controller exports (`packages/ui/src/api/browser-
 - `navigateBrowser(owner, sessionId, req)` / `historyBrowser(...)` / `reloadBrowser(...)`: Controls navigation state.
 - `setBrowserViewport(owner, sessionId, req)`: Sets CSS layout viewport and DPR under lease.
 - `acquireBrowserControl(owner, sessionId, req)` / `renewBrowserControl(...)` / `releaseBrowserControl(...)`: Manages 30s cooperative input lease.
+- `createBrowserDevToolsLease(owner, sessionId, req: CreateDevToolsLeaseRequest, signal?)` / `revokeBrowserDevToolsLease(...)` / `buildBrowserDevToolsUrl(...)`: Mints control-bound DevTools lease (`viewerId`, `leaseToken`, `controlEpoch`), revokes cleanly, and builds asset/WS URLs (`BrowserApp` / `BrowserDevToolsDock` require active control without auto-steal).
 - `respondBrowserDialog(owner, sessionId, req)`: Dismisses or confirms native JavaScript dialog.
 - `findInBrowserPage(owner, sessionId, req)`: Searches text in page ($\le 256$ chars).
 - `getBrowserSelectedText(owner, sessionId, leaseToken, signal?)`: Retrieves currently selected text ($\le 64$ KiB).
@@ -769,3 +849,4 @@ The Host Browser API and streaming transport are qualified by integrated test ha
 - **Tuning Grid & Zero-Polling (`packages/ui/e2e/os-host-browser/performance.spec.ts`):** Evaluates 12 candidate configurations against protocol safety caps; release profile requires `everyNthFrame = 1` (setting #7 q65 1280x900 default); static pages emit zero periodic `Page.captureScreenshot` calls.
 - **Security Matrix Integration (`server/tests/browser_host_security.rs`):** Validates role denial, single-use ticket replay/purpose/Origin fencing, `--no-auth` loopback socket enforcement, URL network policy, multi-target/multi-viewer concurrency limits, and live role demotion termination.
 - **Platform Containment & Reset (`server/tests/browser_host_platform.rs`):** Validates Chromium launch argument security allowlisting, Unix supervisor death-pipe architecture, advisory OS locking (`flock`), and `reset.json` restart fencing.
+- **Target-Scoped DevTools & Native Downloads (`server/tests/browser_host_devtools.rs`, `packages/ui/e2e/os-host-browser/devtools-security.spec.ts`):** Validates DevTools lease capacity/revocation, asset proxy CSP rewriting & path traversal rejection, WS single-claim/concurrency cap (`4`), control-epoch binding (`viewerId` + `leaseToken`), client/upstream CDP filtering (`DevToolsSessionFilter`), positive `OwnershipFence` F1 confinement (`Target.*` / `ServiceWorker.*` / nonlocal `Storage.*` / `BackgroundService.*` / `Browser.*` / cookie-cache `Network.*` denial & suppression across root and owned child sessions), real-Chromium two-tab nested-worker & OOPIF GUID download attribution into `XDG_DOWNLOAD_DIR` (`lastDownload`), two-viewer DevTools transfer & native held-input release, `test_devtools_stalled_write_omits_reply_keeps_control_unavailable`, per-auth-session revocation, and full OS Web UI (`BrowserDevToolsDock`, Cognito privacy, minimize/restore, tab switch, logout). Raw `/api/browser/cdp/*` remains an explicit privileged admin/automation exception outside cooperative viewer control.

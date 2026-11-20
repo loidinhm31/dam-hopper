@@ -659,14 +659,20 @@ async fn test_custom_min_interval_and_audio_chunk_validation() {
 async fn test_real_chromium_media_stealth_and_pcm_audio_bridge() {
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::Engine;
-    use chromiumoxide_cdp::cdp::browser_protocol::target::CreateTargetParams;
+    use dam_hopper_server::api::browser_host::global_session_registry;
     use dam_hopper_server::browser_host::cdp::CdpClient;
-    use dam_hopper_server::browser_host::process::{
-        find_browser_executable, BrowserLaunchConfig, BrowserProcess,
+    use dam_hopper_server::browser_host::config::BrowserHostConfig;
+    use dam_hopper_server::browser_host::manager::{
+        BrowserHostManager, DevToolsOwnershipSource, DevToolsRootFenceStatus,
     };
+    use dam_hopper_server::browser_host::process::find_browser_executable;
     use dam_hopper_server::browser_host::screencast::{ScreencastProducer, ScreencastState};
+    use dam_hopper_server::browser_host::session::{
+        CreateParams, CreateReservation, CreateSessionRequest, ViewportRequest,
+    };
     use serde_json::json;
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
 
     let exec = find_browser_executable(None).ok().or_else(|| {
         [
@@ -686,35 +692,108 @@ async fn test_real_chromium_media_stealth_and_pcm_audio_bridge() {
         return;
     };
 
+    let xo_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let xo_port = xo_listener.local_addr().unwrap().port();
     let tmp = tempdir().unwrap();
-    let mut config = BrowserLaunchConfig::new(tmp.path().join("media-stealth-test-data"));
-    config.executable_path = Some(exec);
-    config.headless = true;
-
-    let mut process = BrowserProcess::launch(config)
+    let browser_cfg = BrowserHostConfig {
+        enabled: true,
+        executable_path: Some(exec),
+        profile_root: Some(tmp.path().join("profiles")),
+        allowed_target_origins: vec![
+            format!("http://127.0.0.1:{xo_port}"),
+            format!("http://localhost:{xo_port}"),
+        ],
+        ..BrowserHostConfig::default()
+    };
+    let manager = BrowserHostManager::new(browser_cfg.clone(), None, CancellationToken::new());
+    let principal = format!("media-stealth-{}", Uuid::new_v4());
+    let handle = manager
+        .ensure_running(&principal, false)
         .await
         .expect("browser launch failed");
-    let client = CdpClient::connect(process.ws_endpoint())
+    let control = manager
+        .native_control(&principal, false)
         .await
-        .expect("CDP connect failed");
-    let target_res = client
-        .send_typed(
-            CreateTargetParams::builder()
-                .url("about:blank")
-                .build()
-                .unwrap(),
-            None,
+        .expect("native control");
+    let session_req = CreateSessionRequest {
+        creation_key: Uuid::new_v4().to_string(),
+        url: "about:blank".to_string(),
+        viewport: ViewportRequest {
+            width: 1280,
+            height: 720,
+            dpr: 1.0,
+        },
+    };
+    let CreateReservation::Pending { session_id } = global_session_registry()
+        .reserve_creation(
+            &CreateParams {
+                principal: &principal,
+                is_dev: false,
+                browser_incarnation: &handle.browser_incarnation,
+                profile_epoch: handle.profile_epoch,
+                request: &session_req,
+                allowed_origins: &browser_cfg.allowed_target_origins,
+                max_targets: manager.max_targets(),
+            },
+            &|| true,
         )
         .await
-        .expect("Target.createTarget failed");
+        .expect("reserve managed media test session")
+    else {
+        panic!("expected pending session reservation");
+    };
+    let target_id = control
+        .create_page(&session_id)
+        .await
+        .expect("create managed page");
+    global_session_registry()
+        .bind_native_target(&session_id, &handle.browser_incarnation, &target_id)
+        .await;
+    global_session_registry()
+        .commit_running(&session_id, &|| true)
+        .await
+        .expect("commit running session");
 
+    // Ensure the manager observer has admitted the root frame tree before OOPIF subframes mount.
+    let ownership_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let DevToolsOwnershipSource::LiveFence(fence) = manager.devtools_ownership_source(
+            &principal,
+            false,
+            handle.profile_epoch,
+            &handle.browser_incarnation,
+        ) {
+            if matches!(
+                fence.root_snapshot_status(
+                    &principal,
+                    false,
+                    &handle.browser_incarnation,
+                    handle.profile_epoch,
+                    &session_id,
+                    &target_id,
+                ),
+                DevToolsRootFenceStatus::Available { .. }
+            ) {
+                break;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < ownership_deadline,
+            "timed out waiting for manager observer to admit root frame tree"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
+
+    let client = CdpClient::connect(&handle.ws_endpoint)
+        .await
+        .expect("CDP connect failed");
     let producer = ScreencastProducer::new(
-        Uuid::new_v4().to_string(),
-        Uuid::new_v4().to_string(),
-        1,
+        session_id,
+        handle.browser_incarnation.clone(),
+        handle.profile_epoch,
         1,
         client.clone(),
-        target_res.target_id.into(),
+        target_id,
         TargetGeometry {
             css_width: 1280.0,
             css_height: 720.0,
@@ -1225,8 +1304,6 @@ async fn test_real_chromium_media_stealth_and_pcm_audio_bridge() {
     // Phase C: Real nested cross-origin HTTP iframes (top about:blank -> http://localhost:{port}/child -> http://127.0.0.1:{port}/grandchild)
     // `localhost` and `127.0.0.1` are distinct origins from each other and from `about:blank`, exercising
     // real OOPIF Target.attachedToTarget stealth injection and 2-hop cross-origin `postMessage` audio relay.
-    let xo_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let xo_port = xo_listener.local_addr().unwrap().port();
     let page_a_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let coalesce_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let page_a_hits_srv = page_a_hits.clone();
@@ -1795,7 +1872,7 @@ async fn test_real_chromium_media_stealth_and_pcm_audio_bridge() {
     );
 
     producer.remove_viewer_demand("sub-live-2").await;
-    let _ = process.terminate().await;
+    manager.shutdown_all().await;
 }
 
 #[test]

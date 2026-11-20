@@ -1,5 +1,5 @@
 import { useId, useRef, type KeyboardEvent, type ReactElement, type RefObject } from "react";
-import { ArrowLeft, ArrowRight, RotateCw, SlidersHorizontal, Volume2, VolumeX } from "lucide-react";
+import { ArrowLeft, ArrowRight, Code2, RotateCw, SlidersHorizontal, Volume2, VolumeX } from "lucide-react";
 import { isTabHistoryEnabled, isTabReloadable } from "./browser-navigation.js";
 import type { BrowserTabRuntime } from "./browser-tab-types.js";
 
@@ -14,6 +14,7 @@ export interface BrowserAddressBarProps {
   ownerMismatch: boolean;
   toolsOpen: boolean;
   toolsPanelId: string;
+  devToolsOpen?: boolean;
   addressInputRef?: RefObject<HTMLInputElement | null>;
   toolsButtonRef?: RefObject<HTMLButtonElement | null>;
   onDraftChange: (value: string) => void;
@@ -23,6 +24,7 @@ export interface BrowserAddressBarProps {
   onForward: () => void;
   onReload: () => void;
   onToggleAudio: () => void;
+  onToggleDevTools?: () => void;
   onToggleTools: () => void;
 }
 
@@ -34,14 +36,15 @@ const PHASE_LABELS: Record<BrowserTabRuntime["phase"], string> = {
 
 export function BrowserAddressBar({
   windowId, tab, draftValue, navigationPending, audioMuted, audioBlocked, privacyMasked, ownerMismatch,
-  toolsOpen, toolsPanelId, addressInputRef, toolsButtonRef, onDraftChange, onSubmitAddress, onEscapeDraft,
-  onBack, onForward, onReload, onToggleAudio, onToggleTools,
+  toolsOpen, toolsPanelId, devToolsOpen = false, addressInputRef, toolsButtonRef, onDraftChange, onSubmitAddress, onEscapeDraft,
+  onBack, onForward, onReload, onToggleAudio, onToggleDevTools, onToggleTools,
 }: BrowserAddressBarProps): ReactElement {
   const inputId = useId();
   const isComposingRef = useRef(false);
   const masked = privacyMasked || ownerMismatch;
   const historyEnabled = !masked && !navigationPending && isTabHistoryEnabled(tab);
   const reloadEnabled = !masked && !navigationPending && isTabReloadable(tab);
+  const devToolsEnabled = !masked && tab.phase === "live" && Boolean(tab.sessionId);
   const inputLocked = ownerMismatch || tab.phase === "closing" || tab.phase === "close-unknown" || tab.phase === "creating";
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -107,6 +110,15 @@ export function BrowserAddressBar({
         >
           {audioMuted ? <VolumeX className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> : <Volume2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}
           <span className="os-browser-audio-text">{audioText}</span>
+        </button>
+
+        <button
+          type="button" data-testid="browser-devtools-toggle-btn"
+          aria-label="Developer tools" aria-pressed={devToolsOpen} title="Developer tools"
+          disabled={!devToolsEnabled} onClick={onToggleDevTools}
+          className={`os-browser-icon-btn ${devToolsOpen ? "workbench-selection" : ""}`}
+        >
+          <Code2 className="w-3.5 h-3.5" aria-hidden="true" />
         </button>
 
         <button

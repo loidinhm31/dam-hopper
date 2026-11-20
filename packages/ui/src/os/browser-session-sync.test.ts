@@ -114,6 +114,35 @@ describe("tab-fenced browser session synchronization", () => {
     expect(readTab().snapshot?.geometry).toBe(geomRef);
   });
 
+  it("propagates lastDownload updates from sessionUpdated snapshots and reuses unchanged references", () => {
+    const dl1 = {
+      guid: "dl-1",
+      suggestedFilename: "archive.zip",
+      state: "inProgress" as const,
+      receivedBytes: 256,
+      totalBytes: 1024,
+    };
+    expect(sync({ lastDownload: dl1 })).toBe("applied");
+    const firstDlRef = readTab().snapshot?.lastDownload;
+    expect(firstDlRef).toEqual(dl1);
+
+    // Identical lastDownload payload does not trigger spurious store updates
+    store.updateAppState.mockClear();
+    expect(sync({ lastDownload: { ...dl1 } })).toBe("applied");
+    expect(store.updateAppState).not.toHaveBeenCalled();
+    expect(readTab().snapshot?.lastDownload).toBe(firstDlRef);
+
+    // Completed transition updates lastDownload with host filePath
+    const dlCompleted = {
+      ...dl1,
+      state: "completed" as const,
+      receivedBytes: 1024,
+      filePath: "/home/alice/Downloads/archive.zip",
+    };
+    expect(sync({ lastDownload: dlCompleted })).toBe("applied");
+    expect(readTab().snapshot?.lastDownload).toEqual(dlCompleted);
+  });
+
   it("fences wrong tab, owner mismatch, retired action/subscription, and closing native gate", () => {
     expect(sync({}, "tab-2")).toBe("detached");
     expect(syncBrowserSessionWindow(owner, "window-1", "tab-1", "session-1", snapshot, {

@@ -85,9 +85,16 @@ pub fn global_input_managers(
 
 pub async fn get_or_create_input_manager(session_id: &str) -> Arc<SessionInputManager> {
     let mut map = global_input_managers().write().await;
-    map.entry(session_id.to_string())
+    let mgr = map
+        .entry(session_id.to_string())
         .or_insert_with(|| SessionInputManager::new_shared(crate::browser_host::input::LEASE_TTL))
-        .clone()
+        .clone();
+    mgr.set_session_id(session_id);
+    mgr
+}
+
+pub async fn get_existing_input_manager(session_id: &str) -> Option<Arc<SessionInputManager>> {
+    global_input_managers().read().await.get(session_id).cloned()
 }
 fn register_selection_lease_end_hook(
     input_mgr: &SessionInputManager,
@@ -1733,6 +1740,9 @@ pub(crate) async fn revoke_auth_session_browser_resources(
     auth_session_id: &str,
 ) {
     state.browser_debug_artifacts.publish_revocation(principal);
+    crate::browser_host::devtools::global_devtools_leases()
+        .revoke_by_auth_session(principal, auth_session_id)
+        .await;
     let cancelled = global_attachment_manager()
         .revoke_by_auth_session(principal, auth_session_id)
         .await;
@@ -1766,6 +1776,9 @@ pub(crate) async fn fence_principal_browser_resources_sync(
     state: &AppState,
     principal: &str,
 ) -> Vec<String> {
+    crate::browser_host::devtools::global_devtools_leases()
+        .revoke_all_for_principal(principal)
+        .await;
     global_attachment_manager()
         .revoke_all_for_principal(principal)
         .await;
@@ -1833,6 +1846,9 @@ pub(crate) async fn retire_session_native_resources(session_id: &str) {
 pub(crate) async fn release_session_viewers(session_id: &str) {
     // Held native keys/buttons are released BEFORE sockets and producer go away.
     release_session_input(session_id).await;
+    crate::browser_host::devtools::global_devtools_leases()
+        .revoke_by_browser_session(session_id)
+        .await;
     global_attachment_manager()
         .revoke_by_browser_session(session_id)
         .await;
@@ -2119,6 +2135,1966 @@ pub async fn get_profile_reset_status(
         ),
     }
 }
+const MAX_DEVTOOLS_ASSET_BYTES: usize = 4 * 1024 * 1024;
+const DEVTOOLS_ASSET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+static DEVTOOLS_ASSET_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(DEVTOOLS_ASSET_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("build devtools asset http client")
+});
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateDevToolsLeaseRequest {
+    pub viewer_id: String,
+    pub lease_token: String,
+}
+
+fn is_valid_bounded_identifier(value: &str, max_len: usize) -> bool {
+    !value.is_empty() && value.len() <= max_len && value.bytes().all(|b| b.is_ascii_graphic())
+}
+
+/// POST /api/browser/sessions/{id}/devtools
+pub async fn create_devtools_lease(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    connect: Option<Extension<ConnectInfo<SocketAddr>>>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(id): Path<String>,
+    Json(body): Json<CreateDevToolsLeaseRequest>,
+) -> Response {
+    let admission = match authenticate_browser_caller(
+        &state,
+        &headers,
+        connect.as_ref(),
+        actor.as_ref().map(|Extension(a)| a),
+    )
+    .await
+    {
+        Ok(adm) => adm,
+        Err(resp) => return resp,
+    };
+
+    if !is_valid_bounded_identifier(&body.viewer_id, 128)
+        || !is_valid_bounded_identifier(&body.lease_token, 256)
+    {
+        return browser_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalidInput",
+            "viewerId and leaseToken must be bounded non-empty identifiers",
+        );
+    }
+
+    let (dto, target_id) = match global_session_registry()
+        .owned_running_target(&id, &admission.principal, admission.is_dev)
+        .await
+    {
+        Ok(found) => found,
+        Err(err) => return err.into(),
+    };
+
+    let profile_epoch =
+        crate::browser_host::decimal_counter::parse_canonical_u64(&dto.profile_epoch, false)
+            .unwrap_or(0);
+    if !state.browser_host.is_instance_live_sync(
+        &admission.principal,
+        admission.is_dev,
+        profile_epoch,
+        &dto.browser_incarnation,
+    ) {
+        return browser_error_response(
+            StatusCode::CONFLICT,
+            "staleIncarnation",
+            "browser instance is no longer live",
+        );
+    }
+
+    let Some(input_mgr) = get_existing_input_manager(&id).await else {
+        return crate::browser_host::input::InputError::LeaseNotFound.into();
+    };
+    let (control_epoch, epoch_cancel) = match input_mgr
+        .verify_control_authority_for_mint(&body.viewer_id, &body.lease_token)
+        .await
+    {
+        Ok(verified) => verified,
+        Err(err) => return err.into(),
+    };
+
+    if !global_attachment_manager()
+        .has_admitted_viewer_pair(
+            &admission,
+            &id,
+            &body.viewer_id,
+            profile_epoch,
+            &dto.browser_incarnation,
+        )
+        .await
+    {
+        return browser_error_response(
+            StatusCode::FORBIDDEN,
+            "viewerNotAdmitted",
+            "viewer does not have an active admitted attachment pair",
+        );
+    }
+
+    match crate::browser_host::devtools::global_devtools_leases()
+        .mint(
+            &admission,
+            &body.viewer_id,
+            control_epoch,
+            &id,
+            &target_id,
+            &dto.browser_incarnation,
+            profile_epoch,
+            Some(&epoch_cancel),
+        )
+        .await
+    {
+        Ok(lease) => {
+            // Close mint-vs-transfer race: recheck live authority & admission after inserting.
+            let still_live = input_mgr
+                .is_control_authority_live(control_epoch, &body.viewer_id)
+                .await
+                && global_attachment_manager()
+                    .has_admitted_viewer_pair(
+                        &admission,
+                        &id,
+                        &body.viewer_id,
+                        profile_epoch,
+                        &dto.browser_incarnation,
+                    )
+                    .await;
+            if !still_live {
+                let _ = crate::browser_host::devtools::global_devtools_leases()
+                    .revoke_by_token(&admission.principal, &id, &lease.token)
+                    .await;
+                return crate::browser_host::input::InputError::LeaseNotFound.into();
+            }
+            no_store_response(
+                StatusCode::OK,
+                serde_json::to_value(&lease).unwrap_or_default(),
+            )
+        }
+        Err(resp) => resp,
+    }
+}
+
+/// DELETE /api/browser/sessions/{id}/devtools/{token}
+pub async fn revoke_devtools_lease(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    connect: Option<Extension<ConnectInfo<SocketAddr>>>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path((id, token)): Path<(String, String)>,
+) -> Response {
+    let admission = match authenticate_browser_caller(
+        &state,
+        &headers,
+        connect.as_ref(),
+        actor.as_ref().map(|Extension(a)| a),
+    )
+    .await
+    {
+        Ok(adm) => adm,
+        Err(resp) => return resp,
+    };
+
+    if global_session_registry()
+        .session_exists_for_other(&id, &admission.principal)
+        .await
+    {
+        return browser_error_response(
+            StatusCode::NOT_FOUND,
+            "sessionNotFound",
+            "browser session not found",
+        );
+    }
+
+    let revoked = crate::browser_host::devtools::global_devtools_leases()
+        .revoke_by_token(&admission.principal, &id, &token)
+        .await;
+    no_store_response(StatusCode::OK, json!({ "revoked": revoked }))
+}
+
+async fn resolve_devtools_chrome_port(
+    state: &AppState,
+    lease: &crate::browser_host::devtools::DevToolsLease,
+) -> Result<u16, Response> {
+    if lease.cancel.is_cancelled() {
+        return Err(browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidDevToolsToken",
+            "devtools capability revoked",
+        ));
+    }
+    if crate::browser_host::auth::verify_live_admission(state, &lease.admission)
+        .await
+        .is_err()
+    {
+        return Err(browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidSession",
+            "live auth failed",
+        ));
+    }
+    if !state.browser_host.is_instance_live_sync(
+        &lease.admission.principal,
+        lease.admission.is_dev,
+        lease.profile_epoch,
+        &lease.browser_incarnation,
+    ) {
+        return Err(browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "staleIncarnation",
+            "browser instance is no longer live",
+        ));
+    }
+    let (_, target_id) = global_session_registry()
+        .owned_running_target(
+            &lease.browser_session_id,
+            &lease.admission.principal,
+            lease.admission.is_dev,
+        )
+        .await
+        .map_err(Response::from)?;
+    if target_id != lease.native_target_id {
+        return Err(browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "staleTarget",
+            "browser target rotated",
+        ));
+    }
+    let Some(input_mgr) = get_existing_input_manager(&lease.browser_session_id).await else {
+        return Err(browser_error_response(
+            StatusCode::FORBIDDEN,
+            "controlAuthorityLost",
+            "control authority is not active",
+        ));
+    };
+    if !input_mgr
+        .is_control_authority_live(lease.control_epoch, &lease.viewer_id)
+        .await
+    {
+        return Err(browser_error_response(
+            StatusCode::FORBIDDEN,
+            "controlAuthorityLost",
+            "control authority is no longer live",
+        ));
+    }
+    if !global_attachment_manager()
+        .has_admitted_viewer_pair(
+            &lease.admission,
+            &lease.browser_session_id,
+            &lease.viewer_id,
+            lease.profile_epoch,
+            &lease.browser_incarnation,
+        )
+        .await
+    {
+        return Err(browser_error_response(
+            StatusCode::FORBIDDEN,
+            "viewerNotAdmitted",
+            "viewer attachment pair is no longer active",
+        ));
+    }
+    let handle = state
+        .browser_host
+        .ensure_running(&lease.admission.principal, lease.admission.is_dev)
+        .await
+        .map_err(|e| {
+            browser_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "browserUnavailable",
+                &e.to_string(),
+            )
+        })?;
+    if handle.browser_incarnation != lease.browser_incarnation
+        || handle.profile_epoch != lease.profile_epoch
+    {
+        return Err(browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "staleIncarnation",
+            "browser incarnation mismatch",
+        ));
+    }
+    url::Url::parse(&handle.ws_endpoint)
+        .ok()
+        .and_then(|u| u.port())
+        .ok_or_else(|| {
+            browser_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internalError",
+                "missing browser port",
+            )
+        })
+}
+
+/// GET /api/browser/devtools/{token}/{*path}
+pub async fn proxy_devtools_asset(
+    State(state): State<AppState>,
+    Path((token, path)): Path<(String, String)>,
+) -> Response {
+    if crate::browser_host::devtools_filter::validate_devtools_asset_path(&path).is_err() {
+        return browser_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalidPath",
+            "invalid devtools asset path",
+        );
+    }
+    let Some(lease) = crate::browser_host::devtools::global_devtools_leases()
+        .resolve_and_refresh_asset(&token)
+        .await
+    else {
+        return browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidDevToolsToken",
+            "invalid or expired devtools token",
+        );
+    };
+    let chrome_port = match resolve_devtools_chrome_port(&state, &lease).await {
+        Ok(port) => port,
+        Err(resp) => {
+            let _ = crate::browser_host::devtools::global_devtools_leases()
+                .revoke_by_token(&lease.admission.principal, &lease.browser_session_id, &token)
+                .await;
+            return resp;
+        }
+    };
+    let Ok(resp) = DEVTOOLS_ASSET_CLIENT
+        .get(format!("http://127.0.0.1:{chrome_port}/devtools/{path}"))
+        .send()
+        .await
+    else {
+        return browser_error_response(
+            StatusCode::BAD_GATEWAY,
+            "badGateway",
+            "failed to fetch devtools asset",
+        );
+    };
+    if !resp.status().is_success() {
+        return browser_error_response(
+            StatusCode::NOT_FOUND,
+            "assetNotFound",
+            "devtools asset not found",
+        );
+    }
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let Ok(bytes) =
+        crate::browser_host::cdp_gateway::read_bounded_bytes(resp, MAX_DEVTOOLS_ASSET_BYTES).await
+    else {
+        return browser_error_response(
+            StatusCode::BAD_GATEWAY,
+            "badGateway",
+            "devtools asset exceeded size bound",
+        );
+    };
+    let (body_bytes, cache_ctl) = if content_type.to_ascii_lowercase().starts_with("text/html") {
+        let rewritten = crate::browser_host::devtools_filter::rewrite_devtools_html_csp(
+            &String::from_utf8_lossy(&bytes),
+        );
+        (rewritten.into_bytes(), "no-store")
+    } else {
+        (bytes, "private, max-age=300")
+    };
+    let mut out = Response::new(axum::body::Body::from(body_bytes));
+    *out.status_mut() = StatusCode::OK;
+    if let Ok(ct) = HeaderValue::from_str(&content_type) {
+        out.headers_mut().insert(header::CONTENT_TYPE, ct);
+    }
+    out.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache_ctl));
+    out.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    out.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    out
+}
+
+/// GET /api/browser/devtools/{token}/ws
+pub async fn devtools_ws_handler(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    ws: Result<
+        axum::extract::ws::WebSocketUpgrade,
+        axum::extract::ws::rejection::WebSocketUpgradeRejection,
+    >,
+) -> Response {
+    let ws = match ws {
+        Ok(upgrade) => upgrade,
+        Err(rej) => return rej.into_response(),
+    };
+    let (hash, lease, permit) = match crate::browser_host::devtools::global_devtools_leases()
+        .claim_ws(&token)
+        .await
+    {
+        Ok(claimed) => claimed,
+        Err(StatusCode::TOO_MANY_REQUESTS) => {
+            return browser_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "tooManyConnections",
+                "devtools websocket limit reached",
+            )
+        }
+        Err(StatusCode::CONFLICT) => {
+            return browser_error_response(
+                StatusCode::CONFLICT,
+                "leaseInUse",
+                "devtools websocket already active",
+            )
+        }
+        Err(_) => {
+            return browser_error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalidDevToolsToken",
+                "invalid or expired devtools token",
+            )
+        }
+    };
+    let chrome_port = match resolve_devtools_chrome_port(&state, &lease).await {
+        Ok(port) => port,
+        Err(resp) => {
+            crate::browser_host::devtools::global_devtools_leases()
+                .revoke_by_hash(&hash)
+                .await;
+            return resp;
+        }
+    };
+    ws.max_message_size(crate::browser_host::protocol::MAX_WS_MESSAGE_BYTES)
+        .max_frame_size(crate::browser_host::protocol::MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| {
+            relay_devtools_socket(socket, state, hash, lease, chrome_port, permit)
+        })
+}
+
+async fn relay_devtools_socket(
+    mut client_ws: axum::extract::ws::WebSocket,
+    state: AppState,
+    hash: [u8; 32],
+    lease: crate::browser_host::devtools::DevToolsLease,
+    chrome_port: u16,
+    permit: crate::browser_host::cdp_gateway::CdpGatewayPermit,
+) {
+    use std::collections::{HashMap, VecDeque};
+    use axum::extract::ws::Message as AxumWsMessage;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::sync::{mpsc, oneshot};
+    use tokio::time::timeout;
+    use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+    use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
+
+    use crate::browser_host::cdp::CdpError;
+    use crate::browser_host::cdp_gateway::{
+        write_with_cancel, write_with_outcome, AbortOnDrop, WriteOutcome, UPSTREAM_CONNECT_TIMEOUT,
+    };
+    use crate::browser_host::devtools::global_devtools_leases;
+    use crate::browser_host::devtools_filter::{
+        devtools_json_memory_bound, CdpInputEffect, ClassifiedDevToolsMessage,
+        DevToolsSessionFilter, OwnedTargetKind, UpstreamVerdict, CLIENT_CALL_ID_MAX,
+        INTERNAL_FILTER_ID_BASE,
+    };
+    use crate::browser_host::diagnostics::global_memory_controller;
+    use crate::browser_host::input::{SessionInputManager, DEVTOOLS_OP_DRAIN_TIMEOUT};
+    use crate::browser_host::input_native_release::{
+        CapturedNativeIdentity, DevToolsProxyReleaseRoute, NativeInputTarget, ProxyCleanupCommand,
+    };
+    use crate::browser_host::manager::{DevToolsOwnershipSource, DevToolsRootFenceStatus};
+    use crate::browser_host::protocol::{COMMAND_TIMEOUT_SECS, MAX_WS_MESSAGE_BYTES};
+    use crate::browser_host::session::TargetClass;
+    use uuid::Uuid;
+
+    const MAX_QUEUED_CDP_INPUT: usize = 32;
+    const MAX_PENDING_CDP_REPLIES: usize = 64;
+    const PENDING_ATTACH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+    #[derive(Debug, Clone, Copy)]
+    enum ProxyWriteOutcome {
+        Written,
+        NotWritten,
+        NotWrittenChildDetached,
+        Ambiguous,
+    }
+
+    struct ProxyInputWriteRequest {
+        json: String,
+        call_id: u64,
+        session_id: Option<String>,
+        write_done: oneshot::Sender<ProxyWriteOutcome>,
+        reply: oneshot::Sender<Result<(), CdpError>>,
+    }
+
+    let mut cfg = WebSocketConfig::default();
+    cfg.max_message_size = Some(MAX_WS_MESSAGE_BYTES);
+    cfg.max_frame_size = Some(MAX_WS_MESSAGE_BYTES);
+    let upstream_url = format!(
+        "ws://127.0.0.1:{chrome_port}/devtools/page/{}",
+        lease.native_target_id
+    );
+    let Ok(Ok((mut upstream_ws, _))) = timeout(
+        UPSTREAM_CONNECT_TIMEOUT,
+        tokio_tungstenite::connect_async_with_config(&upstream_url, Some(cfg), false),
+    )
+    .await
+    else {
+        let _ = timeout(
+            std::time::Duration::from_millis(500),
+            client_ws.send(AxumWsMessage::Close(None)),
+        )
+        .await;
+        global_devtools_leases().revoke_by_hash(&hash).await;
+        return;
+    };
+
+    // Recheck all bindings and Phase 02 instance ownership source after upstream setup before
+    // activating relay or forwarding anything.
+    let ownership_source = state.browser_host.devtools_ownership_source(
+        &lease.admission.principal,
+        lease.admission.is_dev,
+        lease.profile_epoch,
+        &lease.browser_incarnation,
+    );
+    let ownership_live_at_start = match &ownership_source {
+        DevToolsOwnershipSource::MockUnobserved => true,
+        DevToolsOwnershipSource::Unavailable => false,
+        DevToolsOwnershipSource::LiveFence(fence) => !matches!(
+            fence.root_snapshot_status(
+                &lease.admission.principal,
+                lease.admission.is_dev,
+                &lease.browser_incarnation,
+                lease.profile_epoch,
+                &lease.browser_session_id,
+                &lease.native_target_id,
+            ),
+            DevToolsRootFenceStatus::Retired
+        ),
+    };
+    let post_setup_input_mgr = if ownership_live_at_start
+        && !lease.cancel.is_cancelled()
+        && global_devtools_leases().is_lease_active(&hash).await
+        && resolve_devtools_chrome_port(&state, &lease).await.is_ok()
+    {
+        get_existing_input_manager(&lease.browser_session_id).await
+    } else {
+        None
+    };
+    let Some(input_mgr) = post_setup_input_mgr else {
+        let _ = timeout(std::time::Duration::from_millis(250), upstream_ws.close(None)).await;
+        let _ = timeout(
+            std::time::Duration::from_millis(250),
+            client_ws.send(AxumWsMessage::Close(None)),
+        )
+        .await;
+        global_devtools_leases().revoke_by_hash(&hash).await;
+        return;
+    };
+
+    let epoch_tracker = input_mgr.epoch_tracker(lease.control_epoch);
+    let (mut client_sink, mut client_stream) = client_ws.split();
+    let (mut upstream_sink, mut upstream_stream) = upstream_ws.split();
+
+    let (abort_tx, mut abort_rx) = mpsc::channel::<()>(1);
+    let admission = lease.admission.clone();
+    let state_auth = state.clone();
+    let watcher_input_mgr = input_mgr.clone();
+    let watcher_viewer_id = lease.viewer_id.clone();
+    let watcher_session_id = lease.browser_session_id.clone();
+    let watcher_incarnation = lease.browser_incarnation.clone();
+    let watcher_control_epoch = lease.control_epoch;
+    let watcher_profile_epoch = lease.profile_epoch;
+    let watcher_cancel = lease.cancel.clone();
+    let watcher = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(crate::browser_host::auth::LIVE_CHECK_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            if watcher_cancel.is_cancelled()
+                || crate::browser_host::auth::verify_live_admission(&state_auth, &admission)
+                    .await
+                    .is_err()
+                || !global_devtools_leases().refresh_ws(&hash).await
+                || !watcher_input_mgr
+                    .is_control_authority_live(watcher_control_epoch, &watcher_viewer_id)
+                    .await
+                || !global_attachment_manager()
+                    .has_admitted_viewer_pair(
+                        &admission,
+                        &watcher_session_id,
+                        &watcher_viewer_id,
+                        watcher_profile_epoch,
+                        &watcher_incarnation,
+                    )
+                    .await
+            {
+                let _ = abort_tx.send(()).await;
+                break;
+            }
+        }
+    });
+    let _watcher_guard = AbortOnDrop(Some(watcher));
+
+    let deadline_at = lease.admission.effective_deadline.map(|dl| {
+        let rem = (dl - chrono::Utc::now())
+            .to_std()
+            .unwrap_or(std::time::Duration::from_millis(1));
+        tokio::time::Instant::now() + rem
+    });
+    let deadline_sleep = tokio::time::sleep_until(
+        deadline_at.unwrap_or_else(|| {
+            tokio::time::Instant::now() + std::time::Duration::from_secs(86400 * 365)
+        }),
+    );
+    tokio::pin!(deadline_sleep);
+    let mut session_filter = DevToolsSessionFilter::new(&lease.native_target_id);
+    let mut fence_rx = match &ownership_source {
+        DevToolsOwnershipSource::LiveFence(fence) => Some(fence.subscribe_state()),
+        _ => None,
+    };
+    let mut captured_fence_version: Option<(u64, u64)> = match &ownership_source {
+        DevToolsOwnershipSource::LiveFence(fence) => match fence.root_snapshot_status(
+            &lease.admission.principal,
+            lease.admission.is_dev,
+            &lease.browser_incarnation,
+            lease.profile_epoch,
+            &lease.browser_session_id,
+            &lease.native_target_id,
+        ) {
+            DevToolsRootFenceStatus::Available { generation, epoch } => Some((generation, epoch)),
+            _ => None,
+        },
+        _ => None,
+    };
+    let mut pending_attach_deadlines: HashMap<String, tokio::time::Instant> = HashMap::new();
+
+    let (cleanup_tx, mut cleanup_rx) = mpsc::channel::<ProxyCleanupCommand>(128);
+    let proxy_conn_id = Uuid::new_v4();
+    let proxy_route = DevToolsProxyReleaseRoute {
+        conn_id: proxy_conn_id,
+        sender: cleanup_tx,
+    };
+    let (input_write_tx, mut input_write_rx) = mpsc::channel::<ProxyInputWriteRequest>(8);
+    let mut pending_input_replies: HashMap<(Option<String>, u64), oneshot::Sender<Result<(), CdpError>>> =
+        HashMap::new();
+    let mut pending_cleanup_replies: HashMap<u64, oneshot::Sender<Result<(), CdpError>>> =
+        HashMap::new();
+    let mut next_cleanup_id: u64 = CLIENT_CALL_ID_MAX + 1;
+
+    let mut queued_cdp_inputs: VecDeque<(u64, Option<String>, String, CdpInputEffect)> =
+        VecDeque::new();
+    let mut active_cdp_input: Option<tokio::task::JoinHandle<bool>> = None;
+
+    fn spawn_cdp_input_task(
+        input_mgr: Arc<SessionInputManager>,
+        lease: crate::browser_host::devtools::DevToolsLease,
+        proxy_route: DevToolsProxyReleaseRoute,
+        input_write_tx: mpsc::Sender<ProxyInputWriteRequest>,
+        call_id: u64,
+        session_id: Option<String>,
+        json: String,
+        effect: CdpInputEffect,
+    ) -> tokio::task::JoinHandle<bool> {
+        tokio::spawn(async move {
+            let Some(_op_permit) = input_mgr
+                .try_acquire_devtools_op_permit(lease.control_epoch, &lease.viewer_id)
+                .await
+            else {
+                return false;
+            };
+            let Some(gate) = input_mgr
+                .begin_devtools_input_dispatch(lease.control_epoch, &lease.viewer_id, &lease.cancel)
+                .await
+            else {
+                return false;
+            };
+            let cdp_target = match get_producer(&lease.browser_session_id).await {
+                Some(producer)
+                    if producer.target_id() == lease.native_target_id
+                        && producer.browser_incarnation() == lease.browser_incarnation =>
+                {
+                    match producer.ensure_page_session().await {
+                        Ok(page_session_id) => Some(NativeInputTarget {
+                            client: producer.cdp_client.clone(),
+                            page_session_id,
+                            geometry: producer.geometry().await,
+                        }),
+                        Err(_) => None,
+                    }
+                }
+                _ => None,
+            };
+            let identity = CapturedNativeIdentity {
+                native_target_id: lease.native_target_id.clone(),
+                browser_incarnation: lease.browser_incarnation.clone(),
+                profile_epoch: lease.profile_epoch,
+                cdp_target,
+                proxy_route: Some(proxy_route),
+            };
+            let pending_op = match input_mgr
+                .prepare_cdp_input_op(
+                    &gate,
+                    lease.control_epoch,
+                    &lease.viewer_id,
+                    identity,
+                    &effect,
+                )
+                .await
+            {
+                Ok(op) => op,
+                Err(_) => return false,
+            };
+            if lease.cancel.is_cancelled() {
+                if let Some(op) = pending_op {
+                    input_mgr.reject_native_op(&gate, op).await;
+                }
+                return false;
+            }
+            let (write_done_tx, write_done_rx) = oneshot::channel();
+            let (reply_tx, reply_rx) = oneshot::channel();
+            if input_write_tx
+                .send(ProxyInputWriteRequest {
+                    json,
+                    call_id,
+                    session_id,
+                    write_done: write_done_tx,
+                    reply: reply_tx,
+                })
+                .await
+                .is_err()
+            {
+                if let Some(op) = pending_op {
+                    input_mgr.reject_native_op(&gate, op).await;
+                }
+                return false;
+            }
+            match write_done_rx.await {
+                Ok(ProxyWriteOutcome::Written) => {}
+                Ok(ProxyWriteOutcome::NotWritten) => {
+                    if let Some(op) = pending_op {
+                        input_mgr.reject_native_op(&gate, op).await;
+                    }
+                    return false;
+                }
+                Ok(ProxyWriteOutcome::NotWrittenChildDetached) => {
+                    if let Some(op) = pending_op {
+                        input_mgr.reject_native_op(&gate, op).await;
+                    }
+                    return true;
+                }
+                Ok(ProxyWriteOutcome::Ambiguous) | Err(_) => {
+                    if let Some(op) = pending_op {
+                        input_mgr.mark_native_op_ambiguous(&gate, op).await;
+                    } else {
+                        input_mgr.mark_native_outcome_uncertain();
+                    }
+                    return false;
+                }
+            }
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(COMMAND_TIMEOUT_SECS),
+                reply_rx,
+            )
+            .await;
+            match outcome {
+                Ok(Ok(Ok(()))) => {
+                    if let Some(op) = pending_op {
+                        input_mgr.confirm_native_op(&gate, op).await;
+                    }
+                    true
+                }
+                Ok(Ok(Err(err @ CdpError::Protocol { .. }))) => {
+                    tracing::debug!(call_id, %err, "DevTools CDP input rejected by native target");
+                    if let Some(op) = pending_op {
+                        input_mgr.reject_native_op(&gate, op).await;
+                    }
+                    true
+                }
+                Ok(Ok(Err(_))) | Ok(Err(_)) | Err(_) => {
+                    if let Some(op) = pending_op {
+                        input_mgr.mark_native_op_ambiguous(&gate, op).await;
+                    } else {
+                        input_mgr.mark_native_outcome_uncertain();
+                    }
+                    false
+                }
+            }
+        })
+    }
+
+    fn resolve_reply_from_upstream(
+        val: &serde_json::Value,
+        pending_cleanup_replies: &mut HashMap<u64, oneshot::Sender<Result<(), CdpError>>>,
+        pending_input_replies: &mut HashMap<(Option<String>, u64), oneshot::Sender<Result<(), CdpError>>>,
+    ) -> bool {
+        let Some(id) = val.get("id").and_then(serde_json::Value::as_u64) else {
+            return false;
+        };
+        let session_id = val
+            .get("sessionId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let reply_result = if let Some(err) = val.get("error") {
+            let code = err
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(-32000);
+            let message = err
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("CDP error")
+                .to_string();
+            Err(CdpError::Protocol { code, message })
+        } else {
+            Ok(())
+        };
+        if let Some(tx) = pending_cleanup_replies.remove(&id) {
+            let _ = tx.send(reply_result);
+            return true;
+        }
+        if let Some(tx) = pending_input_replies.remove(&(session_id, id)) {
+            let _ = tx.send(reply_result);
+        }
+        false
+    }
+
+    enum RevalidateOutcome {
+        Ok,
+        RetiredChildren(Vec<String>),
+        CloseConnection,
+    }
+
+    async fn revalidate_devtools_live_ownership(
+        state: &AppState,
+        lease: &crate::browser_host::devtools::DevToolsLease,
+        input_mgr: &SessionInputManager,
+        ownership_source: &DevToolsOwnershipSource,
+        captured_fence_version: &mut Option<(u64, u64)>,
+        session_filter: &mut DevToolsSessionFilter,
+        pending_attach_deadlines: &mut HashMap<String, tokio::time::Instant>,
+    ) -> RevalidateOutcome {
+        if lease.cancel.is_cancelled()
+            || !state.browser_host.is_instance_live_sync(
+                &lease.admission.principal,
+                lease.admission.is_dev,
+                lease.profile_epoch,
+                &lease.browser_incarnation,
+            )
+            || !input_mgr
+                .is_control_authority_live(lease.control_epoch, &lease.viewer_id)
+                .await
+        {
+            return RevalidateOutcome::CloseConnection;
+        }
+        match ownership_source {
+            DevToolsOwnershipSource::MockUnobserved => RevalidateOutcome::Ok,
+            DevToolsOwnershipSource::Unavailable => RevalidateOutcome::CloseConnection,
+            DevToolsOwnershipSource::LiveFence(fence) => match fence.root_snapshot_status(
+                &lease.admission.principal,
+                lease.admission.is_dev,
+                &lease.browser_incarnation,
+                lease.profile_epoch,
+                &lease.browser_session_id,
+                &lease.native_target_id,
+            ) {
+                DevToolsRootFenceStatus::Retired => RevalidateOutcome::CloseConnection,
+                DevToolsRootFenceStatus::Pending => {
+                    if captured_fence_version.take().is_some() && session_filter.has_active_children() {
+                        pending_attach_deadlines.clear();
+                        match session_filter.retire_active_children() {
+                            Ok(cmds) => RevalidateOutcome::RetiredChildren(cmds),
+                            Err(()) => RevalidateOutcome::CloseConnection,
+                        }
+                    } else {
+                        RevalidateOutcome::Ok
+                    }
+                }
+                DevToolsRootFenceStatus::Available { generation, epoch } => {
+                    let prev = *captured_fence_version;
+                    *captured_fence_version = Some((generation, epoch));
+                    if prev.is_some_and(|p| p != (generation, epoch))
+                        && session_filter.has_active_children()
+                    {
+                        pending_attach_deadlines.clear();
+                        match session_filter.retire_active_children() {
+                            Ok(cmds) => RevalidateOutcome::RetiredChildren(cmds),
+                            Err(()) => RevalidateOutcome::CloseConnection,
+                        }
+                    } else {
+                        let mut detached_cmds = Vec::new();
+                        for (sid, tid) in session_filter.owned_iframe_sessions() {
+                            if fence
+                                .owns_child_target(
+                                    &lease.admission.principal,
+                                    lease.admission.is_dev,
+                                    &lease.browser_incarnation,
+                                    lease.profile_epoch,
+                                    &lease.browser_session_id,
+                                    &lease.native_target_id,
+                                    &tid,
+                                )
+                                .is_none()
+                            {
+                                pending_attach_deadlines.remove(&sid);
+                                match session_filter.retire_owned_child_session(&sid) {
+                                    Ok(cmds) => detached_cmds.extend(cmds),
+                                    Err(()) => return RevalidateOutcome::CloseConnection,
+                                }
+                            }
+                        }
+                        pending_attach_deadlines
+                            .retain(|sid, _| session_filter.is_session_pending(sid));
+                        if detached_cmds.is_empty() {
+                            RevalidateOutcome::Ok
+                        } else {
+                            RevalidateOutcome::RetiredChildren(detached_cmds)
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn resolve_pending_attaches(
+        state: &AppState,
+        lease: &crate::browser_host::devtools::DevToolsLease,
+        ownership_source: &DevToolsOwnershipSource,
+        captured_fence_version: &mut Option<(u64, u64)>,
+        session_filter: &mut DevToolsSessionFilter,
+        pending_attach_deadlines: &mut HashMap<String, tokio::time::Instant>,
+    ) -> Result<(Vec<String>, Vec<String>), ()> {
+        let mut to_client = Vec::new();
+        let mut to_upstream = Vec::new();
+        let now = tokio::time::Instant::now();
+        // Loop so a parent promotion can immediately unblock a child queued behind it.
+        loop {
+            let pending = session_filter.pending_attaches();
+            pending_attach_deadlines
+                .retain(|sid, _| pending.iter().any(|p| p.session_id == *sid));
+            if pending.is_empty() {
+                break;
+            }
+            let mut progressed = false;
+            for item in pending {
+                let expired = pending_attach_deadlines
+                    .get(&item.session_id)
+                    .is_some_and(|deadline| now >= *deadline);
+                let foreign_target = global_session_registry()
+                    .classify_target(&lease.browser_incarnation, &item.target_id)
+                    .await
+                    != TargetClass::Unknown;
+                let parent_ready = match &item.parent_session_id {
+                    None => Some(true),
+                    Some(pid) => {
+                        if session_filter.is_session_owned(pid) {
+                            Some(true)
+                        } else if pending_attach_deadlines.contains_key(pid) {
+                            Some(false)
+                        } else {
+                            None
+                        }
+                    }
+                };
+                if foreign_target || parent_ready.is_none() {
+                    pending_attach_deadlines.remove(&item.session_id);
+                    to_upstream.extend(session_filter.reject_pending_attach(&item.session_id, true)?);
+                    progressed = true;
+                    continue;
+                }
+                if parent_ready == Some(false) {
+                    if expired {
+                        pending_attach_deadlines.remove(&item.session_id);
+                        to_upstream.extend(session_filter.reject_pending_attach(&item.session_id, false)?);
+                        progressed = true;
+                    }
+                    continue;
+                }
+                enum Decision {
+                    Promote,
+                    Wait,
+                    Reject(bool),
+                }
+                let decision = match ownership_source {
+                    DevToolsOwnershipSource::Unavailable => Decision::Reject(false),
+                    DevToolsOwnershipSource::MockUnobserved => {
+                        if state.browser_host.is_instance_live_sync(
+                            &lease.admission.principal,
+                            lease.admission.is_dev,
+                            lease.profile_epoch,
+                            &lease.browser_incarnation,
+                        ) {
+                            Decision::Promote
+                        } else {
+                            Decision::Reject(false)
+                        }
+                    }
+                    DevToolsOwnershipSource::LiveFence(fence) => match fence.root_snapshot_status(
+                        &lease.admission.principal,
+                        lease.admission.is_dev,
+                        &lease.browser_incarnation,
+                        lease.profile_epoch,
+                        &lease.browser_session_id,
+                        &lease.native_target_id,
+                    ) {
+                        DevToolsRootFenceStatus::Retired => Decision::Reject(false),
+                        DevToolsRootFenceStatus::Pending => {
+                            if expired { Decision::Reject(false) } else { Decision::Wait }
+                        }
+                        DevToolsRootFenceStatus::Available { generation, epoch } => {
+                            if captured_fence_version.is_some_and(|p| p != (generation, epoch)) {
+                                Decision::Reject(false)
+                            } else {
+                                *captured_fence_version = Some((generation, epoch));
+                                match item.target_type {
+                                    OwnedTargetKind::DedicatedWorker => Decision::Promote,
+                                    OwnedTargetKind::Iframe => {
+                                        if fence
+                                            .owns_child_target(
+                                                &lease.admission.principal,
+                                                lease.admission.is_dev,
+                                                &lease.browser_incarnation,
+                                                lease.profile_epoch,
+                                                &lease.browser_session_id,
+                                                &lease.native_target_id,
+                                                &item.target_id,
+                                            )
+                                            .is_some()
+                                        {
+                                            Decision::Promote
+                                        } else if expired {
+                                            Decision::Reject(true)
+                                        } else {
+                                            Decision::Wait
+                                        }
+                                    }
+                                    OwnedTargetKind::RootPage => Decision::Reject(true),
+                                }
+                            }
+                        }
+                    },
+                };
+                match decision {
+                    Decision::Promote => {
+                        pending_attach_deadlines.remove(&item.session_id);
+                        if let Some(evt) = session_filter.promote_pending_attach(&item.session_id) {
+                            to_client.push(evt);
+                        }
+                        progressed = true;
+                    }
+                    Decision::Reject(mark_foreign) => {
+                        pending_attach_deadlines.remove(&item.session_id);
+                        to_upstream.extend(
+                            session_filter.reject_pending_attach(&item.session_id, mark_foreign)?,
+                        );
+                        progressed = true;
+                    }
+                    Decision::Wait => {}
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        Ok((to_client, to_upstream))
+    }
+
+    async fn send_upstream_texts<S>(
+        upstream_sink: &mut S,
+        texts: Vec<String>,
+        abort_rx: &mut mpsc::Receiver<()>,
+        deadline_at: Option<tokio::time::Instant>,
+        cancel: &tokio_util::sync::CancellationToken,
+        upstream_alive: &mut bool,
+        upstream_sink_poisoned: &mut bool,
+    ) -> bool
+    where
+        S: futures_util::Sink<UpstreamMessage> + Unpin,
+    {
+        for text in texts {
+            let (outcome, aborted) = write_with_cancel(
+                upstream_sink.send(UpstreamMessage::Text(text.into())),
+                abort_rx,
+                deadline_at,
+                Some(cancel),
+            )
+            .await;
+            if outcome != WriteOutcome::Ok || aborted {
+                *upstream_alive = false;
+                *upstream_sink_poisoned = true;
+                return false;
+            }
+        }
+        true
+    }
+
+    async fn send_client_texts<S>(
+        client_sink: &mut S,
+        texts: Vec<String>,
+        abort_rx: &mut mpsc::Receiver<()>,
+        deadline_at: Option<tokio::time::Instant>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> bool
+    where
+        S: futures_util::Sink<AxumWsMessage> + Unpin,
+    {
+        for text in texts {
+            if write_with_cancel(
+                client_sink.send(AxumWsMessage::Text(text.into())),
+                abort_rx,
+                deadline_at,
+                Some(cancel),
+            )
+            .await
+            .0
+                != WriteOutcome::Ok
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    async fn wait_fence_change(fence_rx: Option<&mut tokio::sync::watch::Receiver<u64>>) {
+        match fence_rx {
+            Some(rx) => {
+                if rx.changed().await.is_err() {
+                    futures_util::future::pending::<()>().await;
+                }
+            }
+            None => futures_util::future::pending::<()>().await,
+        }
+    }
+
+    let mut upstream_alive = true;
+    let mut upstream_sink_poisoned = false;
+
+    loop {
+        pending_attach_deadlines.retain(|sid, _| session_filter.is_session_pending(sid));
+        if active_cdp_input.is_none() {
+            while let Some((call_id, session_id, json, effect)) = queued_cdp_inputs.pop_front() {
+                if let Some(ref sid) = session_id {
+                    if !session_filter.is_session_owned(sid) {
+                        continue;
+                    }
+                }
+                active_cdp_input = Some(spawn_cdp_input_task(
+                    input_mgr.clone(),
+                    lease.clone(),
+                    proxy_route.clone(),
+                    input_write_tx.clone(),
+                    call_id,
+                    session_id,
+                    json,
+                    effect,
+                ));
+                break;
+            }
+        }
+        let has_active_input = active_cdp_input.is_some();
+        let active_input_fut = async {
+            match active_cdp_input.as_mut() {
+                Some(handle) => handle.await,
+                None => futures_util::future::pending().await,
+            }
+        };
+        let next_attach_deadline = pending_attach_deadlines.values().copied().min();
+        let attach_sleep = async {
+            match next_attach_deadline {
+                Some(dl) => tokio::time::sleep_until(dl).await,
+                None => futures_util::future::pending().await,
+            }
+        };
+        let watch_fence = session_filter.has_active_children();
+
+        tokio::select! {
+            biased;
+            _ = &mut deadline_sleep, if deadline_at.is_some() => break,
+            _ = lease.cancel.cancelled() => break,
+            _ = abort_rx.recv() => break,
+            _ = wait_fence_change(fence_rx.as_mut()), if watch_fence => {
+                match revalidate_devtools_live_ownership(
+                    &state,
+                    &lease,
+                    &input_mgr,
+                    &ownership_source,
+                    &mut captured_fence_version,
+                    &mut session_filter,
+                    &mut pending_attach_deadlines,
+                ).await {
+                    RevalidateOutcome::CloseConnection => break,
+                    RevalidateOutcome::RetiredChildren(cmds) => {
+                        if !send_upstream_texts(
+                            &mut upstream_sink,
+                            cmds,
+                            &mut abort_rx,
+                            deadline_at,
+                            &lease.cancel,
+                            &mut upstream_alive,
+                            &mut upstream_sink_poisoned,
+                        ).await {
+                            break;
+                        }
+                    }
+                    RevalidateOutcome::Ok => {}
+                }
+                let Ok((to_client, to_upstream)) = resolve_pending_attaches(
+                    &state,
+                    &lease,
+                    &ownership_source,
+                    &mut captured_fence_version,
+                    &mut session_filter,
+                    &mut pending_attach_deadlines,
+                ).await else { break; };
+                if !send_upstream_texts(
+                    &mut upstream_sink,
+                    to_upstream,
+                    &mut abort_rx,
+                    deadline_at,
+                    &lease.cancel,
+                    &mut upstream_alive,
+                    &mut upstream_sink_poisoned,
+                ).await {
+                    break;
+                }
+                let mut retired_replies = session_filter.take_retired_client_replies();
+                retired_replies.extend(to_client);
+                if !send_client_texts(
+                    &mut client_sink,
+                    retired_replies,
+                    &mut abort_rx,
+                    deadline_at,
+                    &lease.cancel,
+                ).await {
+                    break;
+                }
+            }
+            _ = attach_sleep => {
+                let Ok((to_client, to_upstream)) = resolve_pending_attaches(
+                    &state,
+                    &lease,
+                    &ownership_source,
+                    &mut captured_fence_version,
+                    &mut session_filter,
+                    &mut pending_attach_deadlines,
+                ).await else { break; };
+                if !send_upstream_texts(
+                    &mut upstream_sink,
+                    to_upstream,
+                    &mut abort_rx,
+                    deadline_at,
+                    &lease.cancel,
+                    &mut upstream_alive,
+                    &mut upstream_sink_poisoned,
+                ).await {
+                    break;
+                }
+                let mut retired_replies = session_filter.take_retired_client_replies();
+                retired_replies.extend(to_client);
+                if !send_client_texts(
+                    &mut client_sink,
+                    retired_replies,
+                    &mut abort_rx,
+                    deadline_at,
+                    &lease.cancel,
+                ).await {
+                    break;
+                }
+            }
+            cmd = cleanup_rx.recv() => {
+                let Some(cmd) = cmd else { break; };
+                if pending_cleanup_replies.len() >= MAX_PENDING_CDP_REPLIES {
+                    let _ = cmd.reply.send(Err(CdpError::TooManyPendingCommands {
+                        current: pending_cleanup_replies.len(),
+                        max: MAX_PENDING_CDP_REPLIES,
+                    }));
+                    continue;
+                }
+                let cid = next_cleanup_id;
+                next_cleanup_id = next_cleanup_id.saturating_add(1);
+                if next_cleanup_id >= INTERNAL_FILTER_ID_BASE {
+                    next_cleanup_id = CLIENT_CALL_ID_MAX + 1;
+                }
+                let payload = serde_json::json!({
+                    "id": cid,
+                    "method": cmd.method,
+                    "params": cmd.params,
+                })
+                .to_string();
+                pending_cleanup_replies.insert(cid, cmd.reply);
+                if write_with_outcome(upstream_sink.send(UpstreamMessage::Text(payload.into()))).await != WriteOutcome::Ok {
+                    if let Some(tx) = pending_cleanup_replies.remove(&cid) {
+                        let _ = tx.send(Err(CdpError::ConnectionClosed));
+                    }
+                    upstream_alive = false;
+                    upstream_sink_poisoned = true;
+                    break;
+                }
+            }
+            req = input_write_rx.recv() => {
+                let Some(req) = req else { break; };
+                if let Some(ref sid) = req.session_id {
+                    if !session_filter.is_session_owned(sid) {
+                        let _ = req.write_done.send(ProxyWriteOutcome::NotWrittenChildDetached);
+                        continue;
+                    }
+                }
+                let key = (req.session_id.clone(), req.call_id);
+                if lease.cancel.is_cancelled()
+                    || pending_input_replies.len() >= MAX_PENDING_CDP_REPLIES
+                    || pending_input_replies.contains_key(&key)
+                {
+                    let _ = req.write_done.send(ProxyWriteOutcome::NotWritten);
+                    continue;
+                }
+                pending_input_replies.insert(key.clone(), req.reply);
+                let (outcome, aborted) = write_with_cancel(
+                    upstream_sink.send(UpstreamMessage::Text(req.json.into())),
+                    &mut abort_rx,
+                    deadline_at,
+                    Some(&lease.cancel),
+                )
+                .await;
+                if outcome == WriteOutcome::Ok && !aborted {
+                    let _ = req.write_done.send(ProxyWriteOutcome::Written);
+                } else {
+                    pending_input_replies.remove(&key);
+                    let _ = req.write_done.send(ProxyWriteOutcome::Ambiguous);
+                    upstream_alive = false;
+                    upstream_sink_poisoned = true;
+                    break;
+                }
+            }
+            joined = active_input_fut, if has_active_input => {
+                active_cdp_input = None;
+                let ok = matches!(joined, Ok(true));
+                if !ok {
+                    break;
+                }
+            }
+            msg = client_stream.next() => {
+                let ok = match msg {
+                    Some(Ok(AxumWsMessage::Text(t))) => {
+                        let Some(memory_bound) = devtools_json_memory_bound(t.as_str()) else { break; };
+                        let Ok(_mem) = global_memory_controller().try_reserve(memory_bound) else { break; };
+                        match session_filter.classify_client_message(t.as_str()) {
+                            ClassifiedDevToolsMessage::Forward { json, call_id, session_id, input_effect } => {
+                                enum ChildCheck {
+                                    Proceed,
+                                    Retired(Vec<String>),
+                                    Close,
+                                }
+                                let child_check = if let Some(ref sid) = session_id {
+                                    match revalidate_devtools_live_ownership(
+                                        &state,
+                                        &lease,
+                                        &input_mgr,
+                                        &ownership_source,
+                                        &mut captured_fence_version,
+                                        &mut session_filter,
+                                        &mut pending_attach_deadlines,
+                                    ).await {
+                                        RevalidateOutcome::CloseConnection => ChildCheck::Close,
+                                        RevalidateOutcome::RetiredChildren(cmds) => {
+                                            if !send_upstream_texts(
+                                                &mut upstream_sink,
+                                                cmds,
+                                                &mut abort_rx,
+                                                deadline_at,
+                                                &lease.cancel,
+                                                &mut upstream_alive,
+                                                &mut upstream_sink_poisoned,
+                                            ).await {
+                                                ChildCheck::Close
+                                            } else if session_filter.is_session_owned(sid) {
+                                                ChildCheck::Proceed
+                                            } else {
+                                                let mut replies = session_filter.take_retired_client_replies();
+                                                if replies.is_empty() {
+                                                    replies.push(serde_json::json!({
+                                                        "id": call_id,
+                                                        "sessionId": sid,
+                                                        "error": { "code": -32601, "message": "Command disallowed in target-scoped DevTools" }
+                                                    }).to_string());
+                                                }
+                                                ChildCheck::Retired(replies)
+                                            }
+                                        }
+                                        RevalidateOutcome::Ok => {
+                                            if session_filter.is_session_owned(sid) {
+                                                ChildCheck::Proceed
+                                            } else {
+                                                ChildCheck::Close
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    ChildCheck::Proceed
+                                };
+                                match child_check {
+                                    ChildCheck::Close => false,
+                                    ChildCheck::Retired(err_replies) => {
+                                        send_client_texts(
+                                            &mut client_sink,
+                                            err_replies,
+                                            &mut abort_rx,
+                                            deadline_at,
+                                            &lease.cancel,
+                                        ).await
+                                    }
+                                    ChildCheck::Proceed => {
+                                        let retired_replies = session_filter.take_retired_client_replies();
+                                        if !retired_replies.is_empty()
+                                            && !send_client_texts(
+                                                &mut client_sink,
+                                                retired_replies,
+                                                &mut abort_rx,
+                                                deadline_at,
+                                                &lease.cancel,
+                                            ).await
+                                        {
+                                            false
+                                        } else if let Some(effect) = input_effect {
+                                            if active_cdp_input.is_none() && queued_cdp_inputs.is_empty() {
+                                                active_cdp_input = Some(spawn_cdp_input_task(
+                                                    input_mgr.clone(),
+                                                    lease.clone(),
+                                                    proxy_route.clone(),
+                                                    input_write_tx.clone(),
+                                                    call_id,
+                                                    session_id,
+                                                    json,
+                                                    effect,
+                                                ));
+                                                true
+                                            } else if queued_cdp_inputs.len() < MAX_QUEUED_CDP_INPUT {
+                                                queued_cdp_inputs.push_back((call_id, session_id, json, effect));
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        } else if let Some(_op_permit) = input_mgr
+                                            .try_acquire_devtools_op_permit(lease.control_epoch, &lease.viewer_id)
+                                            .await
+                                        {
+                                            if lease.cancel.is_cancelled() {
+                                                false
+                                            } else {
+                                                send_upstream_texts(
+                                                    &mut upstream_sink,
+                                                    vec![json],
+                                                    &mut abort_rx,
+                                                    deadline_at,
+                                                    &lease.cancel,
+                                                    &mut upstream_alive,
+                                                    &mut upstream_sink_poisoned,
+                                                ).await
+                                            }
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                }
+                            }
+                            ClassifiedDevToolsMessage::Reject(Some(err)) => {
+                                write_with_cancel(
+                                    client_sink.send(AxumWsMessage::Text(err.into())),
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    Some(&lease.cancel),
+                                )
+                                .await
+                                .0
+                                    == WriteOutcome::Ok
+                            }
+                            ClassifiedDevToolsMessage::Reject(None) => false,
+                        }
+                    }
+                    // CDP commands are text JSON envelopes; binary input is never relayed.
+                    Some(Ok(AxumWsMessage::Binary(_))) => false,
+                    Some(Ok(AxumWsMessage::Ping(p))) => {
+                        let (outcome, aborted) = write_with_cancel(
+                            upstream_sink.send(UpstreamMessage::Ping(p)),
+                            &mut abort_rx,
+                            deadline_at,
+                            Some(&lease.cancel),
+                        )
+                        .await;
+                        if outcome != WriteOutcome::Ok || aborted {
+                            upstream_alive = false;
+                            upstream_sink_poisoned = true;
+                        }
+                        outcome == WriteOutcome::Ok && !aborted
+                    }
+                    Some(Ok(AxumWsMessage::Pong(p))) => {
+                        let (outcome, aborted) = write_with_cancel(
+                            upstream_sink.send(UpstreamMessage::Pong(p)),
+                            &mut abort_rx,
+                            deadline_at,
+                            Some(&lease.cancel),
+                        )
+                        .await;
+                        if outcome != WriteOutcome::Ok || aborted {
+                            upstream_alive = false;
+                            upstream_sink_poisoned = true;
+                        }
+                        outcome == WriteOutcome::Ok && !aborted
+                    }
+                    Some(Ok(AxumWsMessage::Close(frame))) => {
+                        tracing::debug!(target_id = %lease.native_target_id, ?frame, "DevTools client sent close");
+                        false
+                    }
+                    Some(Err(error)) => {
+                        tracing::warn!(target_id = %lease.native_target_id, %error, "DevTools client websocket failed");
+                        false
+                    }
+                    None => {
+                        tracing::debug!(target_id = %lease.native_target_id, "DevTools client websocket ended");
+                        false
+                    }
+                };
+                if !ok {
+                    tracing::debug!(target_id = %lease.native_target_id, "DevTools client relay stopped");
+                    break;
+                }
+            }
+            msg = upstream_stream.next() => {
+                let ok = match msg {
+                    Some(Ok(UpstreamMessage::Text(t))) => {
+                        let Some(memory_bound) = devtools_json_memory_bound(t.as_str()) else {
+                            upstream_alive = false;
+                            break;
+                        };
+                        let Ok(_mem) = global_memory_controller().try_reserve(memory_bound) else {
+                            upstream_alive = false;
+                            break;
+                        };
+                        let verdict_ok = match session_filter.process_upstream_message(t.as_str()) {
+                            UpstreamVerdict::PassToInternalReply => {
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                    let _ = resolve_reply_from_upstream(
+                                        &val,
+                                        &mut pending_cleanup_replies,
+                                        &mut pending_input_replies,
+                                    );
+                                }
+                                true
+                            }
+                            UpstreamVerdict::Forward => {
+                                let mut child_sid: Option<String> = None;
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                    child_sid = val
+                                        .get("sessionId")
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(str::to_string);
+                                    let _ = resolve_reply_from_upstream(
+                                        &val,
+                                        &mut pending_cleanup_replies,
+                                        &mut pending_input_replies,
+                                    );
+                                }
+                                if let Some(ref sid) = child_sid {
+                                    match revalidate_devtools_live_ownership(
+                                        &state,
+                                        &lease,
+                                        &input_mgr,
+                                        &ownership_source,
+                                        &mut captured_fence_version,
+                                        &mut session_filter,
+                                        &mut pending_attach_deadlines,
+                                    ).await {
+                                        RevalidateOutcome::CloseConnection => {
+                                            tracing::debug!(target_id = %lease.native_target_id, "DevTools upstream child revalidation closed connection");
+                                            false
+                                        }
+                                        RevalidateOutcome::RetiredChildren(cmds) => {
+                                            send_upstream_texts(
+                                                &mut upstream_sink,
+                                                cmds,
+                                                &mut abort_rx,
+                                                deadline_at,
+                                                &lease.cancel,
+                                                &mut upstream_alive,
+                                                &mut upstream_sink_poisoned,
+                                            ).await && (!session_filter.is_session_owned(sid) || send_client_texts(
+                                                &mut client_sink,
+                                                vec![t.as_str().to_string()],
+                                                &mut abort_rx,
+                                                deadline_at,
+                                                &lease.cancel,
+                                            ).await)
+                                        }
+                                        RevalidateOutcome::Ok => {
+                                            send_client_texts(
+                                                &mut client_sink,
+                                                vec![t.as_str().to_string()],
+                                                &mut abort_rx,
+                                                deadline_at,
+                                                &lease.cancel,
+                                            ).await
+                                        }
+                                    }
+                                } else {
+                                    send_client_texts(
+                                        &mut client_sink,
+                                        vec![t.as_str().to_string()],
+                                        &mut abort_rx,
+                                        deadline_at,
+                                        &lease.cancel,
+                                    ).await
+                                }
+                            }
+                            UpstreamVerdict::ForwardText(payload) => {
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(payload.as_str()) {
+                                    let _ = resolve_reply_from_upstream(
+                                        &val,
+                                        &mut pending_cleanup_replies,
+                                        &mut pending_input_replies,
+                                    );
+                                }
+                                send_client_texts(
+                                    &mut client_sink,
+                                    vec![payload],
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                ).await
+                            }
+                            UpstreamVerdict::Suppress { internal_commands } => {
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                    let _ = resolve_reply_from_upstream(
+                                        &val,
+                                        &mut pending_cleanup_replies,
+                                        &mut pending_input_replies,
+                                    );
+                                }
+                                send_upstream_texts(
+                                    &mut upstream_sink,
+                                    internal_commands,
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                    &mut upstream_alive,
+                                    &mut upstream_sink_poisoned,
+                                ).await
+                            }
+                            UpstreamVerdict::ClientReplyAndDetach {
+                                client_text,
+                                internal_commands,
+                            } => {
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                    let _ = resolve_reply_from_upstream(
+                                        &val,
+                                        &mut pending_cleanup_replies,
+                                        &mut pending_input_replies,
+                                    );
+                                }
+                                send_upstream_texts(
+                                    &mut upstream_sink,
+                                    internal_commands,
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                    &mut upstream_alive,
+                                    &mut upstream_sink_poisoned,
+                                ).await && send_client_texts(
+                                    &mut client_sink,
+                                    vec![client_text],
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                ).await
+                            }
+                            UpstreamVerdict::PendingAttach { session_id, .. } => {
+                                pending_attach_deadlines.insert(
+                                    session_id,
+                                    tokio::time::Instant::now() + PENDING_ATTACH_TIMEOUT,
+                                );
+                                if let Some(rx) = &mut fence_rx {
+                                    let _ = rx.borrow_and_update();
+                                }
+                                match resolve_pending_attaches(
+                                    &state,
+                                    &lease,
+                                    &ownership_source,
+                                    &mut captured_fence_version,
+                                    &mut session_filter,
+                                    &mut pending_attach_deadlines,
+                                ).await {
+                                    Ok((to_client, to_upstream)) => {
+                                        send_upstream_texts(
+                                            &mut upstream_sink,
+                                            to_upstream,
+                                            &mut abort_rx,
+                                            deadline_at,
+                                            &lease.cancel,
+                                            &mut upstream_alive,
+                                            &mut upstream_sink_poisoned,
+                                        ).await && send_client_texts(
+                                            &mut client_sink,
+                                            to_client,
+                                            &mut abort_rx,
+                                            deadline_at,
+                                            &lease.cancel,
+                                        ).await
+                                    }
+                                    Err(()) => {
+                                        tracing::debug!(target_id = %lease.native_target_id, "DevTools PendingAttach resolve returned Err(())");
+                                        false
+                                    }
+                                }
+                            }
+                            UpstreamVerdict::CloseConnection { internal_commands } => {
+                                tracing::debug!(target_id = %lease.native_target_id, upstream_msg = %t, "DevTools upstream verdict CloseConnection");
+                                let _ = send_upstream_texts(
+                                    &mut upstream_sink,
+                                    internal_commands,
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                    &mut upstream_alive,
+                                    &mut upstream_sink_poisoned,
+                                ).await;
+                                false
+                            }
+                        };
+                        let ok = if verdict_ok {
+                            let retired_replies = session_filter.take_retired_client_replies();
+                            if retired_replies.is_empty() {
+                                true
+                            } else {
+                                send_client_texts(
+                                    &mut client_sink,
+                                    retired_replies,
+                                    &mut abort_rx,
+                                    deadline_at,
+                                    &lease.cancel,
+                                ).await
+                            }
+                        } else {
+                            false
+                        };
+                        ok
+                    }
+                    // Native DevTools application messages are text JSON only.
+                    Some(Ok(UpstreamMessage::Binary(_))) => {
+                        upstream_alive = false;
+                        false
+                    }
+                    Some(Ok(UpstreamMessage::Ping(p))) => {
+                        write_with_cancel(
+                            client_sink.send(AxumWsMessage::Ping(p)),
+                            &mut abort_rx,
+                            deadline_at,
+                            Some(&lease.cancel),
+                        )
+                        .await
+                        .0
+                            == WriteOutcome::Ok
+                    }
+                    Some(Ok(UpstreamMessage::Pong(p))) => {
+                        write_with_cancel(
+                            client_sink.send(AxumWsMessage::Pong(p)),
+                            &mut abort_rx,
+                            deadline_at,
+                            Some(&lease.cancel),
+                        )
+                        .await
+                        .0
+                            == WriteOutcome::Ok
+                    }
+                    Some(Ok(UpstreamMessage::Frame(_))) => true,
+                    Some(Ok(UpstreamMessage::Close(frame))) => {
+                        tracing::debug!(target_id = %lease.native_target_id, ?frame, "Chromium DevTools websocket sent close");
+                        upstream_alive = false;
+                        false
+                    }
+                    Some(Err(error)) => {
+                        tracing::warn!(target_id = %lease.native_target_id, %error, "Chromium DevTools websocket failed");
+                        upstream_alive = false;
+                        false
+                    }
+                    None => {
+                        tracing::debug!(target_id = %lease.native_target_id, "Chromium DevTools websocket ended");
+                        upstream_alive = false;
+                        false
+                    }
+                };
+                if !ok {
+                    tracing::debug!(target_id = %lease.native_target_id, "Chromium DevTools relay stopped");
+                    break;
+                }
+            }
+        }
+    }
+
+    drop(_watcher_guard);
+    drop(client_stream);
+    let _ = timeout(
+        std::time::Duration::from_millis(250),
+        client_sink.send(AxumWsMessage::Close(None)),
+    )
+    .await;
+    drop(client_sink);
+
+    queued_cdp_inputs.clear();
+    global_devtools_leases().revoke_by_hash(&hash).await;
+
+    if !upstream_alive {
+        input_write_rx.close();
+        while let Ok(req) = input_write_rx.try_recv() {
+            let _ = req.write_done.send(ProxyWriteOutcome::NotWritten);
+        }
+        for (_, tx) in pending_input_replies.drain() {
+            let _ = tx.send(Err(CdpError::ConnectionClosed));
+        }
+        for (_, tx) in pending_cleanup_replies.drain() {
+            let _ = tx.send(Err(CdpError::ConnectionClosed));
+        }
+        if let Some(handle) = active_cdp_input.take() {
+            let _ = handle.await;
+        }
+        if input_mgr
+            .has_unresolved_devtools_activity(lease.control_epoch)
+            .await
+        {
+            if let Some(handle) = input_mgr
+                .fence_devtools_authority(lease.control_epoch, &lease.viewer_id)
+                .await
+            {
+                let _ = handle.await;
+            }
+        }
+    } else {
+        let has_unresolved = input_mgr
+            .has_unresolved_devtools_activity(lease.control_epoch)
+            .await
+            || active_cdp_input.is_some();
+        let authority_still_live = input_mgr
+            .is_control_authority_live(lease.control_epoch, &lease.viewer_id)
+            .await;
+        let own_fence = if has_unresolved && authority_still_live {
+            input_mgr
+                .fence_devtools_authority(lease.control_epoch, &lease.viewer_id)
+                .await
+        } else {
+            None
+        };
+        let needs_cleanup_service = has_unresolved || !authority_still_live;
+        if needs_cleanup_service {
+            let cleanup_timeout = DEVTOOLS_OP_DRAIN_TIMEOUT
+                + std::time::Duration::from_secs(COMMAND_TIMEOUT_SECS + 2);
+            let cleanup_deadline = tokio::time::sleep(cleanup_timeout);
+            tokio::pin!(cleanup_deadline);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = epoch_tracker.wait_cleanup_done() => break,
+                    _ = &mut cleanup_deadline => break,
+                    joined = async {
+                        match active_cdp_input.as_mut() {
+                            Some(handle) => handle.await,
+                            None => futures_util::future::pending().await,
+                        }
+                    }, if active_cdp_input.is_some() => {
+                        let _ = joined;
+                        active_cdp_input = None;
+                    }
+                    req = input_write_rx.recv() => {
+                        if let Some(req) = req {
+                            let _ = req.write_done.send(ProxyWriteOutcome::NotWritten);
+                        }
+                    }
+                    cmd = cleanup_rx.recv() => {
+                        let Some(cmd) = cmd else { break; };
+                        if pending_cleanup_replies.len() >= MAX_PENDING_CDP_REPLIES {
+                            let _ = cmd.reply.send(Err(CdpError::TooManyPendingCommands {
+                                current: pending_cleanup_replies.len(),
+                                max: MAX_PENDING_CDP_REPLIES,
+                            }));
+                            continue;
+                        }
+                        let cid = next_cleanup_id;
+                        next_cleanup_id = next_cleanup_id.saturating_add(1);
+                        if next_cleanup_id >= INTERNAL_FILTER_ID_BASE {
+                            next_cleanup_id = CLIENT_CALL_ID_MAX + 1;
+                        }
+                        let payload = serde_json::json!({
+                            "id": cid,
+                            "method": cmd.method,
+                            "params": cmd.params,
+                        })
+                        .to_string();
+                        pending_cleanup_replies.insert(cid, cmd.reply);
+                        if write_with_outcome(upstream_sink.send(UpstreamMessage::Text(payload.into()))).await != WriteOutcome::Ok {
+                            if let Some(tx) = pending_cleanup_replies.remove(&cid) {
+                                let _ = tx.send(Err(CdpError::ConnectionClosed));
+                            }
+                            upstream_sink_poisoned = true;
+                            break;
+                        }
+                    }
+                    msg = upstream_stream.next() => {
+                        match msg {
+                            Some(Ok(UpstreamMessage::Text(t))) => {
+                                if let Some(memory_bound) = devtools_json_memory_bound(t.as_str()) {
+                                    if global_memory_controller().try_reserve(memory_bound).is_ok() {
+                                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                                            resolve_reply_from_upstream(
+                                                &val,
+                                                &mut pending_cleanup_replies,
+                                                &mut pending_input_replies,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Some(Ok(UpstreamMessage::Binary(_)))
+                            | Some(Ok(UpstreamMessage::Close(_)))
+                            | Some(Err(_))
+                            | None => break,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            input_write_rx.close();
+            while let Ok(req) = input_write_rx.try_recv() {
+                let _ = req.write_done.send(ProxyWriteOutcome::NotWritten);
+            }
+            for (_, tx) in pending_input_replies.drain() {
+                let _ = tx.send(Err(CdpError::ConnectionClosed));
+            }
+            for (_, tx) in pending_cleanup_replies.drain() {
+                let _ = tx.send(Err(CdpError::ConnectionClosed));
+            }
+            if let Some(handle) = active_cdp_input.take() {
+                let _ = handle.await;
+            }
+            if let Some(handle) = own_fence {
+                let _ = handle.await;
+            }
+        }
+    }
+
+    if !upstream_sink_poisoned {
+        let _ = timeout(
+            std::time::Duration::from_millis(500),
+            upstream_sink.close(),
+        )
+        .await;
+    }
+    drop(permit);
+}
+
 pub use crate::browser_host::cdp_gateway::{
     cdp_ws_handler, cdp_ws_handler_target, get_cdp_json_alias, get_cdp_list, get_cdp_version,
 };

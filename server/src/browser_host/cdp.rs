@@ -22,6 +22,7 @@ use super::protocol::{
     COMMAND_TIMEOUT_SECS, MAX_COMMAND_BYTES, MAX_PENDING_COMMANDS, MAX_WRITER_QUEUE_BYTES,
     MAX_WRITER_QUEUE_MESSAGES, MAX_WS_MESSAGE_BYTES,
 };
+use super::target_ownership::{ConnectionToken, OwnershipFence, ValidityToken};
 
 /// Per-frame bookkeeping (metadata object, ids) charged on top of the base64 payload.
 const SCREENCAST_FRAME_OVERHEAD_BYTES: usize = 1024;
@@ -47,9 +48,11 @@ const FIRST_POLICY_COMMAND_ID: i32 = -1;
 /// Slots of the browser-level target lifecycle channel (created/attached/destroyed/crashed).
 /// An overflow forces the consumer to re-inventory the native targets.
 const MAX_TARGET_EVENT_SLOTS: usize = 128;
+const MAX_ORDERED_EVENT_SLOTS: usize = 128;
 const MAX_TARGET_ID_BYTES: usize = 128;
 const MAX_REQUEST_ID_BYTES: usize = 128;
 const MAX_RESOURCE_TYPE_BYTES: usize = 32;
+const FRAME_TREE_STAGING_RESERVATION_BYTES: usize = 16 * 1024 * 1024;
 /// Result of a bounded, close-cancellable WebSocket write.
 enum WriteOutcome {
     Done,
@@ -206,12 +209,52 @@ pub fn parse_native_capture_time_unix_ms(metadata: &Value) -> Option<u64> {
     }
     Some(ms_f64 as u64)
 }
+/// Resolves the host machine's native downloads directory (`XDG_DOWNLOAD_DIR` if absolute,
+/// otherwise `$HOME/Downloads`, falling back to `std::env::temp_dir().join("dam-hopper-downloads")`),
+/// ensuring the directory exists.
+pub fn resolve_host_downloads_dir() -> std::path::PathBuf {
+    let dir = std::env::var_os("XDG_DOWNLOAD_DIR")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .filter(|v| !v.is_empty())
+                .map(|home| std::path::PathBuf::from(home).join("Downloads"))
+        })
+        .unwrap_or_else(|| std::env::temp_dir().join("dam-hopper-downloads"));
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        warn!(path = %dir.display(), error = %err, "Failed to create host downloads directory");
+    }
+    dir
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameDetachReason {
+    Remove,
+    Swap,
+}
+
 #[derive(Debug, Clone)]
 pub enum CdpLifecycleEvent {
+    FrameAttached {
+        session_id: Option<String>,
+        frame_id: String,
+        parent_frame_id: String,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    FrameDetached {
+        session_id: Option<String>,
+        frame_id: String,
+        reason: FrameDetachReason,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
     FrameNavigated {
         session_id: Option<String>,
         is_main_frame: bool,
         frame_id: Option<String>,
+        parent_frame_id: Option<String>,
         url: Option<String>,
         loader_id: Option<String>,
         _reservation: Option<Arc<MemoryReservation>>,
@@ -225,6 +268,22 @@ pub enum CdpLifecycleEvent {
     InspectNodeRequested {
         session_id: Option<String>,
         backend_node_id: i64,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    DownloadWillBegin {
+        session_id: Option<String>,
+        frame_id: Option<String>,
+        guid: String,
+        suggested_filename: String,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    DownloadProgress {
+        session_id: Option<String>,
+        guid: String,
+        state: String,
+        received_bytes: u64,
+        total_bytes: u64,
+        file_path: Option<String>,
         _reservation: Option<Arc<MemoryReservation>>,
     },
     Overflow,
@@ -275,6 +334,74 @@ pub enum CdpTargetEvent {
     },
     Overflow,
 }
+/// Position is meaningful only within this client and connection generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CdpStreamPosition {
+    pub generation: u64,
+    pub sequence: u64,
+}
+
+#[derive(Debug)]
+pub enum CdpOrderedEvent {
+    Lifecycle(Arc<CdpLifecycleEvent>),
+    Target(Arc<CdpTargetEvent>),
+    /// A flattened target session was detached; this is a topology retirement, not stream loss.
+    SessionDetached {
+        parent_session_id: Option<String>,
+        session_id: String,
+        target_id: Option<String>,
+    },
+    /// The command id uniquely correlates this marker with the returned snapshot.
+    FrameTreeBarrier { command_id: usize },
+    /// A projection or memory admission failed; all current facts must be invalidated.
+    Overflow,
+    /// This connection can no longer supply authoritative facts.
+    Disconnected,
+}
+
+#[derive(Debug)]
+pub struct CdpOrderedRecord {
+    pub position: CdpStreamPosition,
+    pub event: CdpOrderedEvent,
+    pub(crate) validity_token: Option<ValidityToken>,
+    _reservation: Option<MemoryReservation>,
+}
+
+/// A snapshot is usable only after consuming its matching marker without lag or overflow.
+pub struct CdpFrameTreeSnapshot {
+    pub result: Value,
+    pub position: CdpStreamPosition,
+    pub command_id: usize,
+    _reservation: Arc<MemoryReservation>,
+}
+
+/// An admitted frame-tree command whose marker can be matched before awaiting its result.
+pub struct CdpFrameTreeRequest {
+    pending: PendingCommand,
+    reservation: Arc<MemoryReservation>,
+}
+
+impl CdpFrameTreeRequest {
+    /// Identifies this request's marker in the ordered event stream.
+    pub fn command_id(&self) -> usize {
+        self.pending.command_id
+    }
+
+    /// Waits for the command result and its actor-ordered barrier position.
+    pub async fn wait(mut self) -> Result<CdpFrameTreeSnapshot, CdpError> {
+        let command_id = self.pending.command_id;
+        let barrier = self.pending.barrier.take().expect("barrier requested");
+        let result = self.pending.wait().await?;
+        let position = barrier.await.map_err(|_| CdpError::Transport("frame tree barrier lost".into()))?;
+        Ok(CdpFrameTreeSnapshot {
+            result,
+            position,
+            command_id,
+            _reservation: self.reservation,
+        })
+    }
+}
+
 
 /// Synchronously transfers browser-wide containment to the process owner before the
 /// policy transport can disappear. Independent of every producer/page lifetime.
@@ -419,8 +546,9 @@ struct PendingRequest {
     sender: oneshot::Sender<Result<Value, CdpError>>,
     deadline: Instant,
     nav_meta: Option<(Option<String>, &'static str)>,
-    /// Keeps the command slot and payload bytes reserved until the request leaves the map.
+    barrier: Option<oneshot::Sender<CdpStreamPosition>>,
     _reservation: CommandReservation,
+    _response_reservation: Option<Arc<MemoryReservation>>,
 }
 
 /// Shared race between a lease fence and the actor's start-of-write claim.
@@ -449,9 +577,11 @@ enum ActorMessage {
         id: usize,
         json: String,
         reservation: CommandReservation,
+        response_reservation: Option<Arc<MemoryReservation>>,
         sender: oneshot::Sender<Result<Value, CdpError>>,
         deadline: Instant,
         nav_meta: Option<(Option<String>, &'static str)>,
+        barrier: Option<oneshot::Sender<CdpStreamPosition>>,
         cancellation: Option<InputCommandCancellation>,
     },
 }
@@ -515,6 +645,7 @@ struct ActorLink {
     close_notify: Arc<Notify>,
     /// Sender lives in a monitor until the actor task and its transport have been dropped.
     transport_closed: tokio::sync::watch::Receiver<()>,
+    generation: u64,
 }
 
 /// State that outlives a connection: every actor generation publishes into the same event
@@ -524,15 +655,17 @@ struct ActorShared {
     screencast_tx: tokio::sync::broadcast::Sender<Arc<ScreencastFrameData>>,
     event_tx: tokio::sync::broadcast::Sender<Arc<CdpLifecycleEvent>>,
     target_tx: tokio::sync::broadcast::Sender<Arc<CdpTargetEvent>>,
+    ordered_tx: tokio::sync::broadcast::Sender<Arc<CdpOrderedRecord>>,
     memory_controller: Arc<MemoryAdmissionController>,
     stats: Arc<CdpActorStats>,
     request_policy: SharedRequestPolicy,
     nav_listeners: SharedNavListeners,
+    ownership_fence: Option<Arc<OwnershipFence>>,
 }
 
 impl ActorShared {
     /// Spawns one connection actor over `ws_stream` and returns its writer side.
-    fn spawn_actor<S>(&self, ws_stream: S) -> ActorLink
+    fn spawn_actor<S>(&self, ws_stream: S, generation: u64) -> Result<ActorLink, CdpError>
     where
         S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
             + SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
@@ -540,6 +673,15 @@ impl ActorShared {
             + Unpin
             + 'static,
     {
+        let ownership = match &self.ownership_fence {
+            Some(fence) => Some(ActorOwnership {
+                fence: fence.clone(),
+                connection: fence.start_next_generation().ok_or_else(|| {
+                    CdpError::Transport("CDP ownership fence cannot start a generation".into())
+                })?,
+            }),
+            None => None,
+        };
         let (command_tx, command_rx) = mpsc::channel(MAX_WRITER_QUEUE_MESSAGES);
         let close_notify = Arc::new(Notify::new());
         let actor = CdpActor {
@@ -549,6 +691,10 @@ impl ActorShared {
             screencast_tx: self.screencast_tx.clone(),
             event_tx: self.event_tx.clone(),
             target_tx: self.target_tx.clone(),
+            ordered_tx: self.ordered_tx.clone(),
+            generation,
+            ownership,
+            sequence: 0,
             memory_controller: self.memory_controller.clone(),
             pending_commands: HashMap::with_capacity(MAX_PENDING_COMMANDS),
             stats: self.stats.clone(),
@@ -563,11 +709,12 @@ impl ActorShared {
             let _ = actor_task.await;
             drop(transport_alive);
         });
-        ActorLink {
+        Ok(ActorLink {
             command_tx,
             close_notify,
+            generation,
             transport_closed,
-        }
+        })
     }
 }
 
@@ -576,6 +723,8 @@ pub struct PendingCommand {
     receiver: oneshot::Receiver<Result<Value, CdpError>>,
     deadline: Instant,
     cancellation: Option<InputCommandCancellation>,
+    barrier: Option<oneshot::Receiver<CdpStreamPosition>>,
+    command_id: usize,
 }
 
 impl PendingCommand {
@@ -640,22 +789,33 @@ pub struct CdpClient {
     screencast_rx_broadcast: tokio::sync::broadcast::Sender<Arc<ScreencastFrameData>>,
     event_rx_broadcast: tokio::sync::broadcast::Sender<Arc<CdpLifecycleEvent>>,
     target_rx_broadcast: tokio::sync::broadcast::Sender<Arc<CdpTargetEvent>>,
+    ordered_rx_broadcast: tokio::sync::broadcast::Sender<Arc<CdpOrderedRecord>>,
     memory_controller: Arc<MemoryAdmissionController>,
     stats: Arc<CdpActorStats>,
     request_policy: SharedRequestPolicy,
     policy_setup: tokio::sync::Mutex<bool>,
     nav_listeners: SharedNavListeners,
+    ownership_fence: Option<Arc<OwnershipFence>>,
 }
 
 impl CdpClient {
     /// Connect to a CDP WebSocket endpoint with bounded buffers and actor loops.
     pub async fn connect(ws_url: &str) -> Result<Arc<Self>, CdpError> {
         let ws_stream = Self::dial(ws_url).await?;
-        Ok(Self::build(
+        Self::build(
             ws_stream,
             global_memory_controller().clone(),
             Some(ws_url.to_string()),
-        ))
+            None,
+        )
+    }
+
+    pub(crate) async fn connect_with_ownership_fence(
+        ws_url: &str,
+        fence: Arc<OwnershipFence>,
+    ) -> Result<Arc<Self>, CdpError> {
+        let ws_stream = Self::dial(ws_url).await?;
+        Self::build(ws_stream, global_memory_controller().clone(), Some(ws_url.to_string()), Some(fence))
     }
 
     async fn dial(
@@ -699,14 +859,15 @@ impl CdpClient {
             + Unpin
             + 'static,
     {
-        Self::build(ws_stream, memory_controller, None)
+        Self::build(ws_stream, memory_controller, None, None).expect("unfenced actor starts")
     }
 
     fn build<S>(
         ws_stream: S,
         memory_controller: Arc<MemoryAdmissionController>,
         endpoint: Option<String>,
-    ) -> Arc<Self>
+        ownership_fence: Option<Arc<OwnershipFence>>,
+    ) -> Result<Arc<Self>, CdpError>
     where
         S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
             + SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
@@ -718,6 +879,7 @@ impl CdpClient {
         let (event_tx, _) = tokio::sync::broadcast::channel(MAX_LIFECYCLE_EVENT_SLOTS);
         let request_policy = Arc::new(std::sync::RwLock::new(None));
         let (target_tx, _) = tokio::sync::broadcast::channel(MAX_TARGET_EVENT_SLOTS);
+        let (ordered_tx, _) = tokio::sync::broadcast::channel(MAX_ORDERED_EVENT_SLOTS);
         let stats = Arc::new(CdpActorStats::default());
         let nav_listeners: SharedNavListeners = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -725,14 +887,16 @@ impl CdpClient {
             screencast_tx: screencast_tx.clone(),
             event_tx: event_tx.clone(),
             target_tx: target_tx.clone(),
+            ordered_tx: ordered_tx.clone(),
             memory_controller: memory_controller.clone(),
             stats: stats.clone(),
             request_policy: request_policy.clone(),
             nav_listeners: nav_listeners.clone(),
+            ownership_fence: ownership_fence.clone(),
         };
-        let link = shared.spawn_actor(ws_stream);
+        let link = shared.spawn_actor(ws_stream, 1)?;
 
-        Arc::new(Self {
+        Ok(Arc::new(Self {
             next_call_id: AtomicU64::new(1),
             link: std::sync::RwLock::new(link),
             endpoint,
@@ -747,10 +911,12 @@ impl CdpClient {
             request_policy,
             policy_setup: tokio::sync::Mutex::new(false),
             target_rx_broadcast: target_tx,
+            ordered_rx_broadcast: ordered_tx,
             memory_controller,
             stats,
             nav_listeners,
-        })
+            ownership_fence,
+        }))
     }
 
     fn link(&self) -> ActorLink {
@@ -785,17 +951,22 @@ impl CdpClient {
                     .to_string(),
             });
         }
+        let generation = link.generation.checked_add(1).ok_or_else(|| {
+            CdpError::Transport("CDP actor generations exhausted".into())
+        })?;
         let ws_stream = Self::dial(endpoint).await?;
         let shared = ActorShared {
             screencast_tx: self.screencast_rx_broadcast.clone(),
             event_tx: self.event_rx_broadcast.clone(),
             target_tx: self.target_rx_broadcast.clone(),
+            ordered_tx: self.ordered_rx_broadcast.clone(),
             memory_controller: self.memory_controller.clone(),
             stats: self.stats.clone(),
             request_policy: self.request_policy.clone(),
             nav_listeners: self.nav_listeners.clone(),
+            ownership_fence: self.ownership_fence.clone(),
         };
-        let link = shared.spawn_actor(ws_stream);
+        let link = shared.spawn_actor(ws_stream, generation)?;
         *self.link.write().unwrap_or_else(|e| e.into_inner()) = link;
         Ok(())
     }
@@ -821,6 +992,12 @@ impl CdpClient {
 
     pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<Arc<CdpLifecycleEvent>> {
         self.event_rx_broadcast.subscribe()
+    }
+
+    /// Subscribe before requesting a snapshot. `Lagged`, `Overflow`, `Disconnected`, a
+    /// generation change, or a sequence gap invalidates all facts derived from this stream.
+    pub fn subscribe_ordered_events(&self) -> tokio::sync::broadcast::Receiver<Arc<CdpOrderedRecord>> {
+        self.ordered_rx_broadcast.subscribe()
     }
 
     /// Installs one browser-owned interceptor before publishing any managed Page session.
@@ -908,6 +1085,32 @@ impl CdpClient {
         .await
     }
 
+    /// Enqueues a frame-tree snapshot without waiting for the browser. Subscribe to ordered
+    /// events first, then use the returned command id to identify its response marker.
+    pub fn begin_frame_tree_snapshot(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<CdpFrameTreeRequest, CdpError> {
+        let reservation = Arc::new(
+            self.memory_controller.try_reserve(FRAME_TREE_STAGING_RESERVATION_BYTES)
+                .map_err(|_| CdpError::Transport("frame-tree snapshot memory admission failed".into()))?,
+        );
+        let pending = self.enqueue::<Value>(
+            "Page.getFrameTree", None, session_id, None, None, None,
+            Some(reservation.clone()), true,
+        )?;
+        Ok(CdpFrameTreeRequest { pending, reservation })
+    }
+
+    /// Returns the frame tree and its actor-ordered response marker. The caller must consume
+    /// the matching marker on a subscription established before issuing this command.
+    pub async fn get_frame_tree_with_barrier(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<CdpFrameTreeSnapshot, CdpError> {
+        self.begin_frame_tree_snapshot(session_id)?.wait().await
+    }
+
     /// Send a navigation CDP command bound to an explicit captured navigation revision epoch.
     pub async fn send_navigation_command(
         &self,
@@ -938,7 +1141,7 @@ impl CdpClient {
         explicit_epoch: Option<u64>,
         expected_url: Option<&str>,
     ) -> Result<Value, CdpError> {
-        self.enqueue(method, params, session_id, explicit_epoch, expected_url, None)?
+        self.enqueue(method, params, session_id, explicit_epoch, expected_url, None, None, false)?
             .wait()
             .await
     }
@@ -953,6 +1156,8 @@ impl CdpClient {
         explicit_epoch: Option<u64>,
         expected_url: Option<&str>,
         cancellation: Option<InputCommandCancellation>,
+        response_reservation: Option<Arc<MemoryReservation>>,
+        with_barrier: bool,
     ) -> Result<PendingCommand, CdpError> {
         let mut reservation = self.budget.reserve_slot()?;
 
@@ -979,6 +1184,12 @@ impl CdpClient {
             String::from_utf8(writer.buf).map_err(|e| CdpError::Deserialization(e.to_string()))?;
 
         let (sender, receiver) = oneshot::channel();
+        let (barrier_sender, barrier_receiver) = if with_barrier {
+            let (tx, rx) = oneshot::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
         let deadline = Instant::now() + Duration::from_secs(COMMAND_TIMEOUT_SECS);
 
         let nav_method = classify_nav_method(method);
@@ -1004,9 +1215,11 @@ impl CdpClient {
             id: call_id,
             json,
             reservation,
+            response_reservation,
             sender,
             deadline,
             nav_meta,
+            barrier: barrier_sender,
             cancellation: cancellation.clone(),
         }) {
             if let Some(m) = nav_method {
@@ -1024,7 +1237,7 @@ impl CdpClient {
             .total_commands_sent
             .fetch_add(1, Ordering::Relaxed);
 
-        Ok(PendingCommand { receiver, deadline, cancellation })
+        Ok(PendingCommand { receiver, deadline, cancellation, barrier: barrier_receiver, command_id: call_id })
     }
 
     /// Queue one input command with a cancellation race against the actor's write claim.
@@ -1035,7 +1248,7 @@ impl CdpClient {
         session_id: &str,
         cancellation: InputCommandCancellation,
     ) -> Result<PendingCommand, CdpError> {
-        self.enqueue(method, Some(params), Some(session_id), None, None, Some(cancellation))
+        self.enqueue(method, Some(params), Some(session_id), None, None, Some(cancellation), None, false)
     }
 
     /// Send a strongly typed command from chromiumoxide_types / chromiumoxide_cdp.
@@ -1073,7 +1286,7 @@ impl CdpClient {
         use chromiumoxide_types::Method;
         let params = ScreencastFrameAckParams::new(frame_session_id);
         let method = params.identifier().to_string();
-        let command = self.enqueue(&method, Some(&params), Some(session_id), None, None, None)?;
+        let command = self.enqueue(&method, Some(&params), Some(session_id), None, None, None, None, false)?;
         Ok(PendingAck {
             command,
             stats: self.stats.clone(),
@@ -1086,6 +1299,17 @@ impl CdpClient {
     }
 }
 
+struct ActorOwnership {
+    fence: Arc<OwnershipFence>,
+    connection: ConnectionToken,
+}
+
+impl Drop for ActorOwnership {
+    fn drop(&mut self) {
+        self.fence.disconnect(self.connection);
+    }
+}
+
 struct CdpActor<S> {
     ws_stream: S,
     command_rx: mpsc::Receiver<ActorMessage>,
@@ -1093,6 +1317,10 @@ struct CdpActor<S> {
     screencast_tx: tokio::sync::broadcast::Sender<Arc<ScreencastFrameData>>,
     event_tx: tokio::sync::broadcast::Sender<Arc<CdpLifecycleEvent>>,
     target_tx: tokio::sync::broadcast::Sender<Arc<CdpTargetEvent>>,
+    ordered_tx: tokio::sync::broadcast::Sender<Arc<CdpOrderedRecord>>,
+    generation: u64,
+    ownership: Option<ActorOwnership>,
+    sequence: u64,
     memory_controller: Arc<MemoryAdmissionController>,
     pending_commands: HashMap<usize, PendingRequest>,
     stats: Arc<CdpActorStats>,
@@ -1111,6 +1339,96 @@ where
         + Unpin
         + 'static,
 {
+    // Payloads retain their existing reservations; this accounts for the ordered envelope.
+    // Overflow is a fixed-size, bounded emergency record.
+    fn publish_ordered(&mut self, event: CdpOrderedEvent) -> Result<CdpStreamPosition, CdpError> {
+        self.publish_ordered_with_bytes(event, 0)
+    }
+
+    fn publish_ordered_with_bytes(
+        &mut self,
+        event: CdpOrderedEvent,
+        payload_bytes: usize,
+    ) -> Result<CdpStreamPosition, CdpError> {
+        let Some(sequence) = self.sequence.checked_add(1) else {
+            if let Some(ownership) = &self.ownership {
+                ownership.fence.retire(ownership.connection);
+            }
+            let _ = self.ordered_tx.send(Arc::new(CdpOrderedRecord {
+                position: CdpStreamPosition { generation: self.generation, sequence: self.sequence },
+                event: CdpOrderedEvent::Overflow,
+                validity_token: None,
+                _reservation: None,
+            }));
+            return Err(CdpError::Transport("CDP ordered sequence exhausted".into()));
+        };
+        self.sequence = sequence;
+        let position = CdpStreamPosition { generation: self.generation, sequence };
+        if matches!(event, CdpOrderedEvent::Overflow | CdpOrderedEvent::Disconnected) {
+            if let Some(ownership) = &self.ownership {
+                if matches!(event, CdpOrderedEvent::Disconnected) {
+                    ownership.fence.disconnect(ownership.connection);
+                } else {
+                    ownership.fence.invalidate(ownership.connection);
+                }
+            }
+            let _ = self.ordered_tx.send(Arc::new(CdpOrderedRecord {
+                position, event, validity_token: None, _reservation: None,
+            }));
+            return Ok(position);
+        }
+        let bytes = std::mem::size_of::<CdpOrderedRecord>().checked_add(payload_bytes);
+        let reservation = bytes.and_then(|bytes| self.memory_controller.try_reserve(bytes).ok());
+        let sent = if let Some(ownership) = &self.ownership {
+            ownership.fence.publish(ownership.connection, |token| {
+                if self.ordered_tx.len() >= MAX_ORDERED_EVENT_SLOTS || reservation.is_none() {
+                    return false;
+                }
+                self.ordered_tx.send(Arc::new(CdpOrderedRecord {
+                    position, event, validity_token: Some(token), _reservation: reservation,
+                })).is_ok()
+            })
+        } else if reservation.is_some() {
+            self.ordered_tx.send(Arc::new(CdpOrderedRecord {
+                position, event, validity_token: None, _reservation: reservation,
+            })).is_ok()
+        } else {
+            false
+        };
+        if sent {
+            Ok(position)
+        } else {
+            let _ = self.ordered_tx.send(Arc::new(CdpOrderedRecord {
+                position, event: CdpOrderedEvent::Overflow, validity_token: None, _reservation: None,
+            }));
+            Err(CdpError::Transport("CDP ordered event not admitted or no subscriber".into()))
+        }
+    }
+
+    fn publish_lifecycle(&mut self, event: CdpLifecycleEvent) -> Result<(), CdpError> {
+        let event = Arc::new(event);
+        let overflow = matches!(&*event, CdpLifecycleEvent::Overflow);
+        let ordered = if overflow { CdpOrderedEvent::Overflow } else { CdpOrderedEvent::Lifecycle(event.clone()) };
+        let result = self.publish_ordered(ordered);
+        let _ = self.event_tx.send(event);
+        match result {
+            Err(CdpError::Transport(message)) if message == "CDP ordered sequence exhausted" => Err(CdpError::Transport(message)),
+            _ => Ok(()),
+        }
+    }
+
+    fn publish_target(&mut self, event: CdpTargetEvent) -> Result<(), CdpError> {
+        let event = Arc::new(event);
+        let overflow = matches!(&*event, CdpTargetEvent::Overflow);
+        let ordered = if overflow { CdpOrderedEvent::Overflow } else { CdpOrderedEvent::Target(event.clone()) };
+        let result = self.publish_ordered(ordered);
+        let _ = self.target_tx.send(event);
+        match result {
+            Err(CdpError::Transport(message)) if message == "CDP ordered sequence exhausted" => Err(CdpError::Transport(message)),
+            _ => Ok(()),
+        }
+    }
+
     async fn run(mut self) {
         let mut sweep_interval = tokio::time::interval(Duration::from_millis(500));
 
@@ -1119,7 +1437,7 @@ where
                 // Command submission from clients
                 cmd_opt = self.command_rx.recv() => {
                     match cmd_opt {
-                        Some(ActorMessage::SendCommand { id, json, reservation, sender, deadline, nav_meta, cancellation }) => {
+                        Some(ActorMessage::SendCommand { id, json, reservation, response_reservation, sender, deadline, nav_meta, cancellation, barrier }) => {
                             // Caller cancellation check: skip command if caller abandoned the request before dequeue
                             if sender.is_closed() {
                                 if let Some((ref sid, m)) = nav_meta {
@@ -1170,7 +1488,9 @@ where
                                 sender,
                                 deadline,
                                 nav_meta,
+                                barrier,
                                 _reservation: reservation,
+                                _response_reservation: response_reservation,
                             });
                         }
                         None => {
@@ -1345,6 +1665,26 @@ where
                         }
                     }
                 }
+                if let Some(barrier) = pending.barrier {
+                    if pending.sender.is_closed() {
+                        return Ok(());
+                    }
+                    if Instant::now() >= pending.deadline {
+                        let _ = pending.sender.send(Err(CdpError::CommandTimeout));
+                        return Ok(());
+                    }
+                    if outcome.is_ok() {
+                        match self.publish_ordered(CdpOrderedEvent::FrameTreeBarrier { command_id: id }) {
+                            Ok(position) => { let _ = barrier.send(position); }
+                            Err(err) => {
+                                let exhausted = self.sequence == u64::MAX;
+                                let _ = pending.sender.send(Err(err.clone()));
+                                if exhausted { return Err(err); }
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
                 let _ = pending.sender.send(outcome);
             }
             return Ok(());
@@ -1360,19 +1700,85 @@ where
                     method.as_str(),
                     "Overlay.inspectNodeRequested"
                         | "Page.frameNavigated"
+                        | "Page.frameAttached"
+                        | "Page.frameDetached"
                         | "Page.navigatedWithinDocument"
+                        | "Browser.downloadWillBegin"
+                        | "Page.downloadWillBegin"
+                        | "Browser.downloadProgress"
+                        | "Page.downloadProgress"
                 ) =>
             {
+                let is_frame_fact = matches!(
+                    method.as_str(),
+                    "Page.frameNavigated" | "Page.frameAttached" | "Page.frameDetached"
+                );
                 let session_id = match env.session_id {
-                    Some(Value::String(s)) if s.len() <= MAX_EVENT_SESSION_ID_BYTES => Some(s),
+                    Some(Value::String(s)) if s.len() <= MAX_EVENT_SESSION_ID_BYTES
+                        && (!is_frame_fact || !s.is_empty()) => Some(s),
                     Some(Value::String(_)) => {
-                        let _ = self.event_tx.send(Arc::new(CdpLifecycleEvent::Overflow));
-                        return Ok(());
+                        return self.publish_lifecycle(CdpLifecycleEvent::Overflow);
+                    }
+                    _ if is_frame_fact => {
+                        return self.publish_lifecycle(CdpLifecycleEvent::Overflow);
                     }
                     _ => None,
                 };
                 let params = env.params.as_ref();
                 let projected = match method.as_str() {
+                    "Page.frameAttached" | "Page.frameDetached" => {
+                        let frame_id = params
+                            .and_then(|p| p.get("frameId"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty() && id.len() <= MAX_EVENT_SESSION_ID_BYTES);
+                        let parent_id = params
+                            .and_then(|p| p.get("parentFrameId"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty() && id.len() <= MAX_EVENT_SESSION_ID_BYTES);
+                        let detach_reason = match params.and_then(|p| p.get("reason")) {
+                            None => Some(FrameDetachReason::Remove),
+                            Some(Value::String(reason)) if reason == "remove" => {
+                                Some(FrameDetachReason::Remove)
+                            }
+                            Some(Value::String(reason)) if reason == "swap" => {
+                                Some(FrameDetachReason::Swap)
+                            }
+                            Some(_) => None,
+                        };
+                        match (frame_id, parent_id, method.as_str()) {
+                            (Some(frame_id), Some(parent_id), "Page.frameAttached") => {
+                                let bytes = std::mem::size_of::<CdpLifecycleEvent>()
+                                    + session_id.as_ref().map_or(0, String::len)
+                                    + frame_id.len() + parent_id.len();
+                                match self.memory_controller.try_reserve(bytes) {
+                                    Ok(res) => CdpLifecycleEvent::FrameAttached {
+                                        session_id,
+                                        frame_id: frame_id.to_string(),
+                                        parent_frame_id: parent_id.to_string(),
+                                        _reservation: Some(Arc::new(res)),
+                                    },
+                                    Err(_) => CdpLifecycleEvent::Overflow,
+                                }
+                            }
+                            (Some(frame_id), _, "Page.frameDetached") => {
+                                let Some(reason) = detach_reason else {
+                                    return self.publish_lifecycle(CdpLifecycleEvent::Overflow);
+                                };
+                                let bytes = std::mem::size_of::<CdpLifecycleEvent>()
+                                    + session_id.as_ref().map_or(0, String::len) + frame_id.len();
+                                match self.memory_controller.try_reserve(bytes) {
+                                    Ok(res) => CdpLifecycleEvent::FrameDetached {
+                                        session_id,
+                                        frame_id: frame_id.to_string(),
+                                        reason,
+                                        _reservation: Some(Arc::new(res)),
+                                    },
+                                    Err(_) => CdpLifecycleEvent::Overflow,
+                                }
+                            }
+                            _ => CdpLifecycleEvent::Overflow,
+                        }
+                    }
                     "Page.frameNavigated" => {
                         let is_main_frame =
                             params.and_then(|p| p.pointer("/frame/parentId")).is_none();
@@ -1391,15 +1797,32 @@ where
                             .and_then(Value::as_str)
                             .filter(|id| !id.is_empty() && id.len() <= MAX_EVENT_SESSION_ID_BYTES)
                             .map(str::to_string);
+                        let parent_value = params.and_then(|p| p.pointer("/frame/parentId"));
+                        let parent_frame_id = parent_value
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty() && id.len() <= MAX_EVENT_SESSION_ID_BYTES);
                         notify_frame_navigated(
                             &self.nav_listeners,
                             session_id.as_deref(),
                             is_main_frame,
                             loader_id.as_deref(),
                         );
+                        let invalid_optional = |value: Option<&Value>, max: usize, nonempty: bool| {
+                            value.is_some_and(|v| {
+                                !v.as_str().is_some_and(|s| s.len() <= max && (!nonempty || !s.is_empty()))
+                            })
+                        };
+                        if frame_id.is_none()
+                            || (parent_value.is_some() && parent_frame_id.is_none())
+                            || invalid_optional(params.and_then(|p| p.pointer("/frame/url")), MAX_URL_BYTES, false)
+                            || invalid_optional(params.and_then(|p| p.pointer("/frame/loaderId")), MAX_EVENT_SESSION_ID_BYTES, true)
+                        {
+                            return self.publish_lifecycle(CdpLifecycleEvent::Overflow);
+                        }
                         let bytes = std::mem::size_of::<CdpLifecycleEvent>()
                             + session_id.as_ref().map_or(0, String::len)
                             + frame_id.as_ref().map_or(0, String::len)
+                            + parent_frame_id.map_or(0, str::len)
                             + url.as_ref().map_or(0, String::len)
                             + loader_id.as_ref().map_or(0, String::len);
                         match self.memory_controller.try_reserve(bytes) {
@@ -1407,6 +1830,7 @@ where
                                 session_id,
                                 is_main_frame,
                                 frame_id,
+                                parent_frame_id: parent_frame_id.map(str::to_string),
                                 url,
                                 loader_id,
                                 _reservation: Some(Arc::new(res)),
@@ -1449,6 +1873,92 @@ where
                             Err(_) => CdpLifecycleEvent::Overflow,
                         }
                     }
+                    "Browser.downloadWillBegin" | "Page.downloadWillBegin" => {
+                        let Some(guid) = params
+                            .and_then(|p| p.get("guid"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty() && s.len() <= 256)
+                            .map(str::to_string)
+                        else {
+                            return self.publish_lifecycle(CdpLifecycleEvent::Overflow);
+                        };
+                        let frame_id = params
+                            .and_then(|p| p.get("frameId"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty() && id.len() <= MAX_EVENT_SESSION_ID_BYTES)
+                            .map(str::to_string);
+                        let suggested_filename = params
+                            .and_then(|p| p.get("suggestedFilename"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty() && s.len() <= 512)
+                            .unwrap_or("download")
+                            .to_string();
+                        let bytes = std::mem::size_of::<CdpLifecycleEvent>()
+                            + session_id.as_ref().map_or(0, String::len)
+                            + frame_id.as_ref().map_or(0, String::len)
+                            + guid.len()
+                            + suggested_filename.len();
+                        match self.memory_controller.try_reserve(bytes) {
+                            Ok(res) => CdpLifecycleEvent::DownloadWillBegin {
+                                session_id,
+                                frame_id,
+                                guid,
+                                suggested_filename,
+                                _reservation: Some(Arc::new(res)),
+                            },
+                            Err(_) => CdpLifecycleEvent::Overflow,
+                        }
+                    }
+                    "Browser.downloadProgress" | "Page.downloadProgress" => {
+                        let Some(guid) = params
+                            .and_then(|p| p.get("guid"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty() && s.len() <= 256)
+                            .map(str::to_string)
+                        else {
+                            return self.publish_lifecycle(CdpLifecycleEvent::Overflow);
+                        };
+                        let state = params
+                            .and_then(|p| p.get("state"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty() && s.len() <= 32)
+                            .unwrap_or("inProgress")
+                            .to_string();
+                        let as_u64 = |v: &Value| {
+                            v.as_u64()
+                                .or_else(|| v.as_f64().map(|f| f.max(0.0) as u64))
+                        };
+                        let received_bytes = params
+                            .and_then(|p| p.get("receivedBytes"))
+                            .and_then(as_u64)
+                            .unwrap_or(0);
+                        let total_bytes = params
+                            .and_then(|p| p.get("totalBytes"))
+                            .and_then(as_u64)
+                            .unwrap_or(0);
+                        let file_path = params
+                            .and_then(|p| p.get("filePath"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty() && s.len() <= 4096)
+                            .map(str::to_string);
+                        let bytes = std::mem::size_of::<CdpLifecycleEvent>()
+                            + session_id.as_ref().map_or(0, String::len)
+                            + guid.len()
+                            + state.len()
+                            + file_path.as_ref().map_or(0, String::len);
+                        match self.memory_controller.try_reserve(bytes) {
+                            Ok(res) => CdpLifecycleEvent::DownloadProgress {
+                                session_id,
+                                guid,
+                                state,
+                                received_bytes,
+                                total_bytes,
+                                file_path,
+                                _reservation: Some(Arc::new(res)),
+                            },
+                            Err(_) => CdpLifecycleEvent::Overflow,
+                        }
+                    }
                     _ => {
                         let Some(backend_node_id) = params
                             .and_then(|p| p.get("backendNodeId"))
@@ -1468,8 +1978,7 @@ where
                         }
                     }
                 };
-                let _ = self.event_tx.send(Arc::new(projected));
-                Ok(())
+                self.publish_lifecycle(projected)
             }
             Some(Value::String(method)) if method == "Fetch.requestPaused" => {
                 self.decide_request(env.session_id.as_ref(), env.params.as_ref())
@@ -1481,11 +1990,68 @@ where
                         if !parent_sid.is_empty()
                             && parent_sid.len() <= MAX_EVENT_SESSION_ID_BYTES =>
                     {
-                        self.publish_child_target_event(parent_sid, env.params.as_ref());
+                        self.publish_child_target_event(parent_sid, env.params.as_ref())
                     }
-                    _ => {}
+                    _ => {
+                        self.publish_target(CdpTargetEvent::Overflow)
+                    }
                 }
-                Ok(())
+            }
+            // This is a topology retirement, not loss of the ordered transport.
+            Some(Value::String(method)) if method == "Target.detachedFromTarget" => {
+                let params = env.params.as_ref();
+                let session_id = params
+                    .and_then(|p| p.get("sessionId"))
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty() && id.len() <= MAX_EVENT_SESSION_ID_BYTES)
+                    .map(str::to_string);
+                let target_id = params
+                    .and_then(|p| p.get("targetId"))
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty() && id.len() <= MAX_TARGET_ID_BYTES)
+                    .map(str::to_string);
+                let parent_session_id = match env.session_id {
+                    None => None,
+                    Some(Value::String(parent))
+                        if !parent.is_empty() && parent.len() <= MAX_EVENT_SESSION_ID_BYTES =>
+                    {
+                        Some(parent)
+                    }
+                    _ => return self.publish_target(CdpTargetEvent::Overflow),
+                };
+                let params_valid = params.is_some_and(|p| {
+                    p.get("sessionId").is_some_and(|v| v.as_str().is_some())
+                        && !p.get("sessionId").and_then(Value::as_str).unwrap_or("").is_empty()
+                        && p.get("sessionId").and_then(Value::as_str).is_some_and(|v| v.len() <= MAX_EVENT_SESSION_ID_BYTES)
+                        && p.get("targetId").is_none_or(|v| {
+                            v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= MAX_TARGET_ID_BYTES)
+                        })
+                });
+                if !params_valid {
+                    return self.publish_target(CdpTargetEvent::Overflow);
+                }
+                let session_id = session_id.expect("validated detached sessionId");
+                let bytes = session_id.len()
+                    + parent_session_id.as_ref().map_or(0, String::len)
+                    + target_id.as_ref().map_or(0, String::len);
+                if self.ownership.is_none() && self.ordered_tx.receiver_count() == 0 {
+                    return Ok(());
+                }
+                match self.publish_ordered_with_bytes(
+                    CdpOrderedEvent::SessionDetached {
+                        parent_session_id,
+                        session_id,
+                        target_id,
+                    },
+                    bytes,
+                ) {
+                    Err(CdpError::Transport(message))
+                        if message == "CDP ordered sequence exhausted" =>
+                    {
+                        Err(CdpError::Transport(message))
+                    }
+                    _ => Ok(()),
+                }
             }
             Some(Value::String(method))
                 if env.session_id.is_none()
@@ -1494,8 +2060,7 @@ where
                         "Target.targetCreated" | "Target.targetDestroyed" | "Target.targetCrashed"
                     ) =>
             {
-                self.publish_target_event(method.as_str(), env.params.as_ref());
-                Ok(())
+                self.publish_target_event(method.as_str(), env.params.as_ref())
             }
             Some(Value::String(_)) => {
                 // Ignore unknown event with bounded counter; no queue allocation
@@ -1601,35 +2166,36 @@ where
 
     /// Projects a browser-level `Target.*` lifecycle event into bounded owned data. Anything that
     /// cannot be bounded or identified becomes `Overflow` (the consumer re-inventories).
-    fn publish_target_event(&self, method: &str, params: Option<&Value>) {
-        let event = self.project_target_event(method, params);
-        let _ = self.target_tx.send(Arc::new(event));
+    fn publish_target_event(&mut self, method: &str, params: Option<&Value>) -> Result<(), CdpError> {
+        let event = self.project_target_event(method, params, 0);
+        self.publish_target(event)
     }
 
-    fn publish_child_target_event(&self, parent_session_id: String, params: Option<&Value>) {
-        if let CdpTargetEvent::Attached {
-            session_id,
-            info,
-            waiting_for_debugger,
-            _reservation,
-        } = self.project_target_event("Target.attachedToTarget", params)
-        {
-            let _ = self.target_tx.send(Arc::new(CdpTargetEvent::ChildAttached {
+    fn publish_child_target_event(&mut self, parent_session_id: String, params: Option<&Value>) -> Result<(), CdpError> {
+        let event = match self.project_target_event("Target.attachedToTarget", params, parent_session_id.len()) {
+            CdpTargetEvent::Attached {
+                session_id,
+                info,
+                waiting_for_debugger,
+                _reservation,
+            } => CdpTargetEvent::ChildAttached {
                 parent_session_id,
                 session_id,
                 info,
                 waiting_for_debugger,
                 _reservation,
-            }));
-        }
+            },
+            _ => CdpTargetEvent::Overflow,
+        };
+        self.publish_target(event)
     }
 
-    fn project_target_event(&self, method: &str, params: Option<&Value>) -> CdpTargetEvent {
+    fn project_target_event(&self, method: &str, params: Option<&Value>, extra_bytes: usize) -> CdpTargetEvent {
         let str_at = |ptr: &str, max: usize| -> Option<String> {
             params
                 .and_then(|p| p.pointer(ptr))
                 .and_then(Value::as_str)
-                .filter(|s| s.len() <= max)
+                .filter(|s| !s.is_empty() && s.len() <= max)
                 .map(str::to_string)
         };
         let reserve = |bytes: usize| self.memory_controller.try_reserve(bytes).ok().map(Arc::new);
@@ -1689,7 +2255,7 @@ where
                     .and_then(|p| p.get("waitingForDebugger"))
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                let Some(res) = reserve(info_bytes + session_id.len()) else {
+                let Some(res) = reserve(info_bytes + session_id.len() + extra_bytes) else {
                     return CdpTargetEvent::Overflow;
                 };
                 CdpTargetEvent::Attached {
@@ -1798,6 +2364,7 @@ where
 
     /// Fail every pending owner with `err`, optionally attempt a bounded WS close.
     async fn shutdown(&mut self, err: CdpError, close_ws: bool) {
+        let _ = self.publish_ordered(CdpOrderedEvent::Disconnected);
         // Disconnecting Fetch releases its native interception. Transfer containment before
         // closing the transport; the obligation must outlive every page/producer.
         if let Some(installed) = self.request_policy.write().unwrap_or_else(|e| e.into_inner()).take() {
@@ -2005,6 +2572,456 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fenced_ordered_overflow_invalidates_before_lag_is_consumed() {
+        let fence = Arc::new(OwnershipFence::new());
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(256);
+        let client = CdpClient::build(
+            MockChannelWs { tx: sent_tx, rx: in_rx },
+            global_memory_controller().clone(), None, Some(fence.clone()),
+        ).unwrap();
+        let mut stream = client.subscribe_ordered_events();
+        let mut targets = client.subscribe_target_events();
+        let frame = r#"{"method":"Page.frameDetached","sessionId":"p","params":{"frameId":"f"}}"#;
+        in_tx.send(Ok(Message::Text(frame.into()))).await.unwrap();
+        let old = stream.recv().await.unwrap().validity_token.unwrap();
+        assert!(fence.install(old, || true, || {}));
+        for _ in 0..MAX_ORDERED_EVENT_SLOTS {
+            in_tx.send(Ok(Message::Text(frame.into()))).await.unwrap();
+        }
+        in_tx.send(Ok(Message::Text(r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"t","type":"page"}}}"#.into()))).await.unwrap();
+        targets.recv().await.unwrap();
+        assert!(!fence.commit(old, || panic!("stale commit")));
+        assert!(matches!(stream.recv().await, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))));
+        while !matches!(&stream.recv().await.unwrap().event, CdpOrderedEvent::Overflow) {}
+        in_tx.send(Ok(Message::Text(frame.into()))).await.unwrap();
+        let current = stream.recv().await.unwrap().validity_token.unwrap();
+        assert_ne!(old, current);
+        assert!(fence.install(current, || true, || {}));
+        assert!(fence.commit(current, || {}));
+    }
+
+    #[tokio::test]
+    async fn malformed_projection_invalidates_before_overflow_is_consumed() {
+        let fence = Arc::new(OwnershipFence::new());
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(8);
+        let client = CdpClient::build(
+            MockChannelWs { tx: sent_tx, rx: in_rx },
+            global_memory_controller().clone(), None, Some(fence.clone()),
+        ).unwrap();
+        let mut ordered = client.subscribe_ordered_events();
+        let mut lifecycle = client.subscribe_events();
+        in_tx.send(Ok(Message::Text(r#"{"method":"Page.frameDetached","sessionId":"p","params":{"frameId":"f"}}"#.into()))).await.unwrap();
+        let old = ordered.recv().await.unwrap().validity_token.unwrap();
+        lifecycle.recv().await.unwrap();
+        assert!(fence.install(old, || true, || {}));
+        in_tx.send(Ok(Message::Text(r#"{"method":"Page.frameAttached","sessionId":"p","params":{}}"#.into()))).await.unwrap();
+        lifecycle.recv().await.unwrap();
+        assert!(!fence.commit(old, || panic!("stale commit")));
+        let overflow = ordered.recv().await.unwrap();
+        assert!(matches!(&overflow.event, CdpOrderedEvent::Overflow));
+        assert_eq!(overflow.validity_token, None);
+    }
+
+    #[tokio::test]
+    async fn fenced_detach_preserves_token_and_close_disconnects() {
+        let fence = Arc::new(OwnershipFence::new());
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(8);
+        let client = CdpClient::build(
+            MockChannelWs { tx: sent_tx, rx: in_rx },
+            global_memory_controller().clone(), None, Some(fence.clone()),
+        ).unwrap();
+        let mut stream = client.subscribe_ordered_events();
+        in_tx.send(Ok(Message::Text(r#"{"method":"Page.frameDetached","sessionId":"p","params":{"frameId":"f"}}"#.into()))).await.unwrap();
+        let token = stream.recv().await.unwrap().validity_token.unwrap();
+        assert!(fence.install(token, || true, || {}));
+        in_tx.send(Ok(Message::Text(r#"{"method":"Target.detachedFromTarget","params":{"sessionId":"child"}}"#.into()))).await.unwrap();
+        let detached = stream.recv().await.unwrap();
+        assert!(matches!(&detached.event, CdpOrderedEvent::SessionDetached { .. }));
+        assert_eq!(detached.validity_token, Some(token));
+        assert!(fence.commit(token, || {}));
+        client.close().await;
+        let disconnected = stream.recv().await.unwrap();
+        assert!(matches!(&disconnected.event, CdpOrderedEvent::Disconnected));
+        assert_eq!(disconnected.validity_token, None);
+        assert!(!fence.install(token, || true, || panic!("stale install")));
+        assert!(!fence.commit(token, || panic!("stale commit")));
+    }
+
+    #[tokio::test]
+    async fn fenced_reconnect_advances_generation() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (server_tx, mut server_rx) = mpsc::channel(2);
+        tokio::spawn(async move {
+            for _ in 0..2 {
+                let (socket, _) = listener.accept().await.unwrap();
+                server_tx.send(tokio_tungstenite::accept_async(socket).await.unwrap()).await.unwrap();
+            }
+        });
+        let fence = Arc::new(OwnershipFence::new());
+        let client = CdpClient::connect_with_ownership_fence(&url, fence.clone()).await.unwrap();
+        let mut server = server_rx.recv().await.unwrap();
+        let mut stream = client.subscribe_ordered_events();
+        let frame = r#"{"method":"Page.frameDetached","sessionId":"p","params":{"frameId":"f"}}"#;
+        server.send(Message::Text(frame.into())).await.unwrap();
+        let first = stream.recv().await.unwrap();
+        let old = first.validity_token.unwrap();
+        assert!(fence.install(old, || true, || {}));
+        let mut transport_closed = client.link().transport_closed;
+        client.close().await;
+        assert!(matches!(&stream.recv().await.unwrap().event, CdpOrderedEvent::Disconnected));
+        let _ = transport_closed.changed().await;
+        client.reconnect().await.unwrap();
+        let mut server = server_rx.recv().await.unwrap();
+        server.send(Message::Text(frame.into())).await.unwrap();
+        let next = stream.recv().await.unwrap();
+        assert!(next.position.generation > first.position.generation);
+        let current = next.validity_token.unwrap();
+        assert_ne!(old, current);
+        assert!(!fence.install(old, || true, || panic!("old generation installed")));
+        assert!(fence.install(current, || true, || {}));
+    }
+
+    #[tokio::test]
+    async fn frame_tree_requests_correlate_out_of_order_responses() {
+        let (sent_tx, mut sent_rx) = mpsc::channel(8);
+        let (in_tx, in_rx) = mpsc::channel(8);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut stream = client.subscribe_ordered_events();
+        let first = client.begin_frame_tree_snapshot(Some("first")).unwrap();
+        let second = client.begin_frame_tree_snapshot(Some("second")).unwrap();
+        let first_id = first.command_id();
+        let second_id = second.command_id();
+        assert_ne!(first_id, second_id);
+        for (id, session) in [(first_id, "first"), (second_id, "second")] {
+            let Message::Text(command) = sent_rx.recv().await.unwrap() else { panic!("expected command") };
+            let wire: Value = serde_json::from_str(&command).unwrap();
+            assert_eq!(wire["id"].as_u64(), Some(id as u64));
+            assert_eq!(wire["method"], "Page.getFrameTree");
+            assert_eq!(wire["sessionId"], session);
+        }
+        for (id, value) in [(second_id, "second"), (first_id, "first")] {
+            let response = serde_json::json!({ "id": id, "result": { "frameTree": value } });
+            in_tx.send(Ok(Message::Text(response.to_string().into()))).await.unwrap();
+        }
+        let second_marker = stream.recv().await.unwrap();
+        let first_marker = stream.recv().await.unwrap();
+        assert!(matches!(&second_marker.event, CdpOrderedEvent::FrameTreeBarrier { command_id } if *command_id == second_id));
+        assert!(matches!(&first_marker.event, CdpOrderedEvent::FrameTreeBarrier { command_id } if *command_id == first_id));
+        let first_snapshot = first.wait().await.unwrap();
+        let second_snapshot = second.wait().await.unwrap();
+        assert_eq!(first_snapshot.command_id, first_id);
+        assert_eq!(second_snapshot.command_id, second_id);
+        assert_eq!(first_snapshot.position, first_marker.position);
+        assert_eq!(second_snapshot.position, second_marker.position);
+        assert_eq!(first_snapshot.result["frameTree"], "first");
+        assert_eq!(second_snapshot.result["frameTree"], "second");
+        assert_eq!(second_marker.position.sequence + 1, first_marker.position.sequence);
+    }
+
+    #[tokio::test]
+    async fn ordered_frame_tree_barrier_preserves_actor_order() {
+        let (sent_tx, mut sent_rx) = mpsc::channel(8);
+        let (in_tx, in_rx) = mpsc::channel(8);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut stream = client.subscribe_ordered_events();
+        let task = {
+            let client = client.clone();
+            tokio::spawn(async move { client.get_frame_tree_with_barrier(Some("page")).await })
+        };
+        let Message::Text(command) = sent_rx.recv().await.unwrap() else { panic!("expected command") };
+        let id = serde_json::from_str::<Value>(&command).unwrap()["id"].as_u64().unwrap();
+        for message in [
+            r#"{"method":"Page.frameAttached","sessionId":"page","params":{"frameId":"f","parentFrameId":"root"}}"#.to_string(),
+            r#"{"method":"Target.attachedToTarget","sessionId":"page","params":{"sessionId":"child","targetInfo":{"targetId":"t","type":"iframe"}}}"#.to_string(),
+            format!(r#"{{"id":{id},"result":{{"frameTree":{{}}}}}}"#),
+            r#"{"method":"Page.frameDetached","sessionId":"page","params":{"frameId":"f"}}"#.to_string(),
+        ] {
+            in_tx.send(Ok(Message::Text(message.into()))).await.unwrap();
+        }
+        let first = stream.recv().await.unwrap();
+        let second = stream.recv().await.unwrap();
+        let marker = stream.recv().await.unwrap();
+        let last = stream.recv().await.unwrap();
+        let snapshot = task.await.unwrap().unwrap();
+        assert!(matches!(&first.event, CdpOrderedEvent::Lifecycle(e) if matches!(&**e, CdpLifecycleEvent::FrameAttached { .. })));
+        assert!(matches!(&second.event, CdpOrderedEvent::Target(e) if matches!(&**e, CdpTargetEvent::ChildAttached { .. })));
+        assert!(matches!(&marker.event, CdpOrderedEvent::FrameTreeBarrier { command_id } if *command_id == snapshot.command_id));
+        assert!(matches!(&last.event, CdpOrderedEvent::Lifecycle(e) if matches!(&**e, CdpLifecycleEvent::FrameDetached { .. })));
+        assert_eq!(snapshot.position, marker.position);
+        assert_eq!([first.position.sequence, second.position.sequence, marker.position.sequence, last.position.sequence], [1, 2, 3, 4]);
+        assert_eq!(first.position.generation, last.position.generation);
+    }
+
+    #[tokio::test]
+    async fn barrier_failure_and_cancellation_publish_no_marker() {
+        let (sent_tx, mut sent_rx) = mpsc::channel(8);
+        let (in_tx, in_rx) = mpsc::channel(8);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut stream = client.subscribe_ordered_events();
+        let task = {
+            let client = client.clone();
+            tokio::spawn(async move { client.get_frame_tree_with_barrier(None).await })
+        };
+        let Message::Text(command) = sent_rx.recv().await.unwrap() else { panic!("expected command") };
+        let id = serde_json::from_str::<Value>(&command).unwrap()["id"].as_u64().unwrap();
+        in_tx.send(Ok(Message::Text(format!(r#"{{"id":{id},"error":{{"code":-1,"message":"failed"}}}}"#).into()))).await.unwrap();
+        assert!(task.await.unwrap().is_err());
+        let task = {
+            let client = client.clone();
+            tokio::spawn(async move { client.get_frame_tree_with_barrier(None).await })
+        };
+        let Message::Text(command) = sent_rx.recv().await.unwrap() else { panic!("expected command") };
+        let id = serde_json::from_str::<Value>(&command).unwrap()["id"].as_u64().unwrap();
+        task.abort();
+        let _ = task.await;
+        in_tx.send(Ok(Message::Text(format!(r#"{{"id":{id},"result":{{}}}}"#).into()))).await.unwrap();
+        in_tx.send(Ok(Message::Text(r#"{"method":"Page.frameDetached","sessionId":"p","params":{"frameId":"f"}}"#.into()))).await.unwrap();
+        let record = stream.recv().await.unwrap();
+        assert!(matches!(&record.event, CdpOrderedEvent::Lifecycle(_)));
+        assert_eq!(record.position.sequence, 1);
+    }
+
+    #[tokio::test]
+    async fn ordered_stream_reports_lag_and_projection_loss() {
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(256);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut stream = client.subscribe_ordered_events();
+        let mut targets = client.subscribe_target_events();
+        in_tx.send(Ok(Message::Text(r#"{"method":"Page.frameAttached","sessionId":"p","params":{}}"#.into()))).await.unwrap();
+        assert!(matches!(&stream.recv().await.unwrap().event, CdpOrderedEvent::Overflow));
+        for _ in 0..(MAX_ORDERED_EVENT_SLOTS + 1) {
+            in_tx.send(Ok(Message::Text(r#"{"method":"Page.frameDetached","sessionId":"p","params":{"frameId":"f"}}"#.into()))).await.unwrap();
+        }
+        in_tx.send(Ok(Message::Text(r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"t","type":"page"}}}"#.into()))).await.unwrap();
+        targets.recv().await.unwrap();
+        assert!(matches!(stream.recv().await, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))));
+    }
+
+    #[tokio::test]
+    async fn frame_facts_without_session_are_ordered_overflow() {
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(8);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut stream = client.subscribe_ordered_events();
+        for message in [
+            r#"{"method":"Page.frameAttached","params":{"frameId":"f","parentFrameId":"p"}}"#,
+            r#"{"method":"Page.frameDetached","params":{"frameId":"f"}}"#,
+            r#"{"method":"Page.frameNavigated","params":{"frame":{"id":"f"}}}"#,
+        ] {
+            in_tx.send(Ok(Message::Text(message.into()))).await.unwrap();
+            assert!(matches!(&stream.recv().await.unwrap().event, CdpOrderedEvent::Overflow));
+        }
+    }
+    #[tokio::test]
+    async fn target_detachment_is_ordered_as_session_retirement() {
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(8);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut stream = client.subscribe_ordered_events();
+        in_tx.send(Ok(Message::Text(
+            r#"{"method":"Target.detachedFromTarget","sessionId":"parent","params":{"sessionId":"child","targetId":"target"}}"#.into(),
+        ))).await.unwrap();
+        let record = stream.recv().await.unwrap();
+        assert!(matches!(
+            &record.event,
+            CdpOrderedEvent::SessionDetached {
+                parent_session_id: Some(parent),
+                session_id,
+                target_id: Some(target),
+            } if parent == "parent" && session_id == "child" && target == "target"
+        ));
+        assert_eq!(record.position.sequence, 1);
+    }
+
+    #[tokio::test]
+    async fn malformed_target_detachment_invalidates_ordered_stream() {
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(8);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut stream = client.subscribe_ordered_events();
+        in_tx.send(Ok(Message::Text(
+            r#"{"method":"Target.detachedFromTarget","params":{"sessionId":""}}"#.into(),
+        ))).await.unwrap();
+        assert!(matches!(&stream.recv().await.unwrap().event, CdpOrderedEvent::Overflow));
+    }
+
+
+    #[tokio::test]
+    async fn barrier_fails_when_ordered_memory_is_unavailable() {
+        const MEMORY_LIMIT: usize = FRAME_TREE_STAGING_RESERVATION_BYTES + 4096;
+        let controller = MemoryAdmissionController::new(MEMORY_LIMIT);
+        let (sent_tx, mut sent_rx) = mpsc::channel(8);
+        let (in_tx, in_rx) = mpsc::channel(8);
+        let client = CdpClient::from_ws_stream_with_memory_controller(
+            MockChannelWs { tx: sent_tx, rx: in_rx }, controller.clone(),
+        );
+        let mut stream = client.subscribe_ordered_events();
+        let task = {
+            let client = client.clone();
+            tokio::spawn(async move { client.get_frame_tree_with_barrier(None).await })
+        };
+        let Message::Text(command) = tokio::time::timeout(Duration::from_secs(5), sent_rx.recv())
+            .await
+            .expect("frame-tree command was not enqueued")
+            .expect("mock command transport closed")
+        else { panic!("expected command") };
+        let id = serde_json::from_str::<Value>(&command).unwrap()["id"].as_u64().unwrap();
+        let remaining = MEMORY_LIMIT.checked_sub(controller.current_reserved_bytes()).unwrap();
+        let hold = controller.try_reserve(remaining).unwrap();
+        in_tx.send(Ok(Message::Text(format!(r#"{{"id":{id},"result":{{}}}}"#).into()))).await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("frame-tree request did not resolve")
+            .unwrap();
+        assert!(result.is_err());
+        assert!(matches!(
+            &tokio::time::timeout(Duration::from_secs(5), stream.recv())
+                .await
+                .expect("ordered overflow was not published")
+                .unwrap()
+                .event,
+            CdpOrderedEvent::Overflow
+        ));
+        drop(hold);
+    }
+    #[tokio::test]
+    async fn frame_tree_barrier_requires_a_subscriber() {
+        let (sent_tx, mut sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(1);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let task = {
+            let client = client.clone();
+            tokio::spawn(async move { client.get_frame_tree_with_barrier(None).await })
+        };
+        let Message::Text(command) = sent_rx.recv().await.unwrap() else { panic!("expected command") };
+        let id = serde_json::from_str::<Value>(&command).unwrap()["id"].as_u64().unwrap();
+        in_tx.send(Ok(Message::Text(format!(r#"{{"id":{id},"result":{{}}}}"#).into()))).await.unwrap();
+        assert!(task.await.unwrap().is_err());
+    }
+    #[tokio::test]
+    async fn replacement_actor_has_distinct_generation_and_fresh_sequence() {
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (_in_tx, in_rx) = mpsc::channel(1);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut stream = client.subscribe_ordered_events();
+        let old = client.link();
+        client.close().await;
+        let disconnected = stream.recv().await.unwrap();
+        assert!(matches!(&disconnected.event, CdpOrderedEvent::Disconnected));
+        client.closed().await;
+        let shared = ActorShared {
+            screencast_tx: client.screencast_rx_broadcast.clone(),
+            event_tx: client.event_rx_broadcast.clone(),
+            target_tx: client.target_rx_broadcast.clone(),
+            ordered_tx: client.ordered_rx_broadcast.clone(),
+            memory_controller: client.memory_controller.clone(),
+            stats: client.stats.clone(),
+            request_policy: client.request_policy.clone(),
+            nav_listeners: client.nav_listeners.clone(),
+            ownership_fence: None,
+        };
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(1);
+        let new = shared.spawn_actor(MockChannelWs { tx: sent_tx, rx: in_rx }, old.generation.checked_add(1).unwrap()).unwrap();
+        in_tx.send(Ok(Message::Text(r#"{"method":"Page.frameDetached","sessionId":"p","params":{"frameId":"f"}}"#.into()))).await.unwrap();
+        let record = stream.recv().await.unwrap();
+        assert_eq!(record.position.generation, disconnected.position.generation + 1);
+        assert_eq!(record.position.sequence, 1);
+        new.close_notify.notify_one();
+    }
+
+
+    #[test]
+    fn ordered_sequence_exhaustion_is_explicit_and_never_wraps() {
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (_in_tx, in_rx) = mpsc::channel(1);
+        let (_command_tx, command_rx) = mpsc::channel(1);
+        let (ordered_tx, mut stream) = tokio::sync::broadcast::channel(8);
+        let mut actor = CdpActor {
+            ws_stream: MockChannelWs { tx: sent_tx, rx: in_rx },
+            command_rx,
+            close_notify: Arc::new(Notify::new()),
+            screencast_tx: tokio::sync::broadcast::channel(2).0,
+            event_tx: tokio::sync::broadcast::channel(8).0,
+            target_tx: tokio::sync::broadcast::channel(8).0,
+            ordered_tx,
+            generation: 9,
+            ownership: None,
+            sequence: u64::MAX,
+            memory_controller: global_memory_controller().clone(),
+            pending_commands: HashMap::new(),
+            stats: Arc::new(CdpActorStats::default()),
+            request_policy: Arc::new(std::sync::RwLock::new(None)),
+            policy_write: None,
+            next_policy_id: FIRST_POLICY_COMMAND_ID,
+            nav_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        assert!(actor.publish_lifecycle(CdpLifecycleEvent::Overflow).is_err());
+        let record = stream.try_recv().unwrap();
+        assert_eq!(record.position, CdpStreamPosition { generation: 9, sequence: u64::MAX });
+        assert!(matches!(&record.event, CdpOrderedEvent::Overflow));
+        assert_eq!(actor.sequence, u64::MAX);
+    }
+
+
+    #[tokio::test]
+    async fn malformed_child_attach_reports_overflow() {
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(1);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut events = client.subscribe_target_events();
+        in_tx.send(Ok(Message::Text(
+            r#"{"method":"Target.attachedToTarget","sessionId":"parent","params":{}}"#.into(),
+        ))).await.unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await.unwrap().unwrap();
+        assert!(matches!(&*event, CdpTargetEvent::Overflow));
+    }
+
+    #[tokio::test]
+    async fn malformed_parent_session_reports_overflow() {
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(1);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut events = client.subscribe_target_events();
+        in_tx.send(Ok(Message::Text(
+            r#"{"method":"Target.attachedToTarget","sessionId":"","params":{"sessionId":"child","targetInfo":{"targetId":"frame-target","type":"iframe","url":"about:blank"},"waitingForDebugger":false}}"#.into(),
+        ))).await.unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await.unwrap().unwrap();
+        assert!(matches!(&*event, CdpTargetEvent::Overflow));
+    }
+    #[tokio::test]
+    async fn valid_child_attach_preserves_parent_session() {
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(1);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut events = client.subscribe_target_events();
+        in_tx.send(Ok(Message::Text(
+            r#"{"method":"Target.attachedToTarget","sessionId":"parent","params":{"sessionId":"child","targetInfo":{"targetId":"frame-target","type":"iframe","url":"about:blank"},"waitingForDebugger":false}}"#.into(),
+        ))).await.unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await.unwrap().unwrap();
+        assert!(matches!(
+            &*event,
+            CdpTargetEvent::ChildAttached {
+                parent_session_id,
+                session_id,
+                info,
+                ..
+            } if parent_session_id == "parent"
+                && session_id == "child"
+                && info.target_id == "frame-target"
+                && info.target_type == "iframe"
+        ));
+    }
+
+    #[tokio::test]
     async fn test_actor_skips_cancelled_command_on_dequeue() {
         let (command_tx, command_rx) = mpsc::channel(MAX_WRITER_QUEUE_MESSAGES);
         let (screencast_tx, _) = tokio::sync::broadcast::channel(2);
@@ -2027,9 +3044,11 @@ mod tests {
                 id: 1,
                 json: r#"{"id":1,"method":"Test.abandoned"}"#.to_string(),
                 reservation: budget.reserve_slot().unwrap(),
+                response_reservation: None,
                 sender: sender1,
                 deadline: Instant::now() + Duration::from_secs(10),
                 nav_meta: None,
+                barrier: None,
                 cancellation: None,
             })
             .await
@@ -2042,9 +3061,11 @@ mod tests {
                 id: 2,
                 json: r#"{"id":2,"method":"Test.valid"}"#.to_string(),
                 reservation: budget.reserve_slot().unwrap(),
+                response_reservation: None,
                 sender: sender2,
                 deadline: Instant::now() + Duration::from_secs(10),
                 nav_meta: None,
+                barrier: None,
                 cancellation: None,
             })
             .await
@@ -2063,6 +3084,10 @@ mod tests {
             next_policy_id: FIRST_POLICY_COMMAND_ID,
             nav_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
             target_tx: tokio::sync::broadcast::channel(8).0,
+            ordered_tx: tokio::sync::broadcast::channel(8).0,
+            generation: 1,
+            ownership: None,
+            sequence: 0,
             pending_commands: HashMap::with_capacity(MAX_PENDING_COMMANDS),
             memory_controller: global_memory_controller().clone(),
             stats,
@@ -2415,6 +3440,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn frame_lifecycle_projects_provenance_and_rejects_invalid_facts() {
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(1);
+        let client = CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx });
+        let mut events = client.subscribe_events();
+        let valid = [
+            serde_json::json!({"method":"Page.frameAttached","sessionId":"session","params":{"frameId":"child","parentFrameId":"root"}}),
+            serde_json::json!({"method":"Page.frameNavigated","sessionId":"session","params":{"frame":{"id":"child","parentId":"root","url":"about:blank","loaderId":"loader"}}}),
+            serde_json::json!({"method":"Page.frameDetached","sessionId":"session","params":{"frameId":"child","reason":"swap"}}),
+            serde_json::json!({"method":"Page.frameDetached","sessionId":"session","params":{"frameId":"child"}}),
+            serde_json::json!({"method":"Page.frameNavigated","sessionId":"session","params":{"frame":{"id":"root"}}}),
+        ];
+        for (index, wire) in valid.into_iter().enumerate() {
+            in_tx.send(Ok(Message::Text(wire.to_string().into()))).await.unwrap();
+            let event = tokio::time::timeout(Duration::from_secs(1), events.recv()).await.unwrap().unwrap();
+            match (index, &*event) {
+                (0, CdpLifecycleEvent::FrameAttached { session_id, frame_id, parent_frame_id, .. }) => {
+                    assert_eq!(session_id.as_deref(), Some("session"));
+                    assert_eq!((frame_id.as_str(), parent_frame_id.as_str()), ("child", "root"));
+                }
+                (1, CdpLifecycleEvent::FrameNavigated { session_id, frame_id, parent_frame_id, is_main_frame, .. }) => {
+                    assert_eq!(session_id.as_deref(), Some("session"));
+                    assert_eq!(frame_id.as_deref(), Some("child"));
+                    assert_eq!(parent_frame_id.as_deref(), Some("root"));
+                    assert!(!is_main_frame);
+                }
+                (2, CdpLifecycleEvent::FrameDetached { session_id, frame_id, reason, .. }) => {
+                    assert_eq!(session_id.as_deref(), Some("session"));
+                    assert_eq!(frame_id, "child");
+                    assert_eq!(*reason, FrameDetachReason::Swap);
+                }
+                (3, CdpLifecycleEvent::FrameDetached { reason, .. }) => {
+                    assert_eq!(*reason, FrameDetachReason::Remove);
+                }
+                (4, CdpLifecycleEvent::FrameNavigated { session_id, frame_id, parent_frame_id, is_main_frame, .. }) => {
+                    assert_eq!(session_id.as_deref(), Some("session"));
+                    assert_eq!(frame_id.as_deref(), Some("root"));
+                    assert_eq!(parent_frame_id, &None);
+                    assert!(is_main_frame);
+                }
+                _ => panic!("unexpected frame event: {event:?}"),
+            }
+        }
+
+        let oversized = "x".repeat(MAX_EVENT_SESSION_ID_BYTES + 1);
+        let invalid = [
+            serde_json::json!({"method":"Page.frameAttached","sessionId":"session","params":{"frameId":"child"}}),
+            serde_json::json!({"method":"Page.frameAttached","sessionId":"session","params":{"frameId":"child","parentFrameId":oversized}}),
+            serde_json::json!({"method":"Page.frameDetached","sessionId":"session","params":{"frameId":""}}),
+            serde_json::json!({"method":"Page.frameDetached","sessionId":null,"params":{"frameId":"child"}}),
+            serde_json::json!({"method":"Page.frameDetached","sessionId":"","params":{"frameId":"child"}}),
+            serde_json::json!({"method":"Page.frameDetached","sessionId":"session","params":{"frameId":"child","reason":"future-reason"}}),
+            serde_json::json!({"method":"Page.frameNavigated","sessionId":"session","params":{"frame":{"parentId":"root"}}}),
+            serde_json::json!({"method":"Page.frameNavigated","sessionId":"session","params":{"frame":{"id":"child","parentId":null}}}),
+            serde_json::json!({"method":"Page.frameNavigated","sessionId":"session","params":{"frame":{"id":"child","parentId":"x".repeat(MAX_EVENT_SESSION_ID_BYTES + 1)}}}),
+            serde_json::json!({"method":"Page.frameNavigated","sessionId":"session","params":{"frame":{"id":"child","url":"x".repeat(MAX_URL_BYTES + 1)}}}),
+            serde_json::json!({"method":"Page.frameNavigated","sessionId":"session","params":{"frame":{"id":"child","loaderId":12}}}),
+        ];
+        for wire in invalid {
+            in_tx.send(Ok(Message::Text(wire.to_string().into()))).await.unwrap();
+            let event = tokio::time::timeout(Duration::from_secs(1), events.recv()).await.unwrap().unwrap();
+            assert!(matches!(&*event, CdpLifecycleEvent::Overflow), "{event:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn frame_lifecycle_reservations_include_ids_and_fail_closed() {
+        use super::super::diagnostics::MemoryAdmissionController;
+
+        let controller = MemoryAdmissionController::new(4096);
+        let (sent_tx, _sent_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(1);
+        let client = CdpClient::from_ws_stream_with_memory_controller(
+            MockChannelWs { tx: sent_tx, rx: in_rx }, controller.clone(),
+        );
+        let mut events = client.subscribe_events();
+        let wire = serde_json::json!({"method":"Page.frameAttached","sessionId":"session","params":{"frameId":"child","parentFrameId":"parent"}});
+        in_tx.send(Ok(Message::Text(wire.to_string().into()))).await.unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(1), events.recv()).await.unwrap().unwrap();
+        assert!(matches!(&*event, CdpLifecycleEvent::FrameAttached { .. }));
+        let retained = controller.current_reserved_bytes();
+        assert_eq!(retained, std::mem::size_of::<CdpLifecycleEvent>() + "session".len() + "child".len() + "parent".len());
+        let _hold = controller.try_reserve(4096 - retained).unwrap();
+        for method in ["Page.frameAttached", "Page.frameDetached", "Page.frameNavigated"] {
+            let params = match method {
+                "Page.frameAttached" => serde_json::json!({"frameId":"child","parentFrameId":"parent"}),
+                "Page.frameDetached" => serde_json::json!({"frameId":"child"}),
+                _ => serde_json::json!({"frame":{"id":"child","parentId":"parent"}}),
+            };
+            let wire = serde_json::json!({"method":method,"sessionId":"session","params":params});
+            in_tx.send(Ok(Message::Text(wire.to_string().into()))).await.unwrap();
+            let event = tokio::time::timeout(Duration::from_secs(1), events.recv()).await.unwrap().unwrap();
+            assert!(matches!(&*event, CdpLifecycleEvent::Overflow));
+        }
+    }
+
+    #[tokio::test]
     async fn test_lifecycle_events_project_bounded_fields_and_overflow_on_budget_exhaustion() {
         use super::super::diagnostics::MemoryAdmissionController;
 
@@ -2436,7 +3558,7 @@ mod tests {
             "method": "Page.frameNavigated",
             "sessionId": "psid-1",
             "params": {
-                "frame": { "url": "https://example.test/next" },
+                "frame": { "id": "frame-1", "url": "https://example.test/next" },
                 "unusedHugePayload": huge_blob
             }
         });
@@ -2769,6 +3891,8 @@ mod outcome_classification_tests {
             receiver,
             deadline: tokio::time::Instant::now(),
             cancellation: Some(cancellation.clone()),
+            barrier: None,
+            command_id: 0,
         };
         assert!(cancellation.cancel_before_write());
         assert!(matches!(pending.wait().await, Err(CdpError::CancelledBeforeWrite)));

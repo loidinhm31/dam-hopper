@@ -656,6 +656,22 @@ pub fn build_router_with_web_dir_and_origins(
             get(browser_host::get_selected_text),
         )
         .route(
+            "/api/browser/sessions/{id}/devtools",
+            post(browser_host::create_devtools_lease),
+        )
+        .route(
+            "/api/browser/sessions/{id}/devtools/{token}",
+            delete(browser_host::revoke_devtools_lease),
+        )
+        .route(
+            "/api/browser/devtools/{token}/ws",
+            get(browser_host::devtools_ws_handler),
+        )
+        .route(
+            "/api/browser/devtools/{token}/{*path}",
+            get(browser_host::proxy_devtools_asset),
+        )
+        .route(
             "/api/browser/attachments",
             post(browser_host::issue_attachment_ticket),
         )

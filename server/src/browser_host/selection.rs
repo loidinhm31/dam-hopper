@@ -1760,6 +1760,7 @@ pub(crate) async fn ensure_session_navigation_watcher_with_initial(
     .await
 }
 
+
 async fn install_navigation_watcher(
     state: &AppState,
     session_id: &str,
@@ -1797,6 +1798,7 @@ async fn install_navigation_watcher(
         );
         return false;
     }
+
 
     let cancel_token = CancellationToken::new();
     let watcher_id = NAV_WATCHER_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -1898,7 +1900,11 @@ async fn install_navigation_watcher(
                             }
                             record_navigation_queue_cleanup(&state_clone, &sid_owned, url.as_deref()).await;
                         }
-                        CdpLifecycleEvent::InspectNodeRequested { .. } => {}
+                        CdpLifecycleEvent::FrameAttached { .. }
+                        | CdpLifecycleEvent::FrameDetached { .. }
+                        | CdpLifecycleEvent::InspectNodeRequested { .. } => {}
+                        CdpLifecycleEvent::DownloadWillBegin { .. }
+                        | CdpLifecycleEvent::DownloadProgress { .. } => {}
                     }
                 }
             }
@@ -2082,7 +2088,11 @@ async fn run_selection_cdp_observer(
                             }
                         }
                     }
-                    CdpLifecycleEvent::FrameNavigated { is_main_frame: false, .. } => {}
+                    CdpLifecycleEvent::FrameNavigated { is_main_frame: false, .. }
+                    | CdpLifecycleEvent::FrameAttached { .. }
+                    | CdpLifecycleEvent::FrameDetached { .. }
+                    | CdpLifecycleEvent::DownloadWillBegin { .. }
+                    | CdpLifecycleEvent::DownloadProgress { .. } => {}
                     CdpLifecycleEvent::InspectNodeRequested { session_id: evt_sid, backend_node_id, .. }
                         if watch_inspect =>
                     {
@@ -2393,4 +2403,6 @@ mod tests {
         assert!(sel.locator.len() <= MAX_LOCATOR_LENGTH);
         assert!(sel.is_valid());
     }
+
+
 }

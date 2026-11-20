@@ -1,0 +1,40 @@
+# Phase 01 — Command effects and download confinement
+
+## Context / overview
+[Plan](plan.md) · [Evidence F1/F4 and authority design](reports/evidence-and-design.md). **DONE (2026-11-17 12:44:55 EST), user-approved with noted limitations.** Main obtained exclusive browser-host/API/test ownership before implementation. Phase 01 delivers one coherent input-policy cutover, not security closure by itself.
+
+## Key insights / requirements
+Current filter's domain blacklist misses Page.setDownloadBehavior; invalid text/binary and ServiceWorker commands/events pass. Browser.setDownloadBehavior is configured internally in selection.rs; control cannot override this server choice or authorize context-wide worker effects. ServiceWorker is not a Target wrapper: upstream context registrations/versions/script URLs/client IDs and stop-all effects are review evidence, not deployed-engine results. Parse once per boundary, reuse fields for routing/correlation; no added protocol framework.
+
+## Architecture / steps — seal-devtools-command-envelopes
+1. In existing filter, use a bounded, typed verdict for valid CDP request envelopes: single object, valid command method/ID/params/sessionId shape, no array/binary/malformed passthrough. Invalid commands return non-sensitive protocol error when correlatable, otherwise close/reject; never reach native peer. Preserve ping/pong as transport only.
+2. Explicitly reject Page.setDownloadBehavior regardless of params plus all Browser.*; retain geometry/lifecycle/foreign-target restrictions. ServiceWorker.* commands default-deny (including enable, registration/version inspection, stop/unregister/update/start/dispatch operations) and all ServiceWorker events suppress before payload forwarding. Any future exception requires deployed-version evidence AND enforceable exclusive target scope for both command effects and all emitted metadata; context-wide commands such as stopAllWorkers always deny even for current holder. Parent/root/owned flattened session alone never proves context scope.
+3. Reject Target.sendMessageToTarget/legacy receivedMessageFromTarget tunnel; do not recursively relay opaque nested JSON. Any flattened sessionId passes through a positive session validator (deny unknown until Phase 04); no child-session variant escapes effect checks. A top-level page command stays subject to same protected-method policy.
+   **Bounded effect-policy inventory (R1):** within this task, record in filter policy comments/tests a finite table of currently-forwarded reachable domains/methods whose effects or metadata can escape the root/owned-child target. Start with ServiceWorker, Storage and Network cookie/cache/browser-state methods, plus existing Target/browser-context routes; inspect actual supported deployed protocol/relay, not an unrelated all-CDP redesign. Record method/event, scope/effect, evidence, allow-with-enforcement or deny, and regression case. Unproven nonlocal routes deny; map event/result redaction before allowing any scoped exception. Ordinary target-local Console/Runtime/DOM/Network functionality remains subject to Phase 03 authority. Phase 04 completes per-connection response/event enforcement; do not defer a known context-wide command gap.
+4. Migrate API relay text/binary arms to validated verdict; retain global memory reservation before parse/serialization and bounded error reply. Server-owned Browser.setDownloadBehavior configuration remains internal and unaffected; do not respond to hostile overrides by reapplying a raceable path after allowing them.
+5. Extend pure policy and mock-peer regressions, including root/owned-child ServiceWorker command denial and event suppression, with/without valid control; inventory entries get parameter-variant cases. Existing owned-target, geometry, path/CSP and revocation tests remain. Real B-worker liveness, metadata absence and frontend compatibility are Phase 05's non-mocked gates.
+
+## Related files / actions
+All paths below relative to `/home/loidinh/WS/dam-hopper/` (absolute prefix applies). Modify `server/src/browser_host/devtools_filter.rs`, `server/src/api/browser_host.rs`, `server/tests/browser_host_devtools.rs`. Create/delete none. Scope other shared modules only in later explicit tasks; no unrelated refactor.
+
+## Durable task
+```evcrate-tasks
+[
+  {
+    "id": "seal-devtools-command-envelopes",
+    "title": "Enforce command effects and reject opaque DevTools transports",
+    "blocked_by": [],
+    "allowed_files": ["server/src/browser_host/devtools_filter.rs", "server/src/api/browser_host.rs", "server/tests/browser_host_devtools.rs"],
+    "constraints": ["Exclusive integration window required; preserve unrelated work and existing geometry/Browser restrictions.", "Deny Page.setDownloadBehavior even for holder; no malformed/binary/nested bypass; bound parse/reply memory.", "ServiceWorker commands default-deny and events suppress absent proven enforceable target scope; context-wide lifecycle commands always deny. Complete bounded analogous currently-forwarded effect inventory, not broad protocol redesign."],
+    "acceptance": ["Direct/flattened Page.setDownloadBehavior, Browser.*, ServiceWorker context-wide/unsupported commands and nested transport never reach upstream; malformed/binary/batch fail closed.", "ServiceWorker registration/version/script/client metadata cannot cross root or child relay; any target-scoped exception has command/event enforcement and deployed evidence, not ownership inference from page session.", "Finite nonlocal-effect policy table maps methods/events to evidence, enforcement and regression cases; valid target-local commands remain usable; Phase 04 proof required for children."],
+    "verification": ["Future integrated run: cargo test --manifest-path server/Cargo.toml --features vendored --lib browser_host::devtools_filter; cargo test --manifest-path server/Cargo.toml --features vendored --test browser_host_devtools -- --test-threads=1. Mock capture proves protected commands absent upstream and ServiceWorker events absent downstream, including valid-holder/root/child variants; inspect finite inventory coverage. Phase 05 must independently prove B worker exists/survives actual-proxy enable/query/lifecycle attempts, real download confinement and positive frontend compatibility."]
+  }
+]
+```
+- [x] <!-- evcrate-task:seal-devtools-command-envelopes --> Seal DevTools command envelopes
+
+Success is rejection at real relay boundary, not list membership alone. Risk: Target/ServiceWorker restrictions break frontend panels; positive owned Console/Network/Elements/Issues plus worker/OOPIF qualification required. Do not restore context-wide ServiceWorker or download authority for compatibility; report incompatible required behavior as blocked. Deployed ServiceWorker behavior remains unverified. No migration. Rollback disables/drains DevTools before matched server/SPA revert, never unsafe passthrough.
+
+Verification reported by the targeted tester: filter unit tests 5/5 and DevTools integration tests 5/5 passed; the tester reports the real-Chromium lane executed. No broader suite, allocation-peak measurement, or worker-isolation qualification is claimed. The independent review scored 9/10 with no critical issues; user approved with the noted transport-memory limitation above. Next Phase 02 builds shared positive ownership; Phase 04 consumes this policy/inventory.
+
+**Accepted limitation / required follow-up:** the JSON admission charge (`4 × wire bytes + 1 KiB/token`) is an estimate, not a proven allocator ceiling. The per-message/frame limits do not account for all transport buffers. On canceled or timed-out relay writes, Tungstenite may retain queued bytes and teardown may flush them; cancellation does not prove the command was not transmitted. Do not claim complete transport-memory accounting until a defensible accounting model covers retained socket-owned storage and a deterministic backpressured-write test demonstrates queued-write disposition and reservation recovery after socket destruction. Separately justify the admission charge against peak allocations before claiming a hard memory bound.

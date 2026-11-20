@@ -11,7 +11,6 @@ import { isOperationRiskAcknowledged } from "./browser-session-inventory.js";
 import { browserTabSlotKey, createBlankBrowserTab, createInitialBrowserWindowState, findBrowserTab, patchBrowserTab, selectBrowserTab, setBrowserTabDraft } from "./browser-tab-state.js";
 import { BROWSER_STATE_VERSION, type BrowserOwnerScope, type BrowserTabKind, type BrowserTabPhase, type BrowserTabRuntime, type BrowserWindowClosingState, type BrowserWindowState } from "./browser-tab-types.js";
 import { normalizeBrowserCommittedUrl } from "./browser-url-normalization.js";
-import { parseBrowserWindowDisk } from "./browser-persistence.js";
 
 export interface TabNavActionParams {
   owner: ConnectionRef; windowId: string; tabId: string; fallbackTabId?: string;
@@ -28,8 +27,16 @@ const HOST_ERROR_MESSAGES: Record<string, string> = {
   nativeTargetUnavailable: "The browser runtime is currently unavailable.", cleanupPending: "Browser profile cleanup is still in progress.",
   leaseConflict: "Browser control lease changed or expired.", leaseNotFound: "Browser control lease changed or expired.",
   leaseExpired: "Browser control lease changed or expired.", notLeaseHolder: "Browser control lease changed or expired.",
+  tooManyDevToolsLeases: "DevTools lease capacity reached; close an unused panel and retry.",
+  sessionExpired: "Authentication session expired; sign in again.",
+  invalidSession: "Authentication session invalid; sign in again.",
+  staleIncarnation: "Browser instance restarted; reopen Developer Tools.",
+  staleTarget: "Browser page target rotated; reopen Developer Tools.",
+  browserUnavailable: "Browser instance is currently unavailable.",
+  invalidDevToolsToken: "Developer Tools session expired; retry to reconnect.",
+  assetNotFound: "Developer Tools asset could not be loaded.",
 };
-const HOST_STATUS_MESSAGES: Record<number, string> = { 400: HOST_ERROR_MESSAGES.invalidInput!, 403: HOST_ERROR_MESSAGES.forbidden!, 404: HOST_ERROR_MESSAGES.sessionNotFound!, 409: HOST_ERROR_MESSAGES.sessionConflict!, 429: HOST_ERROR_MESSAGES.browserBusy!, 502: HOST_ERROR_MESSAGES.nativeTargetUnavailable!, 503: HOST_ERROR_MESSAGES.nativeTargetUnavailable! };
+const HOST_STATUS_MESSAGES: Record<number, string> = { 400: HOST_ERROR_MESSAGES.invalidInput!, 401: HOST_ERROR_MESSAGES.sessionExpired!, 403: HOST_ERROR_MESSAGES.forbidden!, 404: HOST_ERROR_MESSAGES.sessionNotFound!, 409: HOST_ERROR_MESSAGES.sessionConflict!, 429: HOST_ERROR_MESSAGES.browserBusy!, 502: HOST_ERROR_MESSAGES.nativeTargetUnavailable!, 503: HOST_ERROR_MESSAGES.nativeTargetUnavailable! };
 export const clearNavigationsForTesting = (): void => { inFlightNavigations.forEach((c) => c.abort()); inFlightNavigations.clear(); };
 export const retireTabNavigation = (windowId: string, tabId: string): void => {
   const key = browserTabSlotKey(windowId, tabId); inFlightNavigations.get(key)?.abort(); inFlightNavigations.delete(key);
