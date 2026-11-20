@@ -23,6 +23,17 @@ impl Default for ChromeIdentity {
 }
 
 impl ChromeIdentity {
+    pub fn from_get_version(version: Option<&Value>) -> Self {
+        let token = version.and_then(|v| {
+            ["product", "userAgent"].into_iter().find_map(|field| {
+                v.get(field)
+                    .and_then(Value::as_str)
+                    .and_then(extract_version_token)
+            })
+        });
+        Self::from_version_str(token.as_deref())
+    }
+
     pub fn from_version_str(raw: Option<&str>) -> Self {
         let full_version = raw
             .and_then(extract_version_token)
@@ -154,52 +165,74 @@ fn freeze_ua_version(ua: &str) -> String {
 
 pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
   try { const p = EventTarget.prototype; if (Object.getOwnPropertySymbols(p).some((s) => s.description === 'l')) return; Object.defineProperty(p, Symbol('l'), { value: true, enumerable: false, configurable: true }); } catch (_) {}
+  const nativeFns = new WeakMap();
+  const origFnToStr = Function.prototype.toString;
+  const maskFn = (fn, name) => {
+    if (typeof fn === 'function') nativeFns.set(fn, 'function ' + (name || fn.name || '') + '() { [native code] }');
+    return fn;
+  };
+  const maskGetter = (name, getter) => {
+    const g = Object.getOwnPropertyDescriptor({ get [name]() { return getter.call(this); } }, name).get;
+    return maskFn(g, 'get ' + name);
+  };
+  try {
+    if (typeof origFnToStr === 'function') {
+      const wrappedToStr = maskFn(function toString() {
+        if (typeof this === 'function' && nativeFns.has(this)) return nativeFns.get(this);
+        return Reflect.apply(origFnToStr, this, arguments);
+      }, 'toString');
+      Object.defineProperty(Function.prototype, 'toString', { value: wrappedToStr, writable: true, configurable: true });
+    }
+  } catch (_) {}
   try { if (Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')) delete Navigator.prototype.webdriver; if (Object.getOwnPropertyDescriptor(navigator, 'webdriver')) delete navigator.webdriver; } catch (_) {}
   const m = navigator.userAgent.match(/(?:Headless)?Chrome\/([\d.]+)/); const fullVer = m ? m[1] : '136.0.0.0'; const major = fullVer.split('.')[0] || '136';
   const isMob = /\bMobile\b|Android/.test(navigator.userAgent); const plat = isMob ? 'Android' : /Windows/.test(navigator.userAgent) ? 'Windows' : /Linux|X11/.test(navigator.userAgent) ? 'Linux' : 'macOS';
   try {
     if (!navigator.userAgentData || (navigator.userAgentData.brands || []).some((b) => /Headless/i.test(b.brand))) {
       const brands = [{ brand: 'Not;A=Brand', version: '8' }, { brand: 'Chromium', version: major }, { brand: 'Google Chrome', version: major }];
-      const uaData = { brands, mobile: isMob, platform: plat, getHighEntropyValues: () => Promise.resolve({ brands, mobile: isMob, platform: plat, platformVersion: plat === 'macOS' ? '15.3.0' : plat === 'Windows' ? '15.0.0' : plat === 'Android' ? '10' : '6.12.0', architecture: isMob ? '' : 'x86', bitness: isMob ? '' : '64', model: isMob ? 'K' : '', uaFullVersion: fullVer, fullVersionList: [{ brand: 'Not;A=Brand', version: '8.0.0.0' }, { brand: 'Chromium', version: fullVer }, { brand: 'Google Chrome', version: fullVer }], wow64: false }), toJSON: () => ({ brands, mobile: isMob, platform: plat }) };
-      Object.defineProperty(navigator, 'userAgentData', { get: () => uaData, configurable: true });
+      const uaData = { brands, mobile: isMob, platform: plat, getHighEntropyValues: maskFn(function getHighEntropyValues() { return Promise.resolve({ brands, mobile: isMob, platform: plat, platformVersion: plat === 'macOS' ? '15.3.0' : plat === 'Windows' ? '15.0.0' : plat === 'Android' ? '10' : '6.12.0', architecture: isMob ? '' : 'x86', bitness: isMob ? '' : '64', model: isMob ? 'K' : '', uaFullVersion: fullVer, fullVersionList: [{ brand: 'Not;A=Brand', version: '8.0.0.0' }, { brand: 'Chromium', version: fullVer }, { brand: 'Google Chrome', version: fullVer }], wow64: false }); }, 'getHighEntropyValues'), toJSON: maskFn(function toJSON() { return { brands, mobile: isMob, platform: plat }; }, 'toJSON') };
+      Object.defineProperty(navigator, 'userAgentData', { get: maskGetter('userAgentData', function() { return uaData; }), configurable: true });
     }
   } catch (_) {}
-  try { Object.defineProperty(navigator, 'pdfViewerEnabled', { get: () => true, configurable: true }); } catch (_) {}
+  try { Object.defineProperty(navigator, 'pdfViewerEnabled', { get: maskGetter('pdfViewerEnabled', function() { return true; }), configurable: true }); } catch (_) {}
   try {
     if (!navigator.plugins || navigator.plugins.length < 5) {
       const mimes = [{ type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' }, { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format' }];
       const mkMime = (x) => { const o = { ...x }; if (typeof MimeType !== 'undefined') Object.setPrototypeOf(o, MimeType.prototype); return o; };
       const mkPlug = (name) => { const p = { name, filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 2, 0: mkMime(mimes[0]), 1: mkMime(mimes[1]) }; if (typeof Plugin !== 'undefined') Object.setPrototypeOf(p, Plugin.prototype); return p; };
       const names = ['PDF Viewer', 'Chrome PDF Viewer', 'Chromium PDF Viewer', 'Microsoft Edge PDF Viewer', 'WebKit built-in PDF'];
-      const plugs = { length: 5, item(i) { return this[i] || null; }, namedItem(n) { return names.indexOf(n) >= 0 ? this[names.indexOf(n)] : null; }, refresh() {}, *[Symbol.iterator]() { for (let i = 0; i < 5; i++) yield this[i]; } };
+      const plugs = { length: 5, item: maskFn(function item(i) { return this[i] || null; }, 'item'), namedItem: maskFn(function namedItem(n) { return names.indexOf(n) >= 0 ? this[names.indexOf(n)] : null; }, 'namedItem'), refresh: maskFn(function refresh() {}, 'refresh'), [Symbol.iterator]: maskFn(function*() { for (let i = 0; i < 5; i++) yield this[i]; }, 'values') };
       names.forEach((n, i) => { plugs[i] = mkPlug(n); }); if (typeof PluginArray !== 'undefined') Object.setPrototypeOf(plugs, PluginArray.prototype);
-      Object.defineProperty(navigator, 'plugins', { get: () => plugs, configurable: true });
+      Object.defineProperty(navigator, 'plugins', { get: maskGetter('plugins', function() { return plugs; }), configurable: true });
     }
   } catch (_) {}
   try {
     if (!window.chrome) window.chrome = {};
-    if (!window.chrome.app) window.chrome.app = { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' }, getDetails: () => null, getIsInstalled: () => false, installState: () => 'not_installed', runningState: () => 'cannot_run' };
-    if (!window.chrome.runtime) window.chrome.runtime = { OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' }, OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' }, PlatformArch: { ARM: 'arm', ARM64: 'arm64', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' }, RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' }, connect: () => ({ onMessage: { addListener() {}, removeListener() {} }, onDisconnect: { addListener() {}, removeListener() {} }, postMessage() {} }), sendMessage() {}, id: undefined };
-    if (!window.chrome.csi) window.chrome.csi = () => ({ onloadT: Date.now(), startE: Date.now(), pageT: performance.now(), tran: 15 });
-    if (!window.chrome.loadTimes) window.chrome.loadTimes = () => ({ commitLoadTime: Date.now() / 1000, connectionInfo: 'h2', finishDocumentLoadTime: Date.now() / 1000, finishLoadTime: Date.now() / 1000, firstPaintAfterLoadTime: 0, firstPaintTime: Date.now() / 1000, navigationType: 'Other', npnNegotiatedProtocol: 'h2', requestTime: Date.now() / 1000, startLoadTime: Date.now() / 1000, wasAlternateProtocolAvailable: false, wasFetchedViaSpdy: true, wasNpnNegotiated: true });
+    if (!window.chrome.app) window.chrome.app = { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' }, getDetails: maskFn(function getDetails() { return null; }, 'getDetails'), getIsInstalled: maskFn(function getIsInstalled() { return false; }, 'getIsInstalled'), installState: maskFn(function installState() { return 'not_installed'; }, 'installState'), runningState: maskFn(function runningState() { return 'cannot_run'; }, 'runningState') };
+    if (!window.chrome.runtime) {
+      const mkEv = () => ({ addListener: maskFn(function addListener() {}, 'addListener'), removeListener: maskFn(function removeListener() {}, 'removeListener') });
+      window.chrome.runtime = { OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' }, OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' }, PlatformArch: { ARM: 'arm', ARM64: 'arm64', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' }, RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' }, connect: maskFn(function connect() { return { onMessage: mkEv(), onDisconnect: mkEv(), postMessage: maskFn(function postMessage() {}, 'postMessage') }; }, 'connect'), sendMessage: maskFn(function sendMessage() {}, 'sendMessage'), id: undefined };
+    }
+    if (!window.chrome.csi) window.chrome.csi = maskFn(function csi() { return { onloadT: Date.now(), startE: Date.now(), pageT: performance.now(), tran: 15 }; }, 'csi');
+    if (!window.chrome.loadTimes) window.chrome.loadTimes = maskFn(function loadTimes() { return { commitLoadTime: Date.now() / 1000, connectionInfo: 'h2', finishDocumentLoadTime: Date.now() / 1000, finishLoadTime: Date.now() / 1000, firstPaintAfterLoadTime: 0, firstPaintTime: Date.now() / 1000, navigationType: 'Other', npnNegotiatedProtocol: 'h2', requestTime: Date.now() / 1000, startLoadTime: Date.now() / 1000, wasAlternateProtocolAvailable: false, wasFetchedViaSpdy: true, wasNpnNegotiated: true }; }, 'loadTimes');
   } catch (_) {}
   try {
-    if (typeof Notification !== 'undefined' && Notification.permission === 'denied') Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true });
+    if (typeof Notification !== 'undefined' && Notification.permission === 'denied') Object.defineProperty(Notification, 'permission', { get: maskGetter('permission', function() { return 'default'; }), configurable: true });
     const permDefaults = { 'accelerometer': 'granted', 'ambient-light-sensor': 'granted', 'background-fetch': 'granted', 'background-sync': 'granted', 'bluetooth': 'prompt', 'camera': 'prompt', 'clipboard-read': 'prompt', 'clipboard-write': 'granted', 'display-capture': 'prompt', 'geolocation': 'prompt', 'gyroscope': 'granted', 'idle-detection': 'prompt', 'local-fonts': 'prompt', 'magnetometer': 'granted', 'microphone': 'prompt', 'midi': 'prompt', 'nfc': 'prompt', 'payment-handler': 'granted', 'periodic-background-sync': 'denied', 'persistent-storage': 'prompt', 'push': 'prompt', 'screen-wake-lock': 'granted', 'storage-access': 'prompt', 'system-wake-lock': 'prompt', 'usb': 'prompt', 'window-management': 'prompt', 'xr-spatial-tracking': 'prompt' };
     const origQ = window.Permissions?.prototype?.query;
-    if (origQ) window.Permissions.prototype.query = function(p) {
+    if (origQ) window.Permissions.prototype.query = maskFn(function query(p) {
       const name = p?.name;
       if (name === 'notifications') return Promise.resolve({ state: (typeof Notification !== 'undefined' && Notification.permission === 'granted') ? 'granted' : 'prompt', onchange: null });
       if (name && Object.prototype.hasOwnProperty.call(permDefaults, name)) return Promise.resolve({ state: permDefaults[name], onchange: null });
       return origQ.call(this, p);
-    };
+    }, 'query');
   } catch (_) {}
   try {
     const origEnum = navigator.mediaDevices?.enumerateDevices?.bind(navigator.mediaDevices);
-    if (origEnum) navigator.mediaDevices.enumerateDevices = async function() {
+    if (origEnum) navigator.mediaDevices.enumerateDevices = maskFn(async function enumerateDevices() {
       const devs = await origEnum();
       return Array.isArray(devs) ? devs.map((d) => ({ deviceId: '', kind: d.kind, label: '', groupId: '', toJSON() { return { deviceId: '', kind: this.kind, label: '', groupId: '' }; } })) : [];
-    };
+    }, 'enumerateDevices');
   } catch (_) {}
   try {
     const ALLOWED_CODECS = {
@@ -247,22 +280,24 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
       return 'probably';
     };
     const origCanPlay = HTMLMediaElement?.prototype?.canPlayType;
-    if (origCanPlay) HTMLMediaElement.prototype.canPlayType = function(type) {
+    if (origCanPlay) HTMLMediaElement.prototype.canPlayType = maskFn(function canPlayType(type) {
       const nativeRes = origCanPlay.call(this, type);
       if (nativeRes === 'probably') return 'probably';
       const res = checkMediaType(type, false);
       if (res === 'probably') return 'probably';
       return nativeRes || (res === 'maybe' ? 'maybe' : '');
-    };
+    }, 'canPlayType');
     if (typeof MediaSource !== 'undefined' && typeof MediaSource.isTypeSupported === 'function') {
       const origMse = MediaSource.isTypeSupported.bind(MediaSource);
-      MediaSource.isTypeSupported = function(type) {
+      MediaSource.isTypeSupported = maskFn(function isTypeSupported(type) {
         if (origMse(type)) return true;
         return checkMediaType(type, true) === 'probably';
-      };
+      }, 'isTypeSupported');
     }
   } catch (_) {}
   const sym = Symbol.for('dh.a');
+  const origConnSym = Symbol.for('dh.c');
+  const origDiscSym = Symbol.for('dh.d');
   const installBridge = (w) => {
     try {
       if (!w || !w.EventTarget?.prototype || typeof w.EventTarget.prototype[sym] === 'function') return;
@@ -445,8 +480,8 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
         if (!ctx || ctx.state === 'closed') { knownCtxs.delete(ctx); return null; }
         let tap = tappedCtxs.get(ctx);
         if (!tap || tap.nodes.size === 0) return null;
-        const origConn = w.AudioNode?.prototype?.__dhOrigConn || w.AudioNode?.prototype?.connect;
-        const origDisc = w.AudioNode?.prototype?.__dhOrigDisc || w.AudioNode?.prototype?.disconnect;
+        const origConn = w.AudioNode?.prototype?.[origConnSym] || w.AudioNode?.prototype?.connect;
+        const origDisc = w.AudioNode?.prototype?.[origDiscSym] || w.AudioNode?.prototype?.disconnect;
         if (tap.srcState && sources.has(tap.srcState) && tap.srcState.gen === gen && tap.inGain) {
           for (const [node, outs] of Array.from(tap.nodes.entries())) {
             let wSet = tap.wired.get(node); if (!wSet) { wSet = new Set(); tap.wired.set(node, wSet); }
@@ -531,11 +566,11 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
             const orig = hp[m];
             if (typeof orig === 'function') {
               Object.defineProperty(hp, m, {
-                value: function() {
+                value: maskFn(function() {
                   const r = Reflect.apply(orig, this, arguments);
                   try { onSameDocNav(); } catch (_) {}
                   return r;
-                },
+                }, m),
                 configurable: true,
                 writable: true
               });
@@ -597,17 +632,17 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
       const ACProto = (w.AudioContext || w.webkitAudioContext)?.prototype;
       if (ACProto && typeof ACProto.createMediaElementSource === 'function') {
         const origCreateMES = ACProto.createMediaElementSource;
-        ACProto.createMediaElementSource = function(el) {
+        ACProto.createMediaElementSource = maskFn(function createMediaElementSource(el) {
           if (el) { graphEls.add(el); const prev = tappedEls.get(el); if (prev) prev.kill(); }
           return origCreateMES.apply(this, arguments);
-        };
+        }, 'createMediaElementSource');
       }
       if (typeof w.AudioNode !== 'undefined' && w.AudioNode.prototype?.connect) {
         const origConn = w.AudioNode.prototype.connect;
         const origDisc = w.AudioNode.prototype.disconnect;
-        Object.defineProperty(w.AudioNode.prototype, '__dhOrigConn', { value: origConn, enumerable: false, configurable: true });
-        Object.defineProperty(w.AudioNode.prototype, '__dhOrigDisc', { value: origDisc, enumerable: false, configurable: true });
-        w.AudioNode.prototype.connect = function(dest, output) {
+        Object.defineProperty(w.AudioNode.prototype, origConnSym, { value: origConn, enumerable: false, configurable: true });
+        Object.defineProperty(w.AudioNode.prototype, origDiscSym, { value: origDisc, enumerable: false, configurable: true });
+        w.AudioNode.prototype.connect = maskFn(function connect(dest, output) {
           const ret = origConn.apply(this, arguments);
           try {
             const ctx = dest?.context;
@@ -624,9 +659,9 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
             }
           } catch (_) {}
           return ret;
-        };
+        }, 'connect');
         if (typeof origDisc === 'function') {
-          w.AudioNode.prototype.disconnect = function(destOrOut, output) {
+          w.AudioNode.prototype.disconnect = maskFn(function disconnect(destOrOut, output) {
             const ret = origDisc.apply(this, arguments);
             try {
               const ctx = this?.context;
@@ -664,7 +699,7 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
               }
             } catch (_) {}
             return ret;
-          };
+          }, 'disconnect');
         }
       }
       const drainChildren = (runToken) => {
@@ -753,10 +788,22 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
     } catch (_) {}
   };
   installBridge(window);
-  try { if (window.outerWidth === 0 || window.outerHeight === 0) { Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth || 1280, configurable: true }); Object.defineProperty(window, 'outerHeight', { get: () => (window.innerHeight || 900) + 85, configurable: true }); } Document.prototype.hasFocus = () => true; } catch (_) {}
+  try {
+    if (window.outerWidth === 0 || window.outerHeight === 0) {
+      Object.defineProperty(window, 'outerWidth', { get: maskGetter('outerWidth', function() { return window.innerWidth || 1280; }), configurable: true });
+      Object.defineProperty(window, 'outerHeight', { get: maskGetter('outerHeight', function() { return (window.innerHeight || 900) + 85; }), configurable: true });
+    }
+    if (typeof Document !== 'undefined' && Document.prototype && typeof Document.prototype.hasFocus === 'function') {
+      const hf = maskFn(function hasFocus() { return true; }, 'hasFocus');
+      Object.defineProperty(Document.prototype, 'hasFocus', { value: hf, writable: true, configurable: true });
+    }
+  } catch (_) {}
   try {
     const desc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
-    if (desc && desc.get) Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', { get: function() { const cw = desc.get.call(this); if (cw) { try { if (!cw.chrome && window.chrome) cw.chrome = window.chrome; if (cw.Navigator?.prototype && Object.getOwnPropertyDescriptor(cw.Navigator.prototype, 'webdriver')) delete cw.Navigator.prototype.webdriver; installBridge(cw); } catch (_) {} } return cw; }, configurable: true });
+    if (desc && desc.get) {
+      const cwGet = maskGetter('contentWindow', function() { const cw = desc.get.call(this); if (cw) { try { if (!cw.chrome && window.chrome) cw.chrome = window.chrome; if (cw.Navigator?.prototype && Object.getOwnPropertyDescriptor(cw.Navigator.prototype, 'webdriver')) delete cw.Navigator.prototype.webdriver; installBridge(cw); } catch (_) {} } return cw; });
+      Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', { get: cwGet, configurable: true });
+    }
   } catch (_) {}
   try { for (const k of ['__playwright', '__puppeteer', 'domAutomation', 'domAutomationController', '_phantom', 'callPhantom']) delete window[k]; for (const p of Object.getOwnPropertyNames(window)) if (p.startsWith('cdc_') || p.startsWith('__cdc_')) delete window[p]; } catch (_) {}
 })();"#;

@@ -1909,18 +1909,12 @@ impl ScreencastProducer {
     pub async fn apply_stealth_and_focus(&self, session_id: &str) -> Result<(), CdpError> {
         use super::stealth::ChromeIdentity;
 
-        let version_raw = self
+        let version = self
             .cdp_client
             .send_command("Browser.getVersion", None, None)
             .await
-            .ok()
-            .and_then(|v| {
-                v.get("userAgent")
-                    .or_else(|| v.get("product"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
-            });
-        let identity = ChromeIdentity::from_version_str(version_raw.as_deref());
+            .ok();
+        let identity = ChromeIdentity::from_get_version(version.as_ref());
         let ua_params = identity.user_agent_override_params();
         apply_stealth_to_session(&self.cdp_client, session_id, &ua_params).await?;
 

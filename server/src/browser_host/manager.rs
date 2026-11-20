@@ -1872,6 +1872,7 @@ pub struct NativeControl {
     /// Mock CDP endpoints (tests) have no target inventory: a response without `targetInfos`
     /// means "no pages". Never set for a real browser.
     inventory_optional: bool,
+    cached_ua_params: tokio::sync::Mutex<Option<Value>>,
 }
 
 impl NativeControl {
@@ -1891,7 +1892,26 @@ impl NativeControl {
             ownership_fence: Arc::new(OwnershipFence::new()),
             faults,
             inventory_optional: true,
+            cached_ua_params: tokio::sync::Mutex::new(None),
         })
+    }
+
+    async fn ua_override_params(&self) -> Value {
+        if let Some(cached) = self.cached_ua_params.lock().await.clone() {
+            return cached;
+        }
+        let version = self
+            .client
+            .send_command("Browser.getVersion", None, None)
+            .await
+            .ok();
+        let params =
+            super::stealth::ChromeIdentity::from_get_version(version.as_ref())
+                .user_agent_override_params();
+        if version.is_some() {
+            *self.cached_ua_params.lock().await = Some(params.clone());
+        }
+        params
     }
 
     /// Lists the browser's page targets.
@@ -2577,6 +2597,38 @@ fn parse_frame_tree_with_external_root(
         return None;
     }
     Some(nodes)
+}
+
+fn parent_has_active_or_pending_frame_tree(
+    state: &ObserverState,
+    parent_session_id: &str,
+    owner: &FrameOwner,
+    token: ValidityToken,
+) -> bool {
+    let mut current = parent_session_id;
+    for _ in 0..64 {
+        if state.owners.get(current) != Some(owner) {
+            return false;
+        }
+        if state.frame_sessions.contains(current)
+            || state.pending_frames.values().any(|pending| {
+                pending.session_id == current
+                    && pending.owner == *owner
+                    && pending.token == token
+            })
+            || state
+                .frame_tree_retries
+                .get(current)
+                .is_some_and(|retry| retry.owner == *owner && retry.token == token)
+        {
+            return true;
+        }
+        let Some((next_parent, _)) = state.pending_children.get(current) else {
+            return false;
+        };
+        current = next_parent.as_str();
+    }
+    false
 }
 
 fn child_root_matches_attachment(
@@ -4762,6 +4814,250 @@ mod ordered_position_tests {
             "unexpected protocol error during setup must close observer client"
         );
     }
+
+    #[tokio::test]
+    async fn worker_child_attached_applies_cached_ua_override_and_resumes_and_oopif_admits_during_parent_frame_tree(
+    ) {
+        use super::{
+            BrowserHostConfig, BrowserHostManager, BrowserInstanceHandle, FrameOwner,
+            InnerInstance, InstanceLifecycleState, NativeControl, NativeFaults, NativeTargetInfo,
+            NetworkPolicy, ObserverShared, ObserverState, OwnershipFence, PendingFrameTree,
+        };
+        use crate::browser_host::cdp::{CdpStreamPosition, CdpTargetEvent};
+        use futures_util::{SinkExt, StreamExt};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex as StdMutex,
+        };
+        use tokio::sync::{mpsc, Mutex};
+        use tokio_tungstenite::tungstenite::Message;
+        use tokio_util::sync::CancellationToken;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let get_version_count = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::new(StdMutex::new(Vec::<(String, Option<String>, serde_json::Value)>::new()));
+        let get_version_count_srv = get_version_count.clone();
+        let recorded_srv = recorded.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let cmd: serde_json::Value = serde_json::from_str(&text).unwrap();
+                let method = cmd["method"].as_str().unwrap().to_string();
+                let sid = cmd["sessionId"].as_str().map(str::to_string);
+                recorded_srv
+                    .lock()
+                    .unwrap()
+                    .push((method.clone(), sid.clone(), cmd["params"].clone()));
+                let reply = match method.as_str() {
+                    "Browser.getVersion" => {
+                        get_version_count_srv.fetch_add(1, Ordering::SeqCst);
+                        json!({
+                            "id": cmd["id"],
+                            "result": {
+                                "product": "Chrome/156.0.8078.79",
+                                "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+                            }
+                        })
+                    }
+                    "Emulation.setUserAgentOverride" if sid.as_deref() == Some("worker-err") => {
+                        json!({
+                            "id": cmd["id"],
+                            "error": { "code": -32601, "message": "not supported" }
+                        })
+                    }
+                    _ => json!({ "id": cmd["id"], "result": {} }),
+                };
+                if ws
+                    .send(Message::Text(reply.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = BrowserHostManager::new(
+            BrowserHostConfig::default(),
+            Some(tmp.path().to_path_buf()),
+            CancellationToken::new(),
+        );
+        let profile = manager.profile_for("alice", true).unwrap();
+        let handle = BrowserInstanceHandle {
+            subject: "alice".into(),
+            is_dev: true,
+            pid: 1,
+            ws_endpoint: format!("ws://{addr}"),
+            browser_incarnation: "inc-worker".into(),
+            profile_epoch: 1,
+            user_data_dir: profile.user_data_dir().to_path_buf(),
+        };
+        let control = Arc::new(
+            NativeControl::connect_unobserved(&handle, Arc::new(NativeFaults::default()))
+                .await
+                .unwrap(),
+        );
+        let inst = Arc::new(Mutex::new(InnerInstance {
+            profile,
+            state: InstanceLifecycleState::Running,
+            process: None,
+            browser_incarnation: Some("inc-worker".into()),
+            profile_epoch: 1,
+            active_viewers: 0,
+            active_raw_cdp: 0,
+            _held_lock: None,
+            deletion_worker: None,
+        }));
+        let shared = ObserverShared {
+            key: BrowserHostManager::principal_key("alice", true),
+            subject: "alice".into(),
+            is_dev: true,
+            max_targets: 8,
+            request_policy: Arc::new(
+                NetworkPolicy::from_config(&BrowserHostConfig::default(), true).unwrap(),
+            ),
+            inst,
+            native: manager.native.clone(),
+            faults: Arc::new(NativeFaults::default()),
+            downloads: manager.native.download_bindings_for("inc-worker"),
+            token: 1,
+        };
+
+        let fence = OwnershipFence::new();
+        let conn = fence.start_next_generation().unwrap();
+        let token = fence.token(conn).unwrap();
+        let owner = FrameOwner {
+            principal: "alice".into(),
+            is_dev: true,
+            browser_incarnation: "inc-worker".into(),
+            profile_epoch: 1,
+            logical_session_id: "logical-1".into(),
+            native_target_id: "PAGE-1".into(),
+            attachment_generation: 1,
+        };
+        let mut state = ObserverState::default();
+        state.owners.insert("page-sess".into(), owner.clone());
+        state.pending_frames.insert(
+            1,
+            PendingFrameTree {
+                session_id: "page-sess".into(),
+                owner: owner.clone(),
+                token,
+                child_parent_session: None,
+                child_attach_sequence: None,
+                barrier: None,
+                result: None,
+                changed: false,
+                detached: Vec::new(),
+                detach_overflow: false,
+                reseed_budget: 2,
+            },
+        );
+        let (frame_tx, _frame_rx) = mpsc::channel(4);
+
+        // 1. Paused OOPIF attaching while parent's Page.getFrameTree is still in flight is queued, not closed.
+        let iframe_ev = CdpTargetEvent::ChildAttached {
+            parent_session_id: "page-sess".into(),
+            session_id: "oopif-sess".into(),
+            info: NativeTargetInfo {
+                target_id: "OOPIF-TARGET".into(),
+                target_type: "iframe".into(),
+                url: "https://challenges.cloudflare.com/turnstile".into(),
+                opener_id: None,
+            },
+            waiting_for_debugger: true,
+            _reservation: None,
+        };
+        shared
+            .handle_event(
+                &control,
+                &mut state,
+                &iframe_ev,
+                Some(token),
+                CdpStreamPosition { generation: 1, sequence: 10 },
+                &frame_tx,
+            )
+            .await;
+        assert!(state.pending_children.contains_key("oopif-sess"));
+        assert!(state.pending_child_resumes.contains_key("oopif-sess"));
+        assert!(!state.rejected.contains("OOPIF-TARGET"));
+
+        // 2. Worker attaches: receives cached full-version UA override then resumes & detaches.
+        for worker_sid in ["worker-ok", "worker-err"] {
+            let worker_ev = CdpTargetEvent::ChildAttached {
+                parent_session_id: "oopif-sess".into(),
+                session_id: worker_sid.into(),
+                info: NativeTargetInfo {
+                    target_id: format!("T-{worker_sid}"),
+                    target_type: "worker".into(),
+                    url: "blob:https://challenges.cloudflare.com/w".into(),
+                    opener_id: None,
+                },
+                waiting_for_debugger: true,
+                _reservation: None,
+            };
+            shared
+                .handle_event(
+                    &control,
+                    &mut state,
+                    &worker_ev,
+                    Some(token),
+                    CdpStreamPosition { generation: 1, sequence: 11 },
+                    &frame_tx,
+                )
+                .await;
+        }
+        assert_eq!(get_version_count.load(Ordering::SeqCst), 1);
+
+        // 3. Revoked parent (owners present, no active/pending frame tree) still fails closed for paused iframe.
+        state.pending_frames.clear();
+        let revoked_iframe_ev = CdpTargetEvent::ChildAttached {
+            parent_session_id: "page-sess".into(),
+            session_id: "oopif-revoked".into(),
+            info: NativeTargetInfo {
+                target_id: "OOPIF-REVOKED".into(),
+                target_type: "iframe".into(),
+                url: "https://challenges.cloudflare.com/turnstile".into(),
+                opener_id: None,
+            },
+            waiting_for_debugger: true,
+            _reservation: None,
+        };
+        shared
+            .handle_event(
+                &control,
+                &mut state,
+                &revoked_iframe_ev,
+                Some(token),
+                CdpStreamPosition { generation: 1, sequence: 12 },
+                &frame_tx,
+            )
+            .await;
+        assert!(state.rejected.contains("OOPIF-REVOKED"));
+
+        let cmds = recorded.lock().unwrap();
+        assert!(cmds.iter().any(|(m, s, p)| {
+            m == "Emulation.setUserAgentOverride"
+                && s.as_deref() == Some("worker-ok")
+                && p["userAgentMetadata"]["fullVersion"] == "156.0.8078.79"
+        }));
+        assert!(cmds.iter().any(|(m, s, _)| {
+            m == "Runtime.runIfWaitingForDebugger" && s.as_deref() == Some("worker-ok")
+        }));
+        assert!(cmds.iter().any(|(m, s, _)| {
+            m == "Runtime.runIfWaitingForDebugger" && s.as_deref() == Some("worker-err")
+        }));
+        assert!(!cmds.iter().any(|(m, _, p)| {
+            m == "Target.detachFromTarget"
+                && (p["sessionId"] == "worker-ok" || p["sessionId"] == "worker-err")
+        }));
+        assert!(cmds.iter().any(|(m, _, p)| {
+            m == "Target.closeTarget" && p["targetId"] == "OOPIF-REVOKED"
+        }));
+    }
 }
 fn retire_target_frames(
     control: &NativeControl,
@@ -5215,6 +5511,7 @@ async fn connect_control(
         faults: shared.faults.clone(),
         ownership_fence,
         inventory_optional: false,
+        cached_ua_params: tokio::sync::Mutex::new(None),
     });
     Ok((control, events))
 }
@@ -5793,21 +6090,11 @@ impl ObserverShared {
         client
             .send_command("Page.enable", None, Some(session_id))
             .await?;
-        let version = client
-            .send_command("Browser.getVersion", None, None)
-            .await
-            .ok()
-            .and_then(|v| {
-                v.get("userAgent")
-                    .or_else(|| v.get("product"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            });
-        let identity = super::stealth::ChromeIdentity::from_version_str(version.as_deref());
+        let ua_params = control.ua_override_params().await;
         super::screencast::apply_stealth_before_resume(
             client,
             session_id,
-            &identity.user_agent_override_params(),
+            &ua_params,
         )
         .await?;
         client
@@ -6853,8 +7140,16 @@ impl ObserverShared {
                     } else {
                         let owner = state.owners.get(parent_session_id).cloned();
                         let tracked = owner.is_some() && state.pending_children.len() < 64;
-                        let paused_admitted =
-                            token.is_some() && state.frame_sessions.contains(parent_session_id);
+                        let paused_admitted = matches!(
+                            (token, owner.as_ref()),
+                            (Some(tok), Some(parent_owner))
+                                if parent_has_active_or_pending_frame_tree(
+                                    state,
+                                    parent_session_id,
+                                    parent_owner,
+                                    tok,
+                                )
+                        );
                         if *waiting_for_debugger && !(tracked && paused_admitted) {
                             // Paused without exact admission: never resumed, closed instead.
                             self.close_refused(state, &info.target_id);
@@ -6894,6 +7189,35 @@ impl ObserverShared {
                                 }
                             }
                         }
+                    }
+                } else if matches!(info.target_type.as_str(), "worker" | "shared_worker") {
+                    let ua_params = control.ua_override_params().await;
+                    if let Err(error) = control
+                        .client
+                        .send_command(
+                            "Emulation.setUserAgentOverride",
+                            Some(ua_params),
+                            Some(session_id),
+                        )
+                        .await
+                    {
+                        debug!(
+                            %error, session_id, target_type = %info.target_type,
+                            "worker Emulation.setUserAgentOverride skipped"
+                        );
+                    }
+                    // Resume without detaching: Target.detachFromTarget disables Blink's
+                    // InspectorEmulationAgent on the worker and reverts userAgentMetadata.
+                    // The flattened session retires naturally on Target.detachedFromTarget.
+                    if *waiting_for_debugger {
+                        let _ = control
+                            .client
+                            .send_command(
+                                "Runtime.runIfWaitingForDebugger",
+                                None,
+                                Some(session_id),
+                            )
+                            .await;
                     }
                 } else {
                     release_attached(control, session_id, *waiting_for_debugger).await;

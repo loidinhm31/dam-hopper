@@ -10,6 +10,7 @@ export interface CanvasViewProps {
   onCanvasPointerDown?: (e: React.PointerEvent<HTMLCanvasElement>) => void;
   onCanvasPointerUp?: (e: React.PointerEvent<HTMLCanvasElement>) => void;
   onCanvasPointerMove?: (e: React.PointerEvent<HTMLCanvasElement>) => void;
+  onCanvasPointerLeave?: (e: React.PointerEvent<HTMLCanvasElement>) => void;
   onCanvasPointerCancel?: (e: React.PointerEvent<HTMLCanvasElement>) => void;
   onCanvasLostPointerCapture?: (e: React.PointerEvent<HTMLCanvasElement>) => void;
   onCanvasWheel?: (e: React.WheelEvent<HTMLCanvasElement>) => void;
@@ -26,6 +27,7 @@ export const CanvasView = React.forwardRef<HTMLCanvasElement, CanvasViewProps>(
       onCanvasPointerDown,
       onCanvasPointerUp,
       onCanvasPointerMove,
+      onCanvasPointerLeave,
       onCanvasPointerCancel,
       onCanvasLostPointerCapture,
       onCanvasWheel,
@@ -124,6 +126,7 @@ export const CanvasView = React.forwardRef<HTMLCanvasElement, CanvasViewProps>(
           }}
           onPointerUp={onCanvasPointerUp}
           onPointerMove={onCanvasPointerMove}
+          onPointerLeave={onCanvasPointerLeave}
           onPointerCancel={onCanvasPointerCancel}
           onLostPointerCapture={onCanvasLostPointerCapture}
           onWheel={onCanvasWheel}

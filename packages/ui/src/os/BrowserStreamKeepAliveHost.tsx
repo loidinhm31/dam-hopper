@@ -64,6 +64,13 @@ import {
 import type { OsWindow } from "./types.js";
 import { runSerializedBrowserControlAcquire } from "./browser/browser-control-gate.js";
 import {
+  clearPreClickHoverBuffer,
+  computeClickDwellMs,
+  consumePreClickHoverTrail,
+  createPreClickHoverBuffer,
+  recordPreClickHover,
+} from "./browser/browser-preclick-hover.js";
+import {
   browserTabSlotKey,
   findBrowserTab,
   patchBrowserTab,
@@ -472,8 +479,14 @@ function snapshotBrowserPointer(
 interface PendingBrowserPointer {
   pointerId: number;
   down: CanvasPointerInput;
+  downAt: number;
+  preClickMoves?: CanvasPointerInput[];
   move?: CanvasPointerInput;
   up?: CanvasPointerInput;
+  upAt?: number;
+  upTimer?: number;
+  flushUp?: () => boolean;
+  upDelivered?: boolean;
   replayed?: boolean;
 }
 
@@ -495,6 +508,7 @@ function ParkedBrowserStreamItem({
   const streamControllerRef = useRef<BrowserStreamController | null>(null);
   const inputControllerRef = useRef<BrowserInputController | null>(null);
   const pendingPointerRef = useRef<PendingBrowserPointer | null>(null);
+  const hoverBufferRef = useRef(createPreClickHoverBuffer());
   const pcmPlayerRef = useRef<PcmPlayer | null>(null);
   const pointerVisibleRef = useRef(false);
   const pointerDownPosRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
@@ -627,7 +641,13 @@ function ParkedBrowserStreamItem({
   const [retryNonce, setRetryNonce] = useState(0);
   const cancelPendingGesture = useCallback(() => {
     releaseActiveCapture();
+    const pending = pendingPointerRef.current;
+    if (pending?.upTimer !== undefined) {
+      window.clearTimeout(pending.upTimer);
+      pending.upTimer = undefined;
+    }
     pendingPointerRef.current = null;
+    clearPreClickHoverBuffer(hoverBufferRef.current);
     inputControllerRef.current?.cancelControlHandoff();
     textInputProxyRef.current?.reset();
   }, [releaseActiveCapture]);
@@ -2221,7 +2241,15 @@ function ParkedBrowserStreamItem({
         return;
       }
       if (latest.tab.isController && latest.tab.leaseToken) {
-        if (pendingPointerRef.current?.replayed) cancelPendingGesture();
+        const prevPending = pendingPointerRef.current;
+        if (prevPending?.flushUp) {
+          if (!prevPending.flushUp()) {
+            return;
+          }
+        } else if (prevPending && !prevPending.upDelivered) {
+          cancelPendingGesture();
+        }
+        clearPreClickHoverBuffer(hoverBufferRef.current);
         setControlError(null);
         if (!input.handlePointerDown(e)) {
           return;
@@ -2251,9 +2279,17 @@ function ParkedBrowserStreamItem({
       };
       const controlSocket = streamControllerRef.current?.getControlSocket();
 
+      const pointerCanvas = e.currentTarget;
+      const downSnapshot = snapshotBrowserPointer(e);
+      const preClickMoves = consumePreClickHoverTrail(
+        hoverBufferRef.current,
+        downSnapshot,
+      );
       const pending: PendingBrowserPointer = {
         pointerId: e.pointerId,
-        down: snapshotBrowserPointer(e),
+        down: downSnapshot,
+        downAt: Date.now(),
+        preClickMoves,
       };
       pendingPointerRef.current = pending;
       let acquiredLeaseToken: string | undefined;
@@ -2294,10 +2330,16 @@ function ParkedBrowserStreamItem({
       const handoff = input.beginControlHandoff(isCurrentGesture, () => {
         controlSocket?.removeEventListener("close", handleControlClose);
         if (pendingPointerRef.current === pending) {
+          if (pending.upTimer !== undefined) {
+            window.clearTimeout(pending.upTimer);
+            pending.upTimer = undefined;
+          }
+          pending.flushUp = undefined;
           if (!pending.replayed) {
             releaseActiveCapture(pending.pointerId);
           }
           pendingPointerRef.current = null;
+          clearPreClickHoverBuffer(hoverBufferRef.current);
           textInputProxyRef.current?.reset();
         }
       });
@@ -2341,18 +2383,7 @@ function ParkedBrowserStreamItem({
           acquiredLeaseToken = leaseTokenToUse;
           updateBrowserTabInStore(win.id, tab.tabId, { isController: true, leaseToken: leaseTokenToUse });
         }
-        const focused =
-          input.handlePointerDown(pending.down) &&
-          (!pending.move || input.handlePointerMove(pending.move)) &&
-          (!pending.up || input.handlePointerUp(pending.up));
-        pending.replayed = true;
-        if (
-          !focused ||
-          !input.completeControlHandoff(handoff, () => {
-            if (pendingPointerRef.current === pending) pendingPointerRef.current = null;
-            controlSocket?.removeEventListener("close", handleControlClose);
-          })
-        ) {
+        const abortHandoff = () => {
           cancelPendingGesture();
           input.releaseAllHeldInput();
           if (acquiredLocally) {
@@ -2361,6 +2392,65 @@ function ParkedBrowserStreamItem({
               console.warn("[BrowserStream] Unused control release failed:", error),
             );
           }
+        };
+
+        for (const hoverMove of pending.preClickMoves ?? []) {
+          if (input.mapClientToFractions(hoverMove.clientX, hoverMove.clientY, pointerCanvas)) {
+            input.handlePointerMove(hoverMove, true);
+          }
+        }
+        if (!input.handlePointerDown(pending.down)) {
+          abortHandoff();
+          return;
+        }
+        pending.replayed = true;
+        if (pending.up) {
+          let finalized = false;
+          const finishRelease = (): boolean => {
+            if (finalized) return true;
+            finalized = true;
+            if (pending.upTimer !== undefined) {
+              window.clearTimeout(pending.upTimer);
+              pending.upTimer = undefined;
+            }
+            pending.flushUp = undefined;
+            if (pendingPointerRef.current !== pending || !isCurrentGesture()) {
+              abortHandoff();
+              return false;
+            }
+            const moved = !pending.move || input.handlePointerMove(pending.move, true);
+            const released = moved && input.handlePointerUp(pending.up!);
+            if (released) {
+              pending.upDelivered = true;
+            }
+            if (
+              !released ||
+              !input.completeControlHandoff(handoff, () => {
+                if (pendingPointerRef.current === pending) pendingPointerRef.current = null;
+                controlSocket?.removeEventListener("close", handleControlClose);
+              })
+            ) {
+              abortHandoff();
+              return false;
+            }
+            return true;
+          };
+          pending.flushUp = finishRelease;
+          const dwellMs = computeClickDwellMs(pending.downAt, pending.upAt ?? Date.now());
+          pending.upTimer = window.setTimeout(() => {
+            finishRelease();
+          }, dwellMs);
+          return;
+        }
+        const moved = !pending.move || input.handlePointerMove(pending.move);
+        if (
+          !moved ||
+          !input.completeControlHandoff(handoff, () => {
+            if (pendingPointerRef.current === pending) pendingPointerRef.current = null;
+            controlSocket?.removeEventListener("close", handleControlClose);
+          })
+        ) {
+          abortHandoff();
         }
       }).catch((error) => {
         if (pendingPointerRef.current === pending) {
@@ -2433,8 +2523,10 @@ function ParkedBrowserStreamItem({
       }
       const pending = pendingPointerRef.current;
       if (pending && !pending.replayed) {
-        if (pending.pointerId === e.pointerId)
+        if (pending.pointerId === e.pointerId) {
           pending.up = snapshotBrowserPointer(e);
+          pending.upAt = Date.now();
+        }
         return;
       }
       inputControllerRef.current?.handlePointerUp(e);
@@ -2515,16 +2607,46 @@ function ParkedBrowserStreamItem({
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const bufferIfHoverable = () => {
+        if (
+          pointerVisibleRef.current &&
+          activeDialogRef.current === null &&
+          canStreamTabRef.current(currentAttachedCredsRef.current ?? undefined) &&
+          inputControllerRef.current?.mapClientToFractions(
+            e.clientX,
+            e.clientY,
+            e.currentTarget,
+          )
+        ) {
+          recordPreClickHover(hoverBufferRef.current, snapshotBrowserPointer(e));
+        }
+      };
       const pending = pendingPointerRef.current;
       if (pending && !pending.replayed) {
-        if (pending.pointerId === e.pointerId)
+        if (pending.pointerId === e.pointerId && !pending.up) {
           pending.move = snapshotBrowserPointer(e);
+        } else if (pending.up) {
+          bufferIfHoverable();
+        }
+        return;
+      }
+      if (pending?.upTimer !== undefined) {
+        bufferIfHoverable();
+        return;
+      }
+      const latest = readBrowserWindowAndTab(win.id, tab.tabId);
+      if (!latest?.tab.isController || !latest.tab.leaseToken) {
+        bufferIfHoverable();
         return;
       }
       inputControllerRef.current?.handlePointerMove(e);
     },
-    [],
+    [win.id, tab.tabId],
   );
+
+  const handlePointerLeave = useCallback(() => {
+    clearPreClickHoverBuffer(hoverBufferRef.current);
+  }, []);
 
   const handlePointerCancel = useCallback(
     (e?: React.PointerEvent<HTMLCanvasElement>) => {
@@ -2591,6 +2713,7 @@ function ParkedBrowserStreamItem({
       onCanvasPointerDown={handlePointerDown}
       onCanvasPointerUp={handlePointerUp}
       onCanvasPointerMove={handlePointerMove}
+      onCanvasPointerLeave={handlePointerLeave}
       onCanvasPointerCancel={handlePointerCancel}
       onCanvasLostPointerCapture={handleLostPointerCapture}
       onCanvasWheel={handleWheel}

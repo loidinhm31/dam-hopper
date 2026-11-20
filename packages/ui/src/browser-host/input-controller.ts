@@ -536,6 +536,7 @@ export class BrowserInputController {
 
   public handlePointerMove(
     e: CanvasPointerInput,
+    immediate = false,
   ): boolean {
     if (this.isDisposed || this.isDisplayOnly()) return false;
     const canvas = e.currentTarget as HTMLCanvasElement;
@@ -548,13 +549,16 @@ export class BrowserInputController {
     if (!coords) return false;
     this.lastPointerCoords = coords;
 
-    // Eligible for coalescing with adjacent moves
-    return this.enqueueCoalescableEvent({
-      kind: "pointerMove",
-      u: coords.u,
-      v: coords.v,
-      modifiers: extractModifiers(e),
-    });
+    // Eligible for coalescing with adjacent moves unless replaying pre-click trail.
+    return this.enqueueCoalescableEvent(
+      {
+        kind: "pointerMove",
+        u: coords.u,
+        v: coords.v,
+        modifiers: extractModifiers(e),
+      },
+      immediate,
+    );
   }
 
   public handlePointerCancel(): boolean {
@@ -819,7 +823,7 @@ export class BrowserInputController {
     return true;
   }
 
-  private enqueueCoalescableEvent(event: InputEvent): boolean {
+  private enqueueCoalescableEvent(event: InputEvent, immediate = false): boolean {
     const socket = this.getControlSocket();
     if (!socket || socket.readyState !== WebSocket.OPEN) return false;
 
@@ -828,6 +832,21 @@ export class BrowserInputController {
     const wire = this.captureWireEpochs();
     if (!leaseToken || !subEpoch || !wire) return false;
     this.lastWireEpochs = wire;
+    if (immediate) {
+      if (this.pendingCoalescable) {
+        this.flushCoalescable(true);
+      }
+      this.pendingCoalescable = {
+        browserSessionId: this.getSessionId(),
+        browserIncarnation: this.getIncarnation(),
+        profileEpoch: wire.profileEpoch,
+        subscriptionEpoch: subEpoch,
+        leaseToken,
+        viewportEpoch: wire.viewportEpoch,
+        event,
+      };
+      return this.flushCoalescable(true);
+    }
     if (
       this.pendingCoalescable &&
       (this.pendingCoalescable.leaseToken !== leaseToken ||
@@ -933,15 +952,24 @@ export class BrowserInputController {
       (isRelease ? MAX_COMBINED_ROLLING_PER_SEC : MAX_NORMAL_ROLLING_PER_SEC)
     );
   }
-  private flushCoalescable(isBarrier = false): void {
+  private flushCoalescable(isBarrier = false): boolean {
     this.cancelCoalescableTimer();
-    if (this.isDisposed || !this.pendingCoalescable) return;
+    if (this.isDisposed || !this.pendingCoalescable) {
+      this.pendingCoalescable = null;
+      return false;
+    }
     // Queued while trusted; the frame may have become display-only before this deferred flush.
-    if (this.isDisplayOnly()) return;
+    if (this.isDisplayOnly()) {
+      if (isBarrier) this.pendingCoalescable = null;
+      return false;
+    }
     const msg = this.pendingCoalescable;
 
     const socket = this.getControlSocket();
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      if (isBarrier) this.pendingCoalescable = null;
+      return false;
+    }
     if (socket.bufferedAmount > 256 * 1024) {
       this.pendingCoalescable = null;
       this.onError?.(new Error("Control socket output queue saturated"));
@@ -950,7 +978,7 @@ export class BrowserInputController {
       } catch {
         // already closing
       }
-      return;
+      return false;
     }
 
     const currentLease = this.getLeaseToken();
@@ -964,24 +992,24 @@ export class BrowserInputController {
     ) {
       // Identity moved since the event was captured: never send it under a stale epoch.
       this.pendingCoalescable = null;
-      return;
+      return false;
     }
 
     const now = Date.now();
     const elapsed = now - this.lastCoalescableFlushAt;
     if (!isBarrier && elapsed < COALESCABLE_MIN_INTERVAL_MS) {
       this.scheduleCoalescableFlush();
-      return;
+      return true;
     }
 
     if (!this.canSendReplaceable(now)) {
       this.pendingCoalescable = null;
-      return;
+      return false;
     }
 
     this.pendingCoalescable = null;
     const inputSeq = this.nextInputSeq();
-    if (inputSeq === null) return;
+    if (inputSeq === null) return false;
     const wireMsg: InputMessage = { ...msg, inputSeq };
     this.lastCoalescableFlushAt = now;
     this.sentTimestamps.push(now);
@@ -989,8 +1017,10 @@ export class BrowserInputController {
 
     try {
       socket.send(JSON.stringify(wireMsg));
+      return true;
     } catch (err) {
       this.onError?.(err instanceof Error ? err : new Error(String(err)));
+      return false;
     }
   }
 

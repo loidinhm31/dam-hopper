@@ -1262,4 +1262,31 @@ describe("input-controller", () => {
       }
     });
   });
+
+  describe("immediate non-coalescing pointermove replay", () => {
+    it("flushes each pointermove synchronously without coalescing before pointerdown when immediate=true", () => {
+      const base = {
+        currentTarget: canvas,
+        button: 0,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+      };
+      expect(controller.handlePointerMove({ ...base, clientX: 200, clientY: 120 }, true)).toBe(true);
+      expect(controller.handlePointerMove({ ...base, clientX: 320, clientY: 240 }, true)).toBe(true);
+      expect(controller.handlePointerDown({ ...base, clientX: 440, clientY: 360 })).toBe(true);
+
+      const events = socket.sentMessages.map((msg) => (JSON.parse(msg) as InputMessage).event);
+      expect(events).toEqual([
+        { kind: "pointerMove", u: 0.25, v: 0.25, modifiers: 0 },
+        { kind: "pointerMove", u: 0.5, v: 0.5, modifiers: 0 },
+        { kind: "pointerDown", button: "left", u: 0.75, v: 0.75, modifiers: 0 },
+      ]);
+
+      // Fails cleanly when socket closes without leaving stranded pending state
+      socket.readyState = WebSocket.CLOSED;
+      expect(controller.handlePointerMove({ ...base, clientX: 200, clientY: 120 }, true)).toBe(false);
+    });
+  });
 });

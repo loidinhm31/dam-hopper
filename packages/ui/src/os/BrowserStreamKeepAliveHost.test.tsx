@@ -235,6 +235,7 @@ vi.mock("../browser-host/canvas-view.js", () => ({
         onPointerDown: props.onCanvasPointerDown,
         onPointerUp: props.onCanvasPointerUp,
         onPointerMove: props.onCanvasPointerMove,
+        onPointerLeave: props.onCanvasPointerLeave,
         onPointerCancel: props.onCanvasPointerCancel,
         onLostPointerCapture: props.onCanvasLostPointerCapture,
       }),
@@ -1562,6 +1563,9 @@ describe("browser first pointer gesture control handoff & popup tabs", () => {
     await act(async () => {
       lease.resolve({ leaseToken: "lease-mid-paste", expiresAtUnixMs: Date.now() + 30_000 });
     });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45);
+    });
     // First chunk already drained synchronously upon handoff completion; close socket before second chunk at 25ms
     controlSocket.readyState = 3;
     await act(async () => {
@@ -1593,6 +1597,9 @@ describe("browser first pointer gesture control handoff & popup tabs", () => {
     });
     await act(async () => {
       lease2.resolve({ leaseToken: "lease-hide-paste", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45);
     });
     await act(async () => {
       setDocumentVisibilityForTests(false);
@@ -1719,6 +1726,191 @@ describe("browser first pointer gesture control handoff & popup tabs", () => {
     });
     expect(cap.releaseCapture).toHaveBeenCalledWith(4);
     expect(sentInput().map((m) => m.event.kind)).toContain("pointerCancel");
+  });
+
+  it("replays view-only pre-click hover trail, enforces dwell timing, clears hover on leave, and handles dwell cancel/reclick", async () => {
+    const canvas = slot.querySelector("canvas")!;
+    mockCanvasRectAndCapture(canvas);
+
+    // 1. Pre-click hover trail replayed without coalescing before pointerDown, and zero-ms click waits 45ms dwell
+    const lease1 = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease1.promise);
+    controlSocket.send.mockClear();
+
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointermove", { clientX: 160, clientY: 120, pointerId: 1 }));
+      canvas.dispatchEvent(makePointerEvent("pointermove", { clientX: 320, clientY: 240, pointerId: 1 }));
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 400, clientY: 300, pointerId: 1 }));
+    });
+    expect(sentInput()).toEqual([]);
+
+    await act(async () => {
+      lease1.resolve({ leaseToken: "lease-hover-1", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerMove", u: 0.2, v: 0.2, modifiers: 0 },
+      { kind: "pointerMove", u: 0.4, v: 0.4, modifiers: 0 },
+      { kind: "pointerMove", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+    ]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(44);
+    });
+    expect(sentInput().map((m) => m.event.kind)).not.toContain("pointerUp");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerMove", u: 0.2, v: 0.2, modifiers: 0 },
+      { kind: "pointerMove", u: 0.4, v: 0.4, modifiers: 0 },
+      { kind: "pointerMove", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+    ]);
+
+    // 2. Latest hover >600ms ago is retained if no newer moves occurred, while pointerleave clears it
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease2 = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease2.promise);
+    controlSocket.send.mockClear();
+
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 150, pointerId: 1 }));
+      await vi.advanceTimersByTimeAsync(900);
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 400, clientY: 300, pointerId: 1 }));
+    });
+    await act(async () => {
+      lease2.resolve({ leaseToken: "lease-hover-2", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45);
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerMove", u: 0.25, v: 0.25, modifiers: 0 },
+      { kind: "pointerMove", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+    ]);
+
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const leaseLeave = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(leaseLeave.promise);
+    controlSocket.send.mockClear();
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 150, pointerId: 1 }));
+      canvas.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }));
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { clientX: 400, clientY: 300, pointerId: 1 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 400, clientY: 300, pointerId: 1 }));
+    });
+    await act(async () => {
+      leaseLeave.resolve({ leaseToken: "lease-hover-leave", expiresAtUnixMs: Date.now() + 30_000 });
+      await vi.advanceTimersByTimeAsync(45);
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+    ]);
+
+    // 3. Cancellation during dwell (window blur) emits pointerCancel and never pointerUp
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease3 = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease3.promise);
+    controlSocket.send.mockClear();
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { clientX: 400, clientY: 300, pointerId: 2 }));
+      await vi.advanceTimersByTimeAsync(90);
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 400, clientY: 300, pointerId: 2 }));
+    });
+    await act(async () => {
+      lease3.resolve({ leaseToken: "lease-dwell-cancel", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    await act(async () => {
+      window.dispatchEvent(new Event("blur"));
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerCancel" },
+    ]);
+
+    // 4. Successor pointerdown during dwell flushes prior pointerUp synchronously first
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease4 = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease4.promise);
+    controlSocket.send.mockClear();
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { clientX: 400, clientY: 300, pointerId: 3 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 400, clientY: 300, pointerId: 3 }));
+    });
+    await act(async () => {
+      lease4.resolve({ leaseToken: "lease-reclick", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { clientX: 320, clientY: 240, pointerId: 3 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 320, clientY: 240, pointerId: 3 }));
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerDown", button: "left", u: 0.4, v: 0.4, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 0.4, v: 0.4, modifiers: 0 },
+    ]);
+
+    // 5. Post-pointerup cursor move while acquire is still pending never mutates pending.move into a drag
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease5 = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease5.promise);
+    controlSocket.send.mockClear();
+    await act(async () => {
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { clientX: 400, clientY: 300, pointerId: 5 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 400, clientY: 300, pointerId: 5 }));
+      canvas.dispatchEvent(makePointerEvent("pointermove", { clientX: 160, clientY: 120, pointerId: 5 }));
+    });
+    await act(async () => {
+      lease5.resolve({ leaseToken: "lease-no-postup-drag", expiresAtUnixMs: Date.now() + 30_000 });
+      await vi.advanceTimersByTimeAsync(45);
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+    ]);
+
+    // 6. Cancelling handoff directly via keyboard queue overflow during dwell clears upTimer without revoking lease
+    patchTabInTest("tab-1", { isController: false, leaseToken: undefined });
+    await render();
+    const lease6 = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    acquireControl.mockReturnValueOnce(lease6.promise);
+    controlSocket.send.mockClear();
+    releaseControl.mockClear();
+    await act(async () => {
+      canvas.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }));
+      canvas.dispatchEvent(makePointerEvent("pointerdown", { clientX: 400, clientY: 300, pointerId: 6 }));
+      canvas.dispatchEvent(makePointerEvent("pointerup", { clientX: 400, clientY: 300, pointerId: 6 }));
+    });
+    await act(async () => {
+      lease6.resolve({ leaseToken: "lease-overflow-dwell", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    await act(async () => {
+      // Exceed MAX_HANDOFF_BYTES (16 KiB) inside handoff while dwell timer is still armed
+      for (let i = 0; i < 6; i += 1) {
+        typeText("x".repeat(3000));
+      }
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerCancel" },
+    ]);
+    expect(releaseControl).not.toHaveBeenCalled();
   });
 });
 

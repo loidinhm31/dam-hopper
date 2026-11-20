@@ -1,0 +1,499 @@
+{
+  "version": 1,
+  "project_root": "/home/loidinh/WS/dam-hopper",
+  "plan": "plans/261116-0938-device-login-management/plan.md",
+  "source_fingerprint": "0cd119fc92f2384b3aee55f77e7e79e3667bf827ffbb05830f2c9bbee631bb19",
+  "tasks": [
+    {
+      "id": "detach-dialog-devices",
+      "title": "Remove dialog device coupling and preserve credential-owned Save and rollback",
+      "blocked_by": [],
+      "allowed_files": [
+        "packages/ui/src/components/organisms/ServerSettingsDialog.tsx",
+        "packages/ui/src/components/organisms/ServerSettingsDialog.test.tsx"
+      ],
+      "constraints": [
+        "Coordinator starts this ID first after targeted-correction state reconciliation; terminal edit report leaves it in_progress until joined evidence.",
+        "Own production dialog baseline/Save/rollback guard and local unit regressions only; integration cases belong to prove-settings-device-surface.",
+        "Remove device UI/callback state, not stale-credential security; no onSelfRevoked restoration, new global state or generic auth framework.",
+        "Keep login/MFA/save/logout/Browser reset, URL-change clearing, media ordering and still-owned persistence rollback; no checks mid-flight or outside-list edits."
+      ],
+      "acceptance": [
+        "Saved, legacy and new-profile dialogs render no device surface and issue zero auth-session inventory/revoke requests; no orphan helper remains.",
+        "Last successful auth verification captures owner/candidate/persisted baseline; stale A and external B invalidate Save, while distinct fresh verified credentials after prior revocation remain saveable including challenge/verified-before-ACK.",
+        "Save freezes operation ownership and rechecks after every media await, before credential writes/clears and success/reconnect/reload; ACK during cleanup aborts with null/B unchanged, no success or stale reconnect.",
+        "Saved-profile/legacy rollback restores only still-owned expected state; never resurrects retired A or overwrites B, including storage failure and synchronous notification races; profile/endpoint/incarnation/available-generation fences remain."
+      ],
+      "verification": [
+        "Coordinator runs focused dialog/MFA/integration regressions and UI typecheck after the five-edit join; deleting the earlier TS2304 orphan alone is insufficient.",
+        "Final code review traces all saved-profile/legacy credential writes, awaits, rollback and success/reconnect paths against the guard contract; inspect null/B and fresh-auth recovery cases, storage-failure restoration and no dialog session requests."
+      ],
+      "source_phase": "plans/261116-0938-device-login-management/phase-01-device-login-surface-cutover.md",
+      "spec_fingerprint": "e93819bb293868df0981737b808266f8c172b084a32aa03e6fe95e1a533653a3",
+      "status": "in_progress",
+      "owner": "device-login-coordinator-main",
+      "reason": null,
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-11-16T14:49:13.138Z",
+          "event": "claimed",
+          "owner": "main-device-login-implementation",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T14:49:13.189Z",
+          "event": "in_progress",
+          "owner": "main-device-login-implementation",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:15:55.972Z",
+          "event": "stale",
+          "owner": "main-device-login-implementation",
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:16:07.272Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reviewed plan revision authorized the omitted connection integration test and corrected the completion-dependency deadlock; previous fingerprints are stale. Preserve history and reverify all six contracts on the joined current revision."
+        },
+        {
+          "at": "2026-11-16T15:16:27.083Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:16:27.133Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:34.988Z",
+          "event": "stale",
+          "owner": "device-login-coordinator-main",
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:41:47.614Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Targeted credential-ownership correction changed the canonical task contract; preserve claim history and reconcile against joined implementation."
+        },
+        {
+          "at": "2026-11-16T15:41:57.884Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:57.935Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "id": "retire-device-draft-callback",
+      "title": "Retire unused dialog draft notification without changing device cleanup",
+      "blocked_by": [],
+      "allowed_files": [
+        "packages/ui/src/components/organisms/LoginDevicesSection.tsx",
+        "packages/ui/src/components/organisms/use-login-devices.ts"
+      ],
+      "constraints": [
+        "Coordinator starts only after detach-dialog-devices terminal edit handoff, not its evidence-backed completion; retain in_progress until joined evidence.",
+        "Remove only obsolete notification plumbing/comments; retain owner fencing, self-acknowledgment, cleanup and section variant behavior.",
+        "Do not edit auth client, DTOs, owner module or backend; no checks mid-flight."
+      ],
+      "acceptance": [
+        "No onSelfRevoked notification path or dialog-only mounting/draft comment remains in section/hook.",
+        "Self-revocation still invokes exact-owner cleanup and replacement/generation protections; errors and retry-local-cleanup remain actionable."
+      ],
+      "verification": [
+        "After prove-settings-device-surface migrates the stale connection-suite host, coordinator runs LoginDevicesSection and login-devices-connections tests, retaining self/other revoke, WS-before-DELETE, replacement-token and cleanup-retry oracles; callback removal alone is not proof of passing integration."
+      ],
+      "source_phase": "plans/261116-0938-device-login-management/phase-01-device-login-surface-cutover.md",
+      "spec_fingerprint": "6b6cde412087af14eb6c5b109bad24ee734a5fada405c82673f44b1d113ea07e",
+      "status": "in_progress",
+      "owner": "device-login-coordinator-main",
+      "reason": null,
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-11-16T15:15:55.972Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:16:07.323Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reviewed plan revision authorized the omitted connection integration test and corrected the completion-dependency deadlock; previous fingerprints are stale. Preserve history and reverify all six contracts on the joined current revision."
+        },
+        {
+          "at": "2026-11-16T15:16:27.183Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:16:27.234Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:34.988Z",
+          "event": "stale",
+          "owner": "device-login-coordinator-main",
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:41:47.667Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Targeted credential-ownership correction changed the canonical task contract; preserve claim history and reconcile against joined implementation."
+        },
+        {
+          "at": "2026-11-16T15:41:57.986Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:58.037Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "id": "prove-settings-device-surface",
+      "title": "Prove app-owned devices and cross-surface credential lifecycle regressions",
+      "blocked_by": [],
+      "allowed_files": [
+        "packages/ui/src/components/pages/DevicesPage.test.tsx",
+        "packages/ui/src/os/apps/SettingsApp.test.tsx",
+        "packages/ui/src/components/organisms/login-devices-connections.test.tsx"
+      ],
+      "constraints": [
+        "Coordinator starts only after callback-retirement terminal handoff, not completion; retain in_progress until joined evidence and no checks mid-flight.",
+        "Use real DevicesPage/section, storage, owner capture and connection subscriber; fake only external HTTP/WebSocket seams.",
+        "Keep production page/app/owner/connection files read-only; dialog production guard belongs to detach-dialog-devices, not this task.",
+        "Preserve scoped real-dialog/QueryClientProvider login/MFA and current behavioral stale A, external B and media-await Save cases; remove only device UI/callback-internal assertions, never replace security cases with page-only checks."
+      ],
+      "acceptance": [
+        "Real page lists/refreshes/revokes selected-profile sessions, Cancel sends no DELETE, other-session revoke preserves credentials, self-revoke clears only its exact owner, and app controlled noLayout/profile wiring remains.",
+        "Connection matrix substantively covers 4401-before-ACK, DELETE-first, retired replacement 204/503, page switch/remount and cleanup failure/retry with exact token/generation/socket and ambient-owner oracles.",
+        "Current fresh MFA challenge/verified cases 202–217 save the distinct new credential after prior ACK using a separately scoped real dialog/provider.",
+        "Current stale A 219–230, external B 232–243 and media-await ACK replacement false/true 245–261 cases retain null/B, stable post-ACK generation/socket count, no Saved or stale reconnect; rollback cannot defeat those assertions."
+      ],
+      "verification": [
+        "Coordinator runs unchanged focused command including DevicesPage, SettingsApp and login-devices-connections after join; record actual counts and every matrix row's coverage, not just repaired hosting.",
+        "Observe DOM/network owner, stored null/B/new-MFA values, generation transitions, socket count/no reconnect, late-ACK/error fences and cleanup recovery; final code review confirms regressions exercise the real production guard."
+      ],
+      "source_phase": "plans/261116-0938-device-login-management/phase-01-device-login-surface-cutover.md",
+      "spec_fingerprint": "29a2107c6cd2b223965275cdea23e7f41cc2dd500ed0b7cf314cb955fb8fc470",
+      "status": "in_progress",
+      "owner": "device-login-coordinator-main",
+      "reason": null,
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-11-16T15:15:55.972Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:16:07.377Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reviewed plan revision authorized the omitted connection integration test and corrected the completion-dependency deadlock; previous fingerprints are stale. Preserve history and reverify all six contracts on the joined current revision."
+        },
+        {
+          "at": "2026-11-16T15:16:27.284Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:16:27.337Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:34.988Z",
+          "event": "stale",
+          "owner": "device-login-coordinator-main",
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:41:47.722Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Targeted credential-ownership correction changed the canonical task contract; preserve claim history and reconcile against joined implementation."
+        },
+        {
+          "at": "2026-11-16T15:41:58.090Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:58.140Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "id": "migrate-device-browser-coverage",
+      "title": "Move existing Chromium device journey to app-owned page surface",
+      "blocked_by": [],
+      "allowed_files": [
+        "packages/ui/browser-tests/login-devices.browser.tsx"
+      ],
+      "constraints": [
+        "Coordinator starts only after prove-settings-device-surface terminal edit handoff, not its evidence-backed completion; retain in_progress until joined evidence.",
+        "Preserve real section and confirmation behavior; replace only obsolete host/scroll expectations.",
+        "Use synthetic saved profiles/network fixtures; no new browser harness, runner config or dependencies.",
+        "No browser/test/build execution mid-flight."
+      ],
+      "acceptance": [
+        "Both narrow cases retain hint safety, overflow/scroll reachability, keyboard confirmation dismissal, Cancel zero-DELETE and confirmed row revocation.",
+        "Supported desktop viewport proves existing Settings Login Devices tab and selected server, with no duplicate Devices application."
+      ],
+      "verification": [
+        "Coordinator runs existing login-devices.browser.tsx Chromium suite and inspects page-owned scrolling and confirmation geometry; report browser prerequisite failures honestly."
+      ],
+      "source_phase": "plans/261116-0938-device-login-management/phase-01-device-login-surface-cutover.md",
+      "spec_fingerprint": "8c158fd988c6901b139410d60b86342925f0d32509057cc93d9c40115766b055",
+      "status": "in_progress",
+      "owner": "device-login-coordinator-main",
+      "reason": null,
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-11-16T15:15:55.972Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:16:07.430Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reviewed plan revision authorized the omitted connection integration test and corrected the completion-dependency deadlock; previous fingerprints are stale. Preserve history and reverify all six contracts on the joined current revision."
+        },
+        {
+          "at": "2026-11-16T15:16:27.388Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:16:27.439Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:34.988Z",
+          "event": "stale",
+          "owner": "device-login-coordinator-main",
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:41:47.774Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Targeted credential-ownership correction changed the canonical task contract; preserve claim history and reconcile against joined implementation."
+        },
+        {
+          "at": "2026-11-16T15:41:58.192Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:58.245Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "id": "document-device-surface",
+      "title": "Reconcile app-only device docs with retained general credential safeguards",
+      "blocked_by": [],
+      "allowed_files": [
+        "docs/system-architecture.md",
+        "docs/user-guide-multi-server-profiles.md",
+        "docs/CHANGELOG.md"
+      ],
+      "constraints": [
+        "Coordinator starts after browser-edit terminal handoff, not completion; retain in_progress until joined evidence.",
+        "Docs owner alone reconciles these files before checks; retain correct placement/concurrent edits and avoid duplicate entries.",
+        "Do not alter historical plans, backend contracts or human visual status, claim unobserved verification or say all dialog credential guards are removed."
+      ],
+      "acceptance": [
+        "Architecture/guide identify OS Settings > Login Devices with no dialog device controls/callback, while accurately retaining independent credential-baseline Save/rollback protection against stale A/external B.",
+        "Fresh successful login/MFA after prior revocation remains a supported recovery path; guide does not imply permanent Save lockout or device callback dependency.",
+        "Changelog records bounded cutover and stale Save/replacement security behavior without API/server change, duplicate entries or unobserved pass claims; report distinguishes unchanged and edited passages."
+      ],
+      "verification": [
+        "Final independent review compares architecture, guide and changelog against app-only dataflow, current general guard behavior and actual joined evidence; historical qualification gates stay open where unqualified."
+      ],
+      "source_phase": "plans/261116-0938-device-login-management/phase-01-device-login-surface-cutover.md",
+      "spec_fingerprint": "d2323e5b2f48a5b01261494dba0d25285f6a4ec38fc9506a8fb33b58df19331a",
+      "status": "in_progress",
+      "owner": "device-login-coordinator-main",
+      "reason": null,
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-11-16T15:15:55.972Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:16:07.481Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reviewed plan revision authorized the omitted connection integration test and corrected the completion-dependency deadlock; previous fingerprints are stale. Preserve history and reverify all six contracts on the joined current revision."
+        },
+        {
+          "at": "2026-11-16T15:16:27.491Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:16:27.541Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:34.988Z",
+          "event": "stale",
+          "owner": "device-login-coordinator-main",
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:41:47.825Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Targeted credential-ownership correction changed the canonical task contract; preserve claim history and reconcile against joined implementation."
+        },
+        {
+          "at": "2026-11-16T15:41:58.297Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:58.348Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "id": "qualify-device-surface",
+      "title": "Qualify focused regressions, TypeScript and browser surface cutover",
+      "blocked_by": [],
+      "allowed_files": [],
+      "constraints": [
+        "Coordinator claim/starts only after all five edit/docs terminal scopes join while edit tasks remain in_progress; readiness/completion dependencies are not admission.",
+        "Verification only, no product/state/Git edits or dependency installs; use focused commands and synthetic accounts.",
+        "No further plan-review invocation: initial and one follow-up budget exhausted; this safeguard is unreviewed targeted implementation correction and requires final independent implementation/docs review.",
+        "Unavailable live-browser access stays a named qualification gap, not fabricated proof."
+      ],
+      "acceptance": [
+        "Focused unit, UI compile and Chromium component gates have current-spec results; historical fifteen stale-host failures/orphan TS2304 and new production guard gap are repaired and verified, not relabeled.",
+        "Final independent code/docs review has no unresolved material defect and explicitly accepts stale A, external B, media-await ACK false/true, rollback/storage-failure protection and fresh MFA challenge/verified-after-ACK saveability with target/incarnation/generation fences.",
+        "Record prior R1 disposition separately from this unreviewed amendment; parent final validation remains required, and real-app/historical human visual qualification stays explicit."
+      ],
+      "verification": [
+        "Run exact focused unit/build/browser commands after join; preserve all matrix rows including current cross-surface Save cases and record actual counts/exits.",
+        "Collect sanitized smoke, cleanup and passing final implementation/docs review on current fingerprints, then complete all six with individual evidence JSONs referencing permitted shared integrated reports; no approval inferred from authoring/earlier browser 3/3."
+      ],
+      "source_phase": "plans/261116-0938-device-login-management/phase-01-device-login-surface-cutover.md",
+      "spec_fingerprint": "4e97cc855cd921fb982a884c8692b823466fcb4d180ea6128ab486a8b6376dda",
+      "status": "in_progress",
+      "owner": "device-login-coordinator-main",
+      "reason": null,
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-11-16T15:15:55.972Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:16:07.533Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reviewed plan revision authorized the omitted connection integration test and corrected the completion-dependency deadlock; previous fingerprints are stale. Preserve history and reverify all six contracts on the joined current revision."
+        },
+        {
+          "at": "2026-11-16T15:16:27.590Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:16:27.642Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:34.988Z",
+          "event": "stale",
+          "owner": "device-login-coordinator-main",
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-11-16T15:41:47.876Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Targeted credential-ownership correction changed the canonical task contract; preserve claim history and reconcile against joined implementation."
+        },
+        {
+          "at": "2026-11-16T15:41:58.399Z",
+          "event": "claimed",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        },
+        {
+          "at": "2026-11-16T15:41:58.450Z",
+          "event": "in_progress",
+          "owner": "device-login-coordinator-main",
+          "reason": null
+        }
+      ]
+    }
+  ]
+}
